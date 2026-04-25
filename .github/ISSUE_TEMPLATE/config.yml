@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discord community
+    url: https://discord.gg/Hz8BNNQrMu
+    about: Real-time chat. Best for quick questions, troubleshooting, sharing your library, or just hanging out. Try here before opening an issue.
+  - name: Question or discussion
+    url: https://github.com/60plus/GamesDownloader/discussions
+    about: Use Discussions for usage questions, ideas, and general help that should stay searchable. Issues are reserved for confirmed bugs and feature requests with reproducible steps.

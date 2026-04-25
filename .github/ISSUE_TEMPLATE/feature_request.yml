@@ -1,0 +1,62 @@
+name: Feature Request
+description: Propose a new feature or enhancement
+title: "[Feature]: "
+labels: ["enhancement", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an idea. Feature requests with a clear problem statement and a concrete proposal are much more likely to land.
+
+  - type: checkboxes
+    id: pre-flight
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched [existing issues and discussions](https://github.com/60plus/GamesDownloader/issues?q=) and could not find a duplicate.
+          required: true
+        - label: This is not a usage question (those go in [Discussions](https://github.com/60plus/GamesDownloader/discussions)).
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the use case in user terms. Avoid jumping to a solution.
+      placeholder: When my library has more than 5000 ROMs, scrolling the platform grid is slow on my laptop.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should happen? UI sketches, API shape, or pseudocode are all welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about and why you ruled them out.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - Backend (Python, FastAPI, scrapers)
+        - Frontend (Vue, layouts, theming)
+        - Plugins / Plugin Store
+        - Couch Mode / EmulatorJS
+        - Docs / setup
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Mockups, links to similar features in other apps, willingness to send a PR.

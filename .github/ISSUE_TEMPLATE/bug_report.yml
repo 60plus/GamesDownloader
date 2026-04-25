@@ -1,0 +1,112 @@
+name: Bug Report
+description: Report a reproducible bug
+title: "[Bug]: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in every section so we can help quickly.
+
+  - type: checkboxes
+    id: pre-flight
+    attributes:
+      label: Before you submit
+      description: Confirm you have checked the following.
+      options:
+        - label: I searched [existing issues](https://github.com/60plus/GamesDownloader/issues?q=) and could not find a duplicate.
+          required: true
+        - label: I am running the latest release from `main`.
+          required: true
+        - label: I have reproduced the bug at least twice on a fresh page reload (Ctrl+Shift+R).
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence describing what is wrong.
+      placeholder: GOG sync hangs after roughly 100 games.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Number every step. Be specific. Anyone reading this should be able to follow along.
+      placeholder: |
+        1. Log in as admin
+        2. Settings -> GOG -> click "Sync library"
+        3. Wait ~5 minutes
+        4. Open browser console (F12)
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      placeholder: All 800 games appear in the GOG library tab.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include error messages, stack traces, or console output verbatim.
+      placeholder: Sync stalls at "fetching game 102 of 800" and never finishes. No error in the UI but `gd-app` container logs show ...
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: gd-version
+    attributes:
+      label: GamesDownloader version / commit
+      description: Settings -> About, or `git rev-parse HEAD` in the project folder.
+      placeholder: "v3.x.y or commit 1b2ec7e"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running it?
+      options:
+        - Docker Compose (default)
+        - Custom Docker setup
+        - Local dev (no Docker)
+        - Other (describe in additional context)
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      description: Required if the bug is in the UI.
+      placeholder: "Chrome 142, Firefox 136, Safari 18"
+
+  - type: input
+    id: os
+    attributes:
+      label: Host OS
+      placeholder: "Ubuntu 24.04, Debian 12, Windows 11 + WSL2, macOS 15"
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots, video, or logs
+      description: Drag and drop files here. For logs prefer `docker compose logs gamesdownloader --tail 200`.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Plugins installed, custom config, related issues, anything you tried.
