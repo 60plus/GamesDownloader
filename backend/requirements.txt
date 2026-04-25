@@ -1,0 +1,51 @@
+# GamesDownloaderV3 — Python dependencies
+
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+fastapi-pagination>=0.12.0
+
+# Async HTTP client (replaces requests)
+httpx>=0.27.0
+
+# Database — async SQLAlchemy
+sqlalchemy[asyncio]>=2.0.30
+aiomysql>=0.2.0
+pymysql>=1.1.0
+alembic>=1.13.0
+
+# Redis — task queue + sessions
+redis>=5.0.0
+rq>=1.16.0
+rq-scheduler>=0.13.0
+
+# Auth
+bcrypt>=4.0.0
+python-jose[cryptography]>=3.3.0
+authlib>=1.3.0
+cryptography>=42.0.0
+
+# WebSocket
+python-socketio>=5.11.0
+
+# Config
+pyyaml>=6.0.1
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+py7zr>=0.22.0
+
+# Plugin system
+pluggy>=1.5.0
+
+# Logging
+structlog>=24.1.0
+
+# HTML parsing (SRL requirements scraper)
+beautifulsoup4>=4.12.0
+
+# Image processing (cover aspect-ratio detection)
+Pillow>=10.0.0
+
+# ClamAV integration (communicates with clamd Unix socket)
+clamd>=1.0.2

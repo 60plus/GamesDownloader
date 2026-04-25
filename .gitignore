@@ -1,0 +1,32 @@
+# Dependencies
+frontend/node_modules/
+backend/__pycache__/
+backend/**/__pycache__/
+*.pyc
+
+# Build output
+frontend/dist/
+backend/static/
+
+# Environment
+.env
+*.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Temp
+theme-preview.html
+
+# Data
+/data/

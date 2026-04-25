@@ -1,0 +1,1976 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GamesDownloader - Player</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: #000;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      overflow: hidden;
+    }
+
+    /* ── Branded splash / loading screen ────────────────────────────────────── */
+    #gd-loading {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 0; background: #06060f; color: #a0a0c0;
+      z-index: 100; transition: opacity .7s ease;
+    }
+    #gd-loading.hidden  { display: none; }
+    #gd-loading.fading  { opacity: 0; pointer-events: none; }
+
+    /* Logo mark */
+    .gd-splash-logo {
+      font-size: 11px; font-weight: 800; letter-spacing: .25em; text-transform: uppercase;
+      color: rgba(167,139,250,.5); margin-bottom: 40px;
+    }
+    /* Big game title */
+    .gd-splash-game {
+      font-size: clamp(18px, 3vw, 28px); font-weight: 900; color: #fff;
+      text-align: center; max-width: min(80vw, 520px); line-height: 1.2;
+      text-shadow: 0 2px 30px rgba(0,0,0,.8); margin-bottom: 8px;
+      letter-spacing: -.01em;
+    }
+    /* Platform label */
+    .gd-splash-platform {
+      font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+      color: rgba(167,139,250,.55); margin-bottom: 44px;
+    }
+    /* Spinner + status */
+    .gd-splash-status { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    .gd-spinner {
+      width: 36px; height: 36px;
+      border: 2px solid rgba(167,139,250,.15);
+      border-top-color: #a78bfa;
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .gd-load-title { font-size: 13px; font-weight: 600; color: rgba(196,181,253,.7); }
+    .gd-load-sub   { font-size: 11px; color: rgba(160,160,192,.4); }
+
+    /* ── Error screen ─────────────────────────────────────────────────────── */
+    #gd-error {
+      position: fixed; inset: 0;
+      display: none; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 12px; background: #0a0a12; color: #f87171;
+      font-size: 14px; text-align: center; padding: 32px;
+    }
+    #gd-error.visible { display: flex; }
+    #gd-error p { max-width: 480px; color: #9d9db8; font-size: 13px; }
+
+    /* ── State picker modal ───────────────────────────────────────────────── */
+    #gd-state-picker {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.85);
+      display: none; align-items: center; justify-content: center;
+      z-index: 200;
+    }
+    #gd-state-picker.visible { display: flex; }
+
+    .gd-picker-box {
+      background: #18182a; border: 1px solid #2e2e4a;
+      border-radius: 14px; padding: 28px;
+      width: min(92vw, 660px); max-height: 78vh;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .gd-picker-title {
+      font-size: 14px; font-weight: 700; color: #c4b5fd;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .gd-picker-close {
+      background: none; border: none; color: #6b6b8a;
+      cursor: pointer; font-size: 20px; line-height: 1;
+      padding: 0 4px;
+    }
+    .gd-picker-close:hover { color: #c4b5fd; }
+
+    .gd-picker-tabs {
+      display: flex; gap: 6px;
+    }
+    .gd-picker-tab {
+      padding: 6px 14px; border-radius: 6px; font-size: 12px;
+      font-weight: 600; cursor: pointer; border: 1px solid #2e2e4a;
+      background: transparent; color: #6b6b8a; transition: all .15s;
+    }
+    .gd-picker-tab.active {
+      background: rgba(167,139,250,.2); border-color: rgba(167,139,250,.4);
+      color: #c4b5fd;
+    }
+
+    .gd-picker-list {
+      overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+      flex: 1;
+    }
+    .gd-picker-empty { color: #4a4a6a; font-size: 13px; text-align: center; padding: 24px; }
+    .gd-state-item.gd-focused { outline: 2px solid rgba(167,139,250,.7); background: rgba(167,139,250,.07); }
+    .gd-picker-tab.gd-tab-focused { outline: 2px solid rgba(167,139,250,.5); }
+
+    .gd-state-item {
+      display: flex; align-items: center; gap: 16px;
+      padding: 12px 14px; border-radius: 10px;
+      border: 1px solid #2a2a40; background: #12121e;
+      cursor: pointer; transition: border-color .15s;
+    }
+    .gd-state-item:hover { border-color: rgba(167,139,250,.5); }
+
+    .gd-state-thumb {
+      width: 170px; height: 140px; object-fit: cover;
+      border-radius: 6px; background: #0a0a14; flex-shrink: 0;
+    }
+    .gd-state-thumb-empty {
+      width: 170px; height: 140px; border-radius: 6px;
+      background: #0a0a14; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    .gd-state-info { flex: 1; min-width: 0; }
+    .gd-state-name {
+      font-size: 13px; font-weight: 600; color: #c4b5fd;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .gd-state-date { font-size: 12px; color: #5a5a7a; margin-top: 4px; }
+    .gd-state-size { font-size: 12px; color: #4a4a6a; margin-top: 2px; }
+
+    .gd-state-del {
+      background: none; border: none; color: #3a3a5a;
+      cursor: pointer; padding: 6px; border-radius: 4px;
+      transition: color .15s; align-self: flex-start;
+    }
+    .gd-state-del:hover { color: #f87171; }
+
+
+    /* ── EmulatorJS container ─────────────────────────────────────────────── */
+    #game {
+      width: 100vw; height: 100vh;
+    }
+
+    /* ── Bezel overlay ─────────────────────────────────────────────────────── */
+    /* object-fit:cover scales the 16:9 bezel to cover the full viewport.     */
+    /* Narrower viewports (window/iframe): scales by height, clips sides →    */
+    /* transparent center (75% bezel width) matches 4:3 game area exactly.    */
+    /* Wider viewports (fullscreen/new-tab with browser UI): scales by width, */
+    /* clips top/bottom, fills full screen width.                             */
+    /* ── In-game pause menu ─────────────────────────────────────────────────── */
+    #gd-ingame-menu {
+      display: none; position: fixed; inset: 0; z-index: 60;
+      background: rgba(0,0,0,.78); backdrop-filter: blur(12px) saturate(1.4);
+      align-items: center; justify-content: center;
+    }
+    #gd-ingame-menu.gd-menu-open { display: flex; }
+    #gd-ingame-panel {
+      width: 380px; max-width: 88vw;
+      background: rgba(10,6,24,.97);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 20px; padding: 28px 24px 20px;
+      display: flex; flex-direction: column; gap: 8px;
+      box-shadow: 0 32px 80px rgba(0,0,0,.9);
+      animation: gd-menu-pop .2s cubic-bezier(.34,1.56,.64,1);
+    }
+    @keyframes gd-menu-pop {
+      from { transform: scale(.88); opacity: 0; }
+      to   { transform: scale(1);   opacity: 1; }
+    }
+    .gd-menu-hdr {
+      font-size: 11px; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: #a78bfa; margin-bottom: 8px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .gd-mi {
+      display: flex; align-items: center; gap: 12px;
+      padding: 13px 16px; border-radius: 12px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.07);
+      cursor: pointer; transition: all .12s;
+      font-size: 14px; font-weight: 600; color: rgba(255,255,255,.65);
+      user-select: none;
+    }
+    .gd-mi svg { flex-shrink: 0; opacity: .5; transition: opacity .12s; }
+    .gd-mi.gd-mi-focus, .gd-mi:hover {
+      background: rgba(167,139,250,.12); border-color: rgba(167,139,250,.35); color: #fff;
+    }
+    .gd-mi.gd-mi-focus svg, .gd-mi:hover svg { opacity: 1; }
+    .gd-mi-danger.gd-mi-focus, .gd-mi-danger:hover {
+      background: rgba(220,38,38,.12); border-color: rgba(220,38,38,.35); color: #f87171;
+    }
+    .gd-menu-hint {
+      text-align: center; margin-top: 6px;
+      font-size: 10px; color: rgba(255,255,255,.2); letter-spacing: .04em;
+    }
+    .gd-menu-hint kbd {
+      background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.12);
+      border-radius: 4px; padding: 1px 5px; font-size: 9px;
+      font-family: inherit; color: rgba(255,255,255,.35);
+    }
+
+    /* ── Settings: Category list panel ────────────────────────────────────── */
+    #gd-settings-cats {
+      display: none; position: fixed; inset: 0; z-index: 65;
+      background: rgba(0,0,0,.78); backdrop-filter: blur(12px) saturate(1.4);
+      align-items: center; justify-content: center;
+    }
+    #gd-settings-cats.gd-open { display: flex; }
+    #gd-settings-cats-panel {
+      width: 420px; max-width: 90vw;
+      background: rgba(10,6,24,.97);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 20px; padding: 28px 24px 20px;
+      display: flex; flex-direction: column; gap: 8px;
+      box-shadow: 0 32px 80px rgba(0,0,0,.9);
+      animation: gd-menu-pop .2s cubic-bezier(.34,1.56,.64,1);
+    }
+
+    /* ── Settings: Sub-page panel ─────────────────────────────────────────── */
+    #gd-settings-sub {
+      display: none; position: fixed; inset: 0; z-index: 66;
+      background: rgba(0,0,0,.78); backdrop-filter: blur(12px) saturate(1.4);
+      align-items: center; justify-content: center;
+    }
+    #gd-settings-sub.gd-open { display: flex; }
+    #gd-settings-sub-panel {
+      width: 420px; max-width: 90vw;
+      background: rgba(10,6,24,.97);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 20px; padding: 28px 24px 20px;
+      display: flex; flex-direction: column; gap: 8px;
+      box-shadow: 0 32px 80px rgba(0,0,0,.9);
+      animation: gd-menu-pop .2s cubic-bezier(.34,1.56,.64,1);
+    }
+    .gd-sub-scroll {
+      overflow-y: auto; max-height: 60vh;
+      display: flex; flex-direction: column; gap: 8px;
+      scrollbar-width: thin; scrollbar-color: rgba(167,139,250,.3) transparent;
+    }
+
+    /* ── Category description text ────────────────────────────────────────── */
+    .gd-cat-desc {
+      font-size: 11px; color: rgba(160,160,192,.45);
+      margin-top: -2px; padding-left: 28px;
+    }
+
+    /* ── Settings item (shared: categories + sub-page items) ──────────────── */
+    .gd-si {
+      display: flex; align-items: center; gap: 12px;
+      padding: 13px 16px; border-radius: 12px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.07);
+      cursor: pointer; transition: all .12s;
+      font-size: 14px; font-weight: 600; color: rgba(255,255,255,.65);
+      user-select: none;
+    }
+    .gd-si svg { flex-shrink: 0; opacity: .5; transition: opacity .12s; }
+    .gd-si-label { flex: 1; }
+    .gd-si-val {
+      font-size: 13px; font-weight: 700; color: rgba(167,139,250,.8);
+      min-width: 60px; text-align: right;
+      display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+    }
+    .gd-si-arrow { opacity: 0; font-size: 10px; color: rgba(167,139,250,.5); transition: opacity .12s; }
+    .gd-si.gd-si-focus, .gd-si:hover {
+      background: rgba(167,139,250,.12); border-color: rgba(167,139,250,.35); color: #fff;
+    }
+    .gd-si.gd-si-focus svg, .gd-si:hover svg { opacity: 1; }
+    .gd-si.gd-si-focus .gd-si-val { color: #c4b5fd; }
+    .gd-si.gd-si-focus .gd-si-arrow { opacity: 1; }
+    .gd-si-action .gd-si-val { color: rgba(167,139,250,.6); font-weight: 600; font-size: 12px; }
+    .gd-si-action.gd-si-focus .gd-si-val { color: #c4b5fd; }
+
+    /* ── Info row (read-only, non-interactive) ─────────────────────────────── */
+    .gd-si-info {
+      cursor: default; opacity: .6;
+    }
+    .gd-si-info .gd-si-val { color: rgba(255,255,255,.3); font-weight: 500; font-size: 12px; }
+
+    /* Volume bar */
+    .gd-vol-bar {
+      width: 60px; height: 6px; border-radius: 3px;
+      background: rgba(255,255,255,.1); overflow: hidden;
+    }
+    .gd-vol-fill {
+      height: 100%; border-radius: 3px;
+      background: linear-gradient(90deg, #7c3aed, #a78bfa);
+      transition: width .1s;
+    }
+
+    /* ── Fullscreen prompt (shown when requestFullscreen fails on navigation) ── */
+    #gd-fs-prompt {
+      display: none; position: fixed; inset: 0; z-index: 250;
+      background: rgba(0,0,0,.92); backdrop-filter: blur(6px);
+      flex-direction: column; align-items: center; justify-content: center;
+      gap: 16px; cursor: pointer;
+    }
+    #gd-fs-prompt.visible { display: flex; }
+    #gd-fs-prompt svg { color: rgba(167,139,250,.6); }
+    #gd-fs-prompt p { font-size: 15px; font-weight: 600; color: rgba(255,255,255,.7); }
+    #gd-fs-prompt small { font-size: 11px; color: rgba(255,255,255,.3); }
+
+    #gd-bezel-wrap {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 20;
+      display: none;
+    }
+    #gd-bezel {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Branded splash / loading -->
+<div id="gd-loading">
+  <div class="gd-splash-logo">GamesDownloader</div>
+  <div class="gd-splash-game" id="gd-splash-game"></div>
+  <div class="gd-splash-platform" id="gd-splash-platform"></div>
+  <div class="gd-splash-status">
+    <div class="gd-spinner"></div>
+    <div class="gd-load-title" id="gd-load-title">Loading ROM…</div>
+    <div class="gd-load-sub" id="gd-load-sub">Fetching game data</div>
+  </div>
+</div>
+
+<!-- Error -->
+<div id="gd-error">
+  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="1.5">
+    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+  </svg>
+  <strong id="gd-error-title">Failed to start emulator</strong>
+  <p id="gd-error-msg">The ROM could not be loaded.</p>
+  <button onclick="window.parent.postMessage({type:'gd-exit'},'\*')" style="margin-top:8px;padding:8px 20px;border-radius:8px;border:1px solid #3a3a5a;background:#1a1a2e;color:#9d9db8;cursor:pointer;font-size:13px;">
+    Close
+  </button>
+</div>
+
+<!-- State/Save picker modal -->
+<div id="gd-state-picker">
+  <div class="gd-picker-box">
+    <div class="gd-picker-title">
+      <span id="gd-picker-label">Load State</span>
+      <button class="gd-picker-close" onclick="closePicker()">✕</button>
+    </div>
+    <div class="gd-picker-tabs">
+      <button class="gd-picker-tab active" id="gd-tab-states" onclick="switchTab('states')">Savestates</button>
+      <button class="gd-picker-tab" id="gd-tab-saves" onclick="switchTab('saves')">Battery Saves</button>
+    </div>
+    <div class="gd-picker-list" id="gd-picker-list"></div>
+    <div class="gd-menu-hint"><kbd>↑↓</kbd> Navigate &nbsp;·&nbsp; <kbd>A</kbd> Load &nbsp;·&nbsp; <kbd>X</kbd> Delete &nbsp;·&nbsp; <kbd>◀▶</kbd> Tabs &nbsp;·&nbsp; <kbd>B</kbd> Close</div>
+  </div>
+</div>
+
+
+<!-- EmulatorJS target -->
+<div id="game"></div>
+
+<!-- Fullscreen prompt - shown as fallback when browser blocks auto-fullscreen -->
+<div id="gd-fs-prompt">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+  </svg>
+  <p>Press any button to enter fullscreen</p>
+  <small>or click anywhere</small>
+</div>
+
+<!-- ── In-game pause menu (Start+Select / Esc) ──────────────────────────────── -->
+<div id="gd-ingame-menu">
+  <div id="gd-ingame-panel">
+    <div class="gd-menu-hdr">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+      Game Paused
+    </div>
+    <div class="gd-mi" data-gd="resume">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>Resume
+    </div>
+    <div class="gd-mi" data-gd="savestate">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save State
+    </div>
+    <div class="gd-mi" data-gd="loadstate">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Load State
+    </div>
+    <div class="gd-mi" data-gd="settings">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Emulator Settings
+    </div>
+    <div class="gd-mi gd-mi-danger" data-gd="exit">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>Exit Game
+    </div>
+    <div class="gd-menu-hint"><kbd>↑↓</kbd> Navigate &nbsp;·&nbsp; <kbd>A</kbd> Select &nbsp;·&nbsp; <kbd>B</kbd> / <kbd>Esc</kbd> Close</div>
+  </div>
+</div>
+
+<!-- ── Settings: Category list ──────────────────────────────────────────────── -->
+<div id="gd-settings-cats">
+  <div id="gd-settings-cats-panel">
+    <div class="gd-menu-hdr">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Emulator Settings
+    </div>
+    <div id="gd-cats-list"></div>
+    <div class="gd-menu-hint"><kbd>↑↓</kbd> Navigate &nbsp;·&nbsp; <kbd>A</kbd> Select &nbsp;·&nbsp; <kbd>B</kbd> / <kbd>Esc</kbd> Close</div>
+  </div>
+</div>
+
+<!-- ── Settings: Sub-page (dynamic content per category) ──────────────────── -->
+<div id="gd-settings-sub">
+  <div id="gd-settings-sub-panel">
+    <div class="gd-menu-hdr" id="gd-sub-hdr">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span id="gd-sub-title">Settings</span>
+    </div>
+    <div class="gd-sub-scroll" id="gd-sub-items"></div>
+    <div class="gd-menu-hint"><kbd>◀▶</kbd> Change &nbsp;·&nbsp; <kbd>↑↓</kbd> Navigate &nbsp;·&nbsp; <kbd>B</kbd> / <kbd>Esc</kbd> Back</div>
+  </div>
+</div>
+
+<!-- Bezel overlay (PNG with transparent center, sits above canvas) -->
+<div id="gd-bezel-wrap" aria-hidden="true">
+  <img id="gd-bezel" alt="" />
+</div>
+
+<script>
+// ── Config from URL params ───────────────────────────────────────────────────
+const params     = new URLSearchParams(location.search);
+const ROM_ID     = params.get('rom_id');
+const ROM_NAME   = params.get('rom_name') || 'ROM';
+const EJS_CORE   = params.get('ejs_core');
+const PLATFORM   = params.get('platform') || '';
+const BEZEL_URL      = params.get('bezel_url') || null;
+const BEZEL_FROM_API = params.get('bezel') === '1';   // fetch bezel_path from ROM API
+const AUTO_FULLSCREEN = params.get('autoFullscreen') === '1';
+
+const API_BASE   = '';
+const TOKEN      = localStorage.getItem('gd3_token') || '';
+
+let pickerMode   = 'states';   // 'states' | 'saves'
+let cachedStates = [];
+let cachedSaves  = [];
+
+// ── Populate branded splash with game info ───────────────────────────────────
+;(function() {
+  const gameEl = document.getElementById('gd-splash-game');
+  const platEl = document.getElementById('gd-splash-platform');
+  if (gameEl) gameEl.textContent = ROM_NAME || '';
+  if (platEl && PLATFORM) {
+    platEl.textContent = PLATFORM.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+})();
+
+// ── UI Helpers ───────────────────────────────────────────────────────────────
+function setLoad(title, sub) {
+  document.getElementById('gd-load-title').textContent = title;
+  document.getElementById('gd-load-sub').textContent   = sub;
+}
+
+function showError(title, msg) {
+  document.getElementById('gd-loading').classList.add('hidden');
+  document.getElementById('gd-error-title').textContent = title;
+  document.getElementById('gd-error-msg').textContent   = msg;
+  document.getElementById('gd-error').classList.add('visible');
+}
+
+function hideLoading() {
+  document.getElementById('gd-loading').classList.add('hidden');
+}
+
+// ── Auth headers ─────────────────────────────────────────────────────────────
+function authHeaders(extra) {
+  return { 'Authorization': 'Bearer ' + TOKEN, ...extra };
+}
+
+// ── Fetch ROM as Blob URL ────────────────────────────────────────────────────
+async function fetchRomBlobUrl() {
+  setLoad('Downloading ROM…', ROM_NAME);
+  const resp = await fetch(`${API_BASE}/api/roms/stream/${ROM_ID}`, {
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} - ${resp.statusText}`);
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
+}
+
+// ── Fetch states/saves ───────────────────────────────────────────────────────
+async function fetchStates() {
+  const r = await fetch(`${API_BASE}/api/savestates/${ROM_ID}/states`, {
+    headers: authHeaders(),
+  });
+  cachedStates = r.ok ? await r.json() : [];
+}
+
+async function fetchSaves() {
+  const r = await fetch(`${API_BASE}/api/savestates/${ROM_ID}/saves`, {
+    headers: authHeaders(),
+  });
+  cachedSaves = r.ok ? await r.json() : [];
+}
+
+// ── Upload save/state ────────────────────────────────────────────────────────
+function dataUrlToBlob(dataUrl) {
+  try {
+    const [header, b64] = dataUrl.split(',');
+    const mime = (header.match(/:(.*?);/) || [])[1] || 'image/png';
+    const bytes = atob(b64);
+    const arr = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  } catch { return null; }
+}
+
+async function uploadState(stateBuffer, screenshotBuffer) {
+  if (!stateBuffer || !stateBuffer.length) return false;
+  const fd = new FormData();
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  fd.append('stateFile', new File([stateBuffer], `${ROM_NAME} [${ts}].state`));
+  if (screenshotBuffer) {
+    try {
+      // EJS returns screenshot as data URL - convert to Blob
+      const blob = (typeof screenshotBuffer === 'string' && screenshotBuffer.startsWith('data:'))
+        ? dataUrlToBlob(screenshotBuffer)
+        : new Blob([screenshotBuffer], { type: 'image/png' });
+      if (blob) fd.append('screenshotFile', new File([blob], `${ROM_NAME} [${ts}].png`, { type: 'image/png' }));
+    } catch {}
+  }
+  if (EJS_CORE) fd.append('emulator_core', EJS_CORE);
+  const r = await fetch(`${API_BASE}/api/savestates/${ROM_ID}/states`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: fd,
+  });
+  if (r.ok) {
+    cachedStates = null;
+    window.parent.postMessage({ type: 'gd-state-saved' }, '*');
+  }
+  return r.ok;
+}
+
+async function uploadSave(saveBuffer) {
+  const fd = new FormData();
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  fd.append('saveFile', new File([saveBuffer], `${ROM_NAME} [${ts}].srm`));
+  if (EJS_CORE) fd.append('emulator_core', EJS_CORE);
+  await fetch(`${API_BASE}/api/savestates/${ROM_ID}/saves`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: fd,
+  });
+  cachedSaves = null;
+}
+
+// ── State picker ─────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  pickerMode = tab;
+  document.getElementById('gd-tab-states').classList.toggle('active', tab === 'states');
+  document.getElementById('gd-tab-saves').classList.toggle('active', tab === 'saves');
+  renderPickerList();
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1048576).toFixed(2) + ' MB';
+}
+
+function formatDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+let _pickerFocus = 0;
+function _setPickerFocus(idx) {
+  const els = [...document.querySelectorAll('.gd-state-item')];
+  if (!els.length) return;
+  _pickerFocus = ((idx % els.length) + els.length) % els.length;
+  els.forEach((el, i) => el.classList.toggle('gd-focused', i === _pickerFocus));
+  els[_pickerFocus]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function renderPickerList() {
+  const list  = document.getElementById('gd-picker-list');
+  const items = pickerMode === 'states' ? (cachedStates || []) : (cachedSaves || []);
+  if (!items.length) {
+    list.innerHTML = `<div class="gd-picker-empty">No ${pickerMode === 'states' ? 'savestates' : 'saves'} yet</div>`;
+    return;
+  }
+  list.innerHTML = items.map((item, idx) => {
+    const thumb = item.screenshot_url
+      ? `<img class="gd-state-thumb" src="${item.screenshot_url}" alt="" />`
+      : `<div class="gd-state-thumb-empty"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3a3a5a" stroke-width="1.5"><rect x="2" y="6" width="20" height="14" rx="2"/><circle cx="8" cy="13" r="1.5"/><circle cx="16" cy="13" r="1.5"/></svg></div>`;
+    return `
+      <div class="gd-state-item" onclick="loadItem(${idx})">
+        ${thumb}
+        <div class="gd-state-info">
+          <div class="gd-state-name">${item.file_name}</div>
+          <div class="gd-state-date">${formatDate(item.updated_at || item.created_at)}</div>
+          <div class="gd-state-size">${formatBytes(item.file_size_bytes)}</div>
+        </div>
+        <button class="gd-state-del" onclick="event.stopPropagation(); deleteItem(${item.id})" title="Delete">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+        </button>
+      </div>`;
+  }).join('');
+  _pickerFocus = 0;
+  setTimeout(() => _setPickerFocus(0), 0);
+}
+
+async function openPicker(mode) {
+  pickerMode = mode || 'states';
+  document.getElementById('gd-picker-label').textContent = pickerMode === 'states' ? 'Load State' : 'Load Save';
+
+  // Pause emulator while picker is open
+  if (window.EJS_emulator) window.EJS_emulator.pause();
+
+  // Refresh lists
+  await Promise.all([fetchStates(), fetchSaves()]);
+  switchTab(pickerMode);
+  document.getElementById('gd-state-picker').classList.add('visible');
+}
+
+function closePicker() {
+  document.getElementById('gd-state-picker').classList.remove('visible');
+  if (window.EJS_emulator) window.EJS_emulator.play();
+}
+
+async function loadItem(idx) {
+  const items = pickerMode === 'states' ? cachedStates : cachedSaves;
+  const item  = items[idx];
+  if (!item) return;
+
+  const resp = await fetch(item.download_url, { headers: authHeaders() });
+  if (!resp.ok) { alert('Failed to load file'); return; }
+  const buf = new Uint8Array(await resp.arrayBuffer());
+
+  closePicker();
+
+  if (!window.EJS_emulator) return;
+  if (pickerMode === 'states') {
+    window.EJS_emulator.gameManager.loadState(buf);
+  } else {
+    const fs   = window.EJS_emulator.gameManager.FS;
+    const path = window.EJS_emulator.gameManager.getSaveFilePath();
+    fs.writeFile(path, buf);
+    window.EJS_emulator.gameManager.loadSaveFiles();
+  }
+}
+
+async function deleteItem(id) {
+  const type = pickerMode === 'states' ? 'states' : 'saves';
+  const r = await fetch(`${API_BASE}/api/savestates/${type}/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (r.ok) {
+    await Promise.all([fetchStates(), fetchSaves()]);
+    renderPickerList();
+  }
+}
+
+
+// ── Couch Mode fullscreen handoff ────────────────────────────────────────────
+// requestFullscreen() is lost on page navigation. When launched from Couch Mode
+// (same-tab via window.location.href), re-request it synchronously here -
+// transient user activation from the navigation click is still valid at this point.
+const RETURN_TO = params.get('returnTo') || null;
+if (RETURN_TO) {
+  // Try to re-enter fullscreen immediately (works if user activation is still valid)
+  document.documentElement.requestFullscreen?.().catch(() => {
+    // Gesture chain expired - show "press any button" overlay as fallback
+    const _fsp = document.getElementById('gd-fs-prompt');
+    if (!_fsp) return;
+    _fsp.classList.add('visible');
+    const _go = () => {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+      _fsp.classList.remove('visible');
+    };
+    _fsp.addEventListener('click', _go, { once: true });
+    document.addEventListener('keydown', _go, { once: true });
+    // Poll gamepad for any button press
+    let _fsRaf;
+    const _fsPoll = () => {
+      if ([...(navigator.getGamepads?.() ?? [])].some(gp => gp?.buttons.some(b => b?.pressed))) {
+        _go(); return;
+      }
+      _fsRaf = requestAnimationFrame(_fsPoll);
+    };
+    _fsRaf = requestAnimationFrame(_fsPoll);
+  });
+}
+
+// ── Exit ─────────────────────────────────────────────────────────────────────
+function exitPlayer() {
+  // Save battery save before exiting
+  try {
+    if (window.EJS_emulator) {
+      const sv = window.EJS_emulator.gameManager.getSaveFile();
+      if (sv && sv.length) uploadSave(sv);
+    }
+  } catch {}
+  // Always notify parent (works for iframe embed and window.open)
+  try { window.parent.postMessage({ type: 'gd-exit' }, '*'); } catch {}
+  try { if (window.opener) window.opener.postMessage({ type: 'gd-exit' }, '*'); } catch {}
+
+  if (RETURN_TO) {
+    // Same-tab launch - navigate back
+    if (RETURN_TO.startsWith('/couch')) {
+      sessionStorage.setItem('gd_resumeFs', '1');  // CouchMode will re-enter fullscreen
+    }
+    window.location.href = RETURN_TO;
+  } else if (window.opener) {
+    // Opened via window.open (Tab mode) - close the tab
+    window.close();
+  }
+  // If in iframe (full/window mode), parent handles closing via gd-exit message
+}
+
+// ── Main init ────────────────────────────────────────────────────────────────
+(async () => {
+  if (!ROM_ID || !EJS_CORE) {
+    showError('Missing parameters', 'rom_id and ejs_core are required.');
+    return;
+  }
+  if (!TOKEN) {
+    showError('Not authenticated', 'Please log in and try again.');
+    return;
+  }
+
+  let romUrl;
+  try {
+    romUrl = await fetchRomBlobUrl();
+  } catch (err) {
+    showError('Failed to load ROM', err.message || 'Could not fetch the ROM file.');
+    return;
+  }
+
+  setLoad('Starting emulator…', ROM_NAME);
+
+  // Pre-fetch states so the picker is instant on first open
+  fetchStates();
+  fetchSaves();
+
+  // ── EmulatorJS config ────────────────────────────────────────────────────
+  window.EJS_player        = '#game';
+  window.EJS_core          = EJS_CORE;
+  window.EJS_gameUrl       = romUrl;
+  // ── WebGL preserveDrawingBuffer patch ───────────────────────────────────────
+  // Must run BEFORE EmulatorJS loads so every WebGL context keeps the last frame
+  // in the buffer, making toDataURL() work at any time (save state thumbnails).
+  ;(function() {
+    const _orig = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(type, attrs) {
+      if (type === 'webgl' || type === 'webgl2') {
+        attrs = Object.assign({}, attrs || {}, { preserveDrawingBuffer: true });
+      }
+      return _orig.call(this, type, attrs);
+    };
+  })();
+
+  window.EJS_gameName      = ROM_NAME;
+  window.EJS_gameID        = 'gd_' + ROM_ID;
+  window.EJS_color         = '#a78bfa';
+  window.EJS_startOnLoaded = true;
+  // Threads: opt-in via Settings (requires COOP/COEP headers - set by middleware)
+  if (localStorage.getItem('gd_ejs_threads') === '1') {
+    window.EJS_threads = true;
+  }
+  window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+
+  // ── Toolbar button visibility (EJS_Buttons) ──────────────────────────────────
+  // In Couch Mode (RETURN_TO set): hide the entire native toolbar so our custom
+  // Start+Select pause menu is the sole UI - pure console-like experience.
+  // In Tab / Window mode: hide only the save/load state buttons that our custom
+  // picker already handles; keep mute, volume, fullscreen, etc. accessible.
+  //
+  // EJS ≤4.2.1: boolean false hides the button.
+  // EJS ≥4.2.2: object { visible: false } or boolean false.
+  // We pass BOTH formats for maximum compatibility.
+  window.EJS_Buttons = RETURN_TO ? {
+    // Couch fullscreen - hide everything
+    playPause:     false,
+    restart:       false,
+    mute:          false,
+    volume:        false,
+    fullscreen:    false,
+    saveState:     false,
+    loadState:     false,
+    screenRecord:  false,
+    gamepad:       false,
+    cheat:         false,
+    settings:      false,
+    saveSavFiles:  false,
+    loadSavFiles:  false,
+    screenshot:    false,
+    cacheManager:  false,
+    quickSave:     false,
+    quickLoad:     false,
+    exitEmulation: false,
+  } : {
+    // Tab / Window mode - only hide what our picker replaces
+    saveState:    false,
+    loadState:    false,
+    saveSavFiles: false,
+    loadSavFiles: false,
+  };
+
+  // Bezel: object-fit:cover fills viewport, clips overflow - perfect alignment
+  let resolvedBezelUrl = BEZEL_URL;
+  if (!resolvedBezelUrl && BEZEL_FROM_API) {
+    // Fetch bezel_path from ROM detail (couch mode: bezel toggle ON)
+    try {
+      const bezelResp = await fetch(`${API_BASE}/api/roms/${ROM_ID}`, { headers: authHeaders() });
+      if (bezelResp.ok) {
+        const romData = await bezelResp.json();
+        if (romData.bezel_path) resolvedBezelUrl = romData.bezel_path;
+      }
+    } catch {}
+  }
+  if (resolvedBezelUrl) {
+    document.getElementById('gd-bezel').src = resolvedBezelUrl;
+    document.getElementById('gd-bezel-wrap').style.display = 'block';
+    window._gdHasBezel = true;   // flag used by in-game menu to know whether to restore bezel
+  }
+
+  // ── Bezel fullscreen fix ─────────────────────────────────────────────────
+  // When EmulatorJS triggers the Fullscreen API (F11 shortcut or toolbar btn),
+  // elements OUTSIDE the fullscreen element are hidden by the browser.
+  // We move #gd-bezel-wrap INTO document.fullscreenElement so it stays visible.
+  function _bezelFullscreenSync() {
+    const wrap = document.getElementById('gd-bezel-wrap');
+    if (!wrap || !resolvedBezelUrl) return;
+    const fs = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fs && fs !== document.documentElement) {
+      // Fullscreen API active on an inner element (e.g. EJS canvas parent)
+      wrap.style.position = 'absolute';
+      fs.style.position = fs.style.position || 'relative'; // ensure stacking ctx
+      fs.appendChild(wrap);
+    } else {
+      // Fullscreen exited (or browser F11 - no Fullscreen API)
+      wrap.style.position = 'fixed';
+      document.body.appendChild(wrap);
+    }
+  }
+  document.addEventListener('fullscreenchange', _bezelFullscreenSync);
+  document.addEventListener('webkitfullscreenchange', _bezelFullscreenSync);
+
+  // ── EmulatorJS callbacks ─────────────────────────────────────────────────
+  window.EJS_ready = () => {
+    // Keep splash visible - will fade out on EJS_onGameStart for a branded transition.
+    // Fallback: hide after 8s in case EJS_onGameStart never fires.
+    setTimeout(() => hideLoading(), 8000);
+    // Scan EJS DOM for the settings/cog button (used by Start+Select combo)
+    // EJS renders its toolbar a moment after ready fires.
+    setTimeout(() => {
+      try {
+        // Look for a button whose title/aria-label mentions "settings" or "options"
+        const allBtns = [...document.querySelectorAll('button')];
+        window._ejsSettingsBtn = allBtns.find(b => {
+          const t = (b.title || b.getAttribute('aria-label') || '').toLowerCase();
+          const c = (b.className || '').toLowerCase();
+          return t.includes('setting') || t.includes('option') || t.includes('cog') ||
+                 c.includes('setting') || c.includes('option');
+        }) ?? null;
+        // Fallback: in standard EJS toolbar order, settings is second-to-last
+        // (last is usually fullscreen). Try second-to-last first.
+        if (!window._ejsSettingsBtn) {
+          const gameBtns = [...document.querySelectorAll('#game button')];
+          if (gameBtns.length >= 2) window._ejsSettingsBtn = gameBtns[gameBtns.length - 2];
+          else if (gameBtns.length === 1) window._ejsSettingsBtn = gameBtns[0];
+        }
+        // Also find the Save State button for the in-game menu
+        window._ejsSaveStateBtn = allBtns.find(b => {
+          const t = (b.title || b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
+          return t.includes('save state');
+        }) ?? null;
+
+        // ── Couch mode: hide individual buttons as EJS_Buttons fallback ────
+        // EJS_Buttons may not work in all EJS builds.  As a safe fallback we
+        // hide every <button> inside #game individually.  This is safe because
+        // it only hides buttons - NOT the canvas or the settings panel.
+        if (RETURN_TO) {
+          const gameBtns = [...document.querySelectorAll('#game button')];
+          gameBtns.forEach(b => { b.style.display = 'none'; });
+          window._ejsHiddenBtns = gameBtns;
+        }
+      } catch {}
+    }, 2500);
+  };
+
+  // ── Screenshot capture ───────────────────────────────────────────────────────
+  // preserveDrawingBuffer:true patch (above) keeps the WebGL buffer intact after
+  // each frame, so we can call toDataURL() at any time - no periodic loop needed.
+  function _captureScreenshot() {
+    // 1) Try official EJS API
+    try {
+      if (window.EJS_emulator && typeof window.EJS_emulator.screenshot === 'function') {
+        const s = window.EJS_emulator.screenshot();
+        if (s && s.length > 1000) return s;
+      }
+    } catch {}
+    // 2) Find largest canvas in #game; fall back to any canvas on page
+    const sel = (q) => Array.from(document.querySelectorAll(q))
+      .filter(c => c.width > 0 && c.height > 0)
+      .sort((a, b) => (b.width * b.height) - (a.width * a.height));
+    const candidates = sel('#game canvas').length ? sel('#game canvas') : sel('canvas');
+    for (const c of candidates) {
+      try {
+        const s = c.toDataURL('image/png');
+        if (s && s.length > 1000) return s;
+      } catch {}
+    }
+    return null;
+  }
+  window._captureScreenshot = _captureScreenshot;
+
+  window.EJS_onGameStart = async () => {
+    // Fade out the branded splash smoothly
+    const splash = document.getElementById('gd-loading');
+    if (splash && !splash.classList.contains('hidden')) {
+      splash.classList.add('fading');
+      setTimeout(() => splash.classList.add('hidden'), 750);
+    }
+    // Wake up Gamepad API (required in Firefox iframes)
+    try { navigator.getGamepads(); } catch {}
+    // Ask parent to re-focus the iframe now that game is running
+    window.parent.postMessage({ type: 'gd-game-started' }, '*');
+
+    // Auto-fullscreen for "Fullscreen" launch mode
+    if (AUTO_FULLSCREEN) {
+      try { document.documentElement.requestFullscreen().catch(() => {}); } catch {}
+    }
+
+    // Start in-game menu gamepad polling (game is running now)
+    if (window._startIngameMenuPolling) window._startIngameMenuPolling();
+
+    // Restore saved gamepad→player assignments
+    try {
+      var savedGpSel = localStorage.getItem('gd3_gamepadSelection_gd_' + ROM_ID);
+      if (savedGpSel && window.EJS_emulator && window.EJS_emulator.gamepadSelection) {
+        var parsed = JSON.parse(savedGpSel);
+        if (Array.isArray(parsed)) {
+          for (var gi = 0; gi < parsed.length; gi++) {
+            if (parsed[gi]) window.EJS_emulator.gamepadSelection[gi] = parsed[gi];
+          }
+          if (typeof window.EJS_emulator.updateGamepadLabels === 'function') {
+            window.EJS_emulator.updateGamepadLabels();
+          }
+        }
+      }
+    } catch(e) {}
+
+    // Start+Select combo is handled by the custom in-game menu (IIFE below).
+    // The menu's "Emulator Settings" option triggers EJS settings via button click.
+
+    // Intercept EJS exit event directly on the emulator object
+    try {
+      if (window.EJS_emulator && typeof window.EJS_emulator.callEvent === 'function') {
+        const _origCall = window.EJS_emulator.callEvent.bind(window.EJS_emulator);
+        window.EJS_emulator.callEvent = function(evName, ...a) {
+          if (evName === 'exit') { exitPlayer(); return; }
+          return _origCall(evName, ...a);
+        };
+      }
+    } catch {}
+    // (screenshot captured on-demand in EJS_onSaveState via preserveDrawingBuffer patch)
+    // Pre-fetch lists so the picker opens instantly
+    fetchStates();
+    fetchSaves();
+  };
+
+  // Callbacks may be called as (state, screenshot) OR ({ state, screenshot })
+  window.EJS_onSaveState = async (stateOrObj, maybeScreenshot) => {
+    const state = (stateOrObj && stateOrObj.state !== undefined) ? stateOrObj.state : stateOrObj;
+    let screenshot = (stateOrObj && stateOrObj.screenshot !== undefined) ? stateOrObj.screenshot : maybeScreenshot;
+    // Capture fresh screenshot at save time (preserveDrawingBuffer keeps buffer intact)
+    if (!screenshot) screenshot = _captureScreenshot();
+    await uploadState(state, screenshot);
+  };
+
+  window.EJS_onLoadState = async () => {
+    await openPicker('states');
+  };
+
+  window.EJS_onSaveSave = async (saveOrObj) => {
+    const save = (saveOrObj && saveOrObj.save !== undefined) ? saveOrObj.save : saveOrObj;
+    if (save && save.length) await uploadSave(save);
+  };
+
+  window.EJS_onLoadSave = async () => {
+    await openPicker('saves');
+  };
+
+  window.EJS_onExit = exitPlayer;
+
+  // ── Fallback exit detection via MutationObserver ─────────────────────────
+  // EJS_onExit may not fire in stable CDN - watch #game for "exited" text
+  // Monitor childList + characterData + subtree to catch both new nodes and text changes
+  const _gameEl = document.getElementById('game');
+  let _exitFired = false;
+  const _checkExit = () => {
+    if (_exitFired) return;
+    const txt = (_gameEl.innerText || _gameEl.textContent || '').toLowerCase();
+    if (txt.includes('exited')) { _exitFired = true; _exitObs.disconnect(); clearInterval(_exitPoll); exitPlayer(); }
+  };
+  const _exitObs = new MutationObserver(_checkExit);
+  _exitObs.observe(_gameEl, { childList: true, subtree: true, characterData: true });
+  // Polling fallback: check every 500ms in case MutationObserver misses the change
+  const _exitPoll = setInterval(_checkExit, 500);
+
+  // ── Load EmulatorJS loader (local-first, CDN fallback) ──────────────────
+  // Local: self-hosted in Docker image (no internet needed)
+  // CDN:   fallback if local path is unavailable
+  const LOCAL_EJS = '/emulatorjs/data';
+  const CDN_EJS   = 'https://cdn.emulatorjs.org/4.2.3/data';
+
+  function _loadEJSFrom(path) {
+    return new Promise((resolve, reject) => {
+      window.EJS_pathtodata = path + '/';
+      const s = document.createElement('script');
+      s.src = path + '/loader.js';
+      s.onload = resolve;
+      s.onerror = () => reject(new Error(path));
+      document.body.appendChild(s);
+    });
+  }
+
+  try {
+    await _loadEJSFrom(LOCAL_EJS);
+  } catch {
+    try {
+      setLoad('Starting emulator…', 'Switching to CDN…');
+      await _loadEJSFrom(CDN_EJS);
+    } catch {
+      showError('EmulatorJS load failed', 'Could not load the emulator (tried local and CDN). Check the server logs.');
+    }
+  }
+})();
+
+// ── In-game pause menu + Category-based settings (Start+Select / Esc) ───────
+(function() {
+  const ACTIONS = ['resume','savestate','loadstate','settings','exit'];
+  let _open  = false;
+  let _focus = 0;
+  const _prevBtn = {};   // per-pad previous button states  { padIndex: bool[] }
+  const _edgeTs  = {};   // edge timestamps for combo detection
+  const COMBO_MS = 250;  // window for Start+Select combo (ms)
+  const B = { A:0, B:1, X:2, Y:3, SELECT:8, START:9, UP:12, DOWN:13, LEFT:14, RIGHT:15 };
+
+  const _backdrop = document.getElementById('gd-ingame-menu');
+  const _items    = [...document.querySelectorAll('.gd-mi')];
+
+  function _setFocus(i) {
+    _focus = ((i % ACTIONS.length) + ACTIONS.length) % ACTIONS.length;
+    _items.forEach((el, j) => el.classList.toggle('gd-mi-focus', j === _focus));
+  }
+
+  function openMenu() {
+    if (_open) return;
+    // Close any open settings panels
+    if (_settingsPage !== 'none') _closeAllSettings(false);
+    _open = true; _focus = 0; _setFocus(0);
+    try { window.EJS_emulator?.pause(); } catch {}
+    _backdrop.classList.add('gd-menu-open');
+  }
+
+  function closeMenu(resume = true) {
+    if (!_open) return;
+    _open = false;
+    _backdrop.classList.remove('gd-menu-open');
+    if (resume) try { window.EJS_emulator?.play(); } catch {}
+  }
+
+  function _act(action) {
+    if (action === 'resume') {
+      closeMenu();
+    } else if (action === 'savestate') {
+      closeMenu();
+      setTimeout(() => {
+        try {
+          const btn = window._ejsSaveStateBtn ||
+            [...document.querySelectorAll('#game button')].find(b => {
+              const t = (b.title || b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
+              return t.includes('save state');
+            });
+          if (btn) { btn.click(); return; }
+          document.getElementById('game')?.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'F2', keyCode: 113, bubbles: true })
+          );
+        } catch {}
+      }, 100);
+    } else if (action === 'loadstate') {
+      closeMenu();
+      setTimeout(() => openPicker('states'), 150);
+    } else if (action === 'settings') {
+      closeMenu(false);  // close pause menu, keep game paused
+      _openCats();
+    } else if (action === 'exit') {
+      closeMenu();
+      setTimeout(exitPlayer, 200);
+    }
+  }
+
+  // ── Category-based Emulator Settings ─────────────────────────────────────
+
+  // State machine
+  let _settingsPage = 'none'; // 'none' | 'cats' | 'sub'
+  let _settingsCat  = '';     // current category key
+  let _catFocus     = 0;      // focus index in category list
+  let _subFocus     = 0;      // focus index in sub-page items
+  let _subItems     = [];     // current sub-page item definitions
+
+  // Persisted values (audio only - everything else uses EJS API)
+  let _vol   = parseInt(localStorage.getItem('gd3_emu_vol') ?? '80', 10);
+  let _muted = localStorage.getItem('gd3_emu_muted') === '1';
+  let _cheatStates  = {};  // index -> bool
+
+  // SVG icons for categories
+  const CAT_ICONS = {
+    audio:    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>',
+    graphics: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+    capture:  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
+    speed:    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 19 22 12 13 5 13 19"/><polygon points="2 19 11 12 2 5 2 19"/></svg>',
+    input:    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>',
+    saves:    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>',
+    controls: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="14"/><line x1="4" y1="12" x2="8" y2="12"/><circle cx="16" cy="10" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/></svg>',
+    cheats:   '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>',
+    core:     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="2" x2="9" y2="4"/><line x1="15" y1="2" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="22"/><line x1="15" y1="20" x2="15" y2="22"/><line x1="2" y1="9" x2="4" y2="9"/><line x1="2" y1="15" x2="4" y2="15"/><line x1="20" y1="9" x2="22" y2="9"/><line x1="20" y1="15" x2="22" y2="15"/></svg>',
+    restart:  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>',
+  };
+
+  const CATS = [
+    { key: 'audio',    label: 'Audio' },
+    { key: 'graphics', label: 'Graphics' },
+    { key: 'capture',  label: 'Screen Capture' },
+    { key: 'speed',    label: 'Speed' },
+    { key: 'input',    label: 'Input' },
+    { key: 'saves',    label: 'Save States' },
+    { key: 'controls', label: 'Control Settings' },
+    { key: 'cheats',   label: 'Cheats' },
+    { key: 'core',     label: 'Core Options' },
+    { key: 'restart',  label: 'Restart Game' },
+  ];
+
+  // ── Apply helpers ──────────────────────────────────────────────────────
+
+  function _applyVolume() {
+    const v = _muted ? 0 : _vol / 100;
+    localStorage.setItem('gd3_emu_vol', String(_vol));
+    localStorage.setItem('gd3_emu_muted', _muted ? '1' : '0');
+    try {
+      const emu = window.EJS_emulator;
+      if (!emu) return;
+      if (typeof emu.setVolume === 'function') emu.setVolume(v);
+      else if ('volume' in emu) emu.volume = v;
+      if (emu.gameManager && typeof emu.gameManager.setVolume === 'function') emu.gameManager.setVolume(v);
+      const slider = document.querySelector('#game input[type="range"]');
+      if (slider) {
+        const max = parseFloat(slider.max) || 1;
+        slider.value = String(v * max);
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+        slider.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    } catch {}
+  }
+
+  function _applyCheat(idx, enabled) {
+    try {
+      var emu = window.EJS_emulator;
+      if (!emu) return;
+      // setCheat(index, enabled, code) - 3 args: cheat index, 0/1, code string
+      var cheats = window.EJS_cheats || [];
+      var code = cheats[idx] ? cheats[idx][1] || '' : '';
+      var gm = emu.gameManager;
+      if (gm && typeof gm.setCheat === 'function') gm.setCheat(idx, enabled ? 1 : 0, code);
+    } catch(e) {}
+  }
+
+  function _doScreenshot() {
+    const shot = window._captureScreenshot ? window._captureScreenshot() : null;
+    if (shot) {
+      const a = document.createElement('a');
+      a.href = shot;
+      a.download = (ROM_NAME || 'screenshot') + '_' + Date.now() + '.png';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    }
+  }
+
+  function _doRestart() {
+    _closeAllSettings(true);
+    try {
+      const emu = window.EJS_emulator;
+      if (emu) {
+        if (typeof emu.restart === 'function') emu.restart();
+        else if (emu.gameManager && typeof emu.gameManager.restart === 'function') emu.gameManager.restart();
+        else if (typeof emu.reset === 'function') emu.reset();
+        else if (emu.gameManager && typeof emu.gameManager.reset === 'function') emu.gameManager.reset();
+      }
+    } catch {}
+  }
+
+  // ── EJS API helpers ────────────────────────────────────────────────────
+  // cycle item: options = [{value, label}, ...]; get/set work with raw string values
+
+  // ── EJS API: apply a setting ─────────────────────────────────────────
+  // CRITICAL: call as emu.menuOptionChanged(k,v) - NOT with optional
+  // chaining (?.) which loses the `this` context and breaks EJS internals.
+  function _ejsSet(key, value) {
+    var emu = window.EJS_emulator;
+    if (!emu) return;
+    try {
+      emu.menuOptionChanged(key, value);
+    } catch(e) {
+      try {
+        if (emu.allSettings) emu.allSettings[key] = value;
+        if (typeof emu.handleSpecialOptions === 'function') emu.handleSpecialOptions(key, value);
+        if (emu.gameManager && typeof emu.gameManager.setVariable === 'function') emu.gameManager.setVariable(key, value);
+      } catch(e2) {}
+    }
+    // menuOptionChanged writes to allSettings but NOT to settings.
+    // saveSettings() persists this.settings (not allSettings) to localStorage.
+    // So we must also write to this.settings for persistence across sessions.
+    try {
+      if (emu.settings) emu.settings[key] = value;
+      if (typeof emu.saveSettings === 'function') emu.saveSettings();
+    } catch(e) {}
+  }
+
+  function _ejsGet(key, defaultVal) {
+    try {
+      var emu = window.EJS_emulator;
+      if (emu && emu.allSettings && emu.allSettings[key] !== undefined) return emu.allSettings[key];
+    } catch(e) {}
+    return defaultVal;
+  }
+
+  function _ejsItem(key, label, options, defaultVal) {
+    return {
+      key: key,
+      label: label,
+      type: 'cycle',
+      options: options.map(function(o) { return typeof o === 'string' ? { value: o, label: o } : o; }),
+      get: function() { return _ejsGet(key, defaultVal); },
+      set: function(v) { _ejsSet(key, v); }
+    };
+  }
+
+  function _ejsToggle(key, label, defaultVal) {
+    return {
+      key: key,
+      label: label,
+      type: 'toggle',
+      get: function() { return _ejsGet(key, defaultVal) === 'enabled'; },
+      set: function(v) { _ejsSet(key, v ? 'enabled' : 'disabled'); }
+    };
+  }
+
+  function _getShaderOptions() {
+    // EJS uses lowercase "disabled" internally, and shader keys end with .glslp
+    // enableShader checks: this.config.shaders[key] - NOT this.shaders[key]
+    var opts = [{ value: 'disabled', label: 'None' }];
+    try {
+      // Method 1: read from config.shaders (what enableShader actually uses)
+      var emu = window.EJS_emulator;
+      var configShaders = emu && emu.config && emu.config.shaders;
+      if (configShaders && typeof configShaders === 'object') {
+        Object.keys(configShaders).forEach(function(name) {
+          if (name && name !== 'disabled') {
+            opts.push({ value: name, label: name.replace('.glslp', '') });
+          }
+        });
+      }
+      // Method 2: fallback to this.shaders but add .glslp extension
+      if (opts.length <= 1 && emu && emu.shaders) {
+        Object.keys(emu.shaders).forEach(function(name) {
+          if (name && name.toLowerCase() !== 'disabled') {
+            // Add both with and without .glslp - enableShader might accept either
+            var key = name.endsWith('.glslp') ? name : name;
+            opts.push({ value: key, label: name.replace('.glslp', '') });
+          }
+        });
+      }
+    } catch(e) {}
+    // Fallback common shaders (with .glslp extension as EJS expects)
+    if (opts.length <= 1) {
+      ['2xScaleHQ.glslp','4xScaleHQ.glslp','crt-easymode.glslp','crt-mattias.glslp','crt-geom.glslp','SABR.glslp'].forEach(function(s) {
+        opts.push({ value: s, label: s.replace('.glslp','') });
+      });
+    }
+    return opts;
+  }
+
+  // ── Sub-page item definitions per category ─────────────────────────────
+
+  // ── Control mapping - read from EJS localStorage, build remap UI ────
+  const CTRL_BUTTONS = [
+    { idx: 0, label: 'B' },       { idx: 1, label: 'Y' },
+    { idx: 2, label: 'SELECT' },  { idx: 3, label: 'START' },
+    { idx: 4, label: 'UP' },      { idx: 5, label: 'DOWN' },
+    { idx: 6, label: 'LEFT' },    { idx: 7, label: 'RIGHT' },
+    { idx: 8, label: 'A' },       { idx: 9, label: 'X' },
+    { idx: 10, label: 'L' },      { idx: 11, label: 'R' },
+    { idx: 12, label: 'L2' },     { idx: 13, label: 'R2' },
+    { idx: 14, label: 'L3' },     { idx: 15, label: 'R3' },
+    { idx: 19, label: 'L STICK UP' },    { idx: 18, label: 'L STICK DOWN' },
+    { idx: 17, label: 'L STICK LEFT' },  { idx: 16, label: 'L STICK RIGHT' },
+    { idx: 23, label: 'R STICK UP' },    { idx: 22, label: 'R STICK DOWN' },
+    { idx: 21, label: 'R STICK LEFT' },  { idx: 20, label: 'R STICK RIGHT' },
+    { idx: 24, label: 'QUICK SAVE STATE' },  { idx: 25, label: 'QUICK LOAD STATE' },
+    { idx: 26, label: 'CHANGE STATE SLOT' }, { idx: 27, label: 'FAST FORWARD' },
+    { idx: 28, label: 'REWIND' },            { idx: 29, label: 'SLOW MOTION' },
+  ];
+  let _ctrlPlayer = 0;  // 0 or 1
+
+  function _getControlMappings(player) {
+    // Read directly from EJS runtime controls (live state, not localStorage)
+    try {
+      var emu = window.EJS_emulator;
+      if (emu && emu.controls && emu.controls[player]) return emu.controls[player];
+    } catch(e) {}
+    // Fallback: EJS_defaultControls
+    try {
+      if (window.EJS_defaultControls && window.EJS_defaultControls[player]) return window.EJS_defaultControls[player];
+    } catch(e) {}
+    return {};
+  }
+
+  function _keyLabel(mapping) {
+    if (!mapping) return '-';
+    var kb = mapping.value || '';
+    var gp = mapping.value2 || '';
+    var parts = [];
+    if (kb) parts.push(kb.length === 1 ? kb.toUpperCase() : kb);
+    if (gp) parts.push(gp.replace(/_/g,' '));
+    return parts.join(' / ') || '-';
+  }
+
+  function _getControlsItems() {
+    var items = [];
+    // Player selector
+    items.push({
+      key: 'player', label: 'Player', type: 'cycle',
+      options: [{ value: '0', label: 'Player 1' }, { value: '1', label: 'Player 2' }],
+      get: function() { return String(_ctrlPlayer); },
+      set: function(v) { _ctrlPlayer = parseInt(v); _renderSubPage('controls'); }
+    });
+    // Connected gamepad selector - assign a gamepad to this player
+    // EJS uses gamepadSelection[] where index=player, value="gamepad.id_gamepad.index"
+    var gpOptions = [{ value: 'notconnected', label: 'Not Connected' }];
+    var gps = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (var gi = 0; gi < gps.length; gi++) {
+      if (gps[gi]) {
+        var gpKey = gps[gi].id + '_' + gps[gi].index;
+        gpOptions.push({ value: gpKey, label: gps[gi].id.substring(0, 30) });
+      }
+    }
+    items.push({
+      key: 'gamepad', label: 'Gamepad', type: 'cycle',
+      options: gpOptions,
+      get: function() {
+        // Read directly from EJS runtime gamepadSelection
+        var emu = window.EJS_emulator;
+        if (emu && emu.gamepadSelection && emu.gamepadSelection[_ctrlPlayer]) {
+          return emu.gamepadSelection[_ctrlPlayer];
+        }
+        return 'notconnected';
+      },
+      set: function(v) {
+        var emu = window.EJS_emulator;
+        if (!emu || !emu.gamepadSelection) return;
+        // Clear this gamepad from any other player first
+        if (v !== 'notconnected') {
+          for (var p = 0; p < emu.gamepadSelection.length; p++) {
+            if (emu.gamepadSelection[p] === v) emu.gamepadSelection[p] = '';
+          }
+        }
+        emu.gamepadSelection[_ctrlPlayer] = (v === 'notconnected') ? '' : v;
+        // Update labels if method exists
+        if (typeof emu.updateGamepadLabels === 'function') emu.updateGamepadLabels();
+        // Persist gamepad assignments (EJS doesn't save these itself)
+        try {
+          localStorage.setItem('gd3_gamepadSelection_gd_' + ROM_ID,
+            JSON.stringify(emu.gamepadSelection));
+        } catch(e2) {}
+      }
+    });
+    // Button mappings
+    var mappings = _getControlMappings(_ctrlPlayer);
+    CTRL_BUTTONS.forEach(function(btn) {
+      var m = mappings[btn.idx];
+      items.push({
+        key: 'btn' + btn.idx, label: btn.label, type: 'action',
+        text: _keyLabel(m),
+        fn: function() { _startKeyCapture(btn.idx, btn.label); }
+      });
+    });
+    return items;
+  }
+
+  // ── Key capture mode for control remapping ────────────────────────────
+  let _capturing = false;
+  let _captureIdx = -1;
+  let _captureLabel = '';
+
+  function _startKeyCapture(btnIdx, btnLabel) {
+    _capturing = true;
+    _captureIdx = btnIdx;
+    _captureLabel = btnLabel;
+    // Update the display to show "Press a key..."
+    var el = document.querySelector('.gd-sub-val[data-idx="' + (_subFocus) + '"]') ||
+             document.querySelector('.gd-si-focus .gd-si-val');
+    if (el) el.textContent = 'Press key...';
+  }
+
+  function _finishKeyCapture(keyName, gpButton) {
+    if (!_capturing) return;
+    _capturing = false;
+    // Apply directly to EJS runtime controls (immediate effect)
+    try {
+      var emu = window.EJS_emulator;
+      if (emu && emu.controls) {
+        if (!emu.controls[_ctrlPlayer]) emu.controls[_ctrlPlayer] = {};
+        if (!emu.controls[_ctrlPlayer][_captureIdx]) emu.controls[_ctrlPlayer][_captureIdx] = { value: '', value2: '' };
+        if (keyName) emu.controls[_ctrlPlayer][_captureIdx].value = keyName;
+        if (gpButton) emu.controls[_ctrlPlayer][_captureIdx].value2 = gpButton;
+        // Re-apply key bindings and save
+        if (typeof emu.setupKeys === 'function') emu.setupKeys();
+        if (typeof emu.checkGamepadInputs === 'function') emu.checkGamepadInputs();
+        if (typeof emu.saveSettings === 'function') emu.saveSettings();
+      }
+    } catch(e) {}
+    // Refresh the controls sub-page
+    _renderSubPage('controls');
+    // Find first non-info item
+    for (var i = 0; i < _subItems.length; i++) {
+      if (_subItems[i].type !== 'info') { _subFocus = i; break; }
+    }
+    _setSubFocus(_subFocus);
+  }
+
+  function _getCheatsItems() {
+    var cheats = window.EJS_cheats || [];
+    if (!cheats.length) return [{ key: 'nocheats', label: 'No cheats loaded', type: 'info', text: '' }];
+    return cheats.map(function(c, i) {
+      return {
+        key: 'cheat' + i,
+        label: c[0] || 'Cheat ' + (i + 1),
+        type: 'toggle',
+        get: function() { return !!_cheatStates[i]; },
+        set: function(v) { _cheatStates[i] = v; _applyCheat(i, v); },
+      };
+    });
+  }
+
+  function _getCoreItems() {
+    var items = [];
+    try {
+      var emu = window.EJS_emulator;
+      var raw = emu && emu.gameManager && typeof emu.gameManager.getCoreOptions === 'function' ? emu.gameManager.getCoreOptions() : null;
+      if (raw) {
+        // Format: "option_key|default_value; value1|value2|value3\n..."
+        // EJS uses: key = before_semi.split("|")[0], default = before_semi.split("|")[1]
+        raw.split('\n').forEach(function(line) {
+          line = line.trim();
+          if (!line) return;
+          var semiIdx = line.indexOf('; ');
+          if (semiIdx < 0) return;
+          var keyPart = line.substring(0, semiIdx);   // "snes9x_region|NTSC"
+          var valPart = line.substring(semiIdx + 2);   // "NTSC|PAL"
+          var keyBits = keyPart.split('|');
+          var optionKey = keyBits[0];                  // "snes9x_region"
+          var values = valPart.split('|').map(function(v) { return v.trim(); }).filter(Boolean);
+          if (!values.length || values.length < 2) return;  // skip single-value options
+          var defaultVal = keyBits[1] || values[0];
+          // Display label: strip prefix, replace underscores
+          var label = optionKey.replace(/_/g, ' ').replace(/.+\-(.+)/, '$1');
+          items.push(_ejsItem(optionKey, label, values.map(function(v) { return { value: v, label: v }; }), defaultVal));
+        });
+      }
+    } catch(e) {}
+    if (!items.length) {
+      items.push({ key: 'nocore', label: 'No core options available', type: 'info', text: '' });
+    }
+    return items;
+  }
+
+  function _getSubItems(cat) {
+    switch (cat) {
+      case 'audio': return [
+        { key: 'volume', label: 'Volume', type: 'range', min: 0, max: 100, step: 5,
+          get: function() { return _vol; }, set: function(v) { _vol = v; _applyVolume(); }, fmt: function(v) { return v + '%'; } },
+        { key: 'mute', label: 'Mute', type: 'toggle',
+          get: function() { return _muted; }, set: function(v) { _muted = v; _applyVolume(); } },
+      ];
+
+      case 'graphics': return [
+        _ejsItem('shader', 'Shader', _getShaderOptions(), 'disabled'),
+        // FPS uses "show"/"hide" NOT "enabled"/"disabled"
+        _ejsItem('fps', 'Show FPS', [
+          { value: 'hide', label: 'OFF' }, { value: 'show', label: 'ON' }
+        ], 'hide'),
+        _ejsToggle('vsync', 'VSync', 'disabled'),
+        _ejsItem('videoRotation', 'Video Rotation', [
+          { value: '0', label: '0\u00b0' }, { value: '1', label: '90\u00b0' },
+          { value: '2', label: '180\u00b0' }, { value: '3', label: '270\u00b0' }
+        ], '0'),
+        // WebGL2 is init-only (changes which WASM core variant loads).
+        // Saved to settings - takes effect on next game launch.
+        _ejsItem('webgl2Enabled', 'WebGL2 (next launch)', [
+          { value: 'disabled', label: 'Disabled' }, { value: 'enabled', label: 'Enabled' }
+        ], 'enabled'),
+      ];
+
+      case 'capture': return [
+        _ejsItem('screenshotSource', 'Screenshot Source', [
+          { value: 'canvas', label: 'Canvas' }, { value: 'retroarch', label: 'RetroArch' }
+        ], 'canvas'),
+        _ejsItem('screenshotFormat', 'Screenshot Format', [
+          { value: 'png', label: 'PNG' }, { value: 'jpeg', label: 'JPEG' }, { value: 'webp', label: 'WebP' }
+        ], 'png'),
+        _ejsItem('screenshotUpscale', 'Screenshot Upscale', [
+          { value: '1', label: '1\u00d7' }, { value: '2', label: '2\u00d7' },
+          { value: '3', label: '3\u00d7' }, { value: '4', label: '4\u00d7' }
+        ], '1'),
+        _ejsItem('screenRecordFormat', 'Record Format', [
+          { value: 'mp4', label: 'MP4' }, { value: 'webm', label: 'WebM' }
+        ], 'mp4'),
+        _ejsItem('screenRecordFPS', 'Record FPS', [
+          { value: '30', label: '30 FPS' }, { value: '60', label: '60 FPS' }
+        ], '30'),
+        _ejsItem('screenRecordUpscale', 'Record Upscale', [
+          { value: '1', label: '1\u00d7' }, { value: '2', label: '2\u00d7' },
+          { value: '3', label: '3\u00d7' }, { value: '4', label: '4\u00d7' }
+        ], '1'),
+        _ejsItem('screenRecordVideoBitrate', 'Video Bitrate', [
+          { value: '2500000', label: '2.5 Mbps' }, { value: '5000000', label: '5 Mbps' },
+          { value: '10000000', label: '10 Mbps' }, { value: '25000000', label: '25 Mbps' }
+        ], '2500000'),
+        _ejsItem('screenRecordAudioBitrate', 'Audio Bitrate', [
+          { value: '96000', label: '96 kbps' }, { value: '128000', label: '128 kbps' },
+          { value: '192000', label: '192 kbps' }, { value: '256000', label: '256 kbps' }
+        ], '96000'),
+        { key: 'screenshot', label: 'Take Screenshot', type: 'action',
+          fn: function() { try { _doScreenshot(); } catch(e) {} } },
+      ];
+
+      case 'speed': return [
+        _ejsToggle('fastForward', 'Fast Forward', 'disabled'),
+        _ejsItem('ff-ratio', 'FF Speed', [
+          { value: '1.5', label: '1.5\u00d7' }, { value: '2', label: '2\u00d7' },
+          { value: '4', label: '4\u00d7' }, { value: '8', label: '8\u00d7' },
+          { value: '16', label: '16\u00d7' }, { value: '32', label: '32\u00d7' },
+          { value: 'Infinity', label: 'Max' }
+        ], '2'),
+        _ejsToggle('slowMotion', 'Slow Motion', 'disabled'),
+        _ejsItem('sm-ratio', 'Slow Motion Speed', [
+          { value: '2', label: '0.5\u00d7' }, { value: '4', label: '0.25\u00d7' },
+          { value: '8', label: '0.125\u00d7' }
+        ], '2'),
+        // Rewind is init-only (this.rewindEnabled set once at startup).
+        // We save the setting - it takes effect on next game launch.
+        _ejsItem('rewindEnabled', 'Rewind', [
+          { value: 'disabled', label: 'OFF' }, { value: 'enabled', label: 'ON (next launch)' }
+        ], 'disabled'),
+        _ejsItem('rewind-granularity', 'Rewind Granularity', [
+          { value: '1', label: '1' }, { value: '3', label: '3' },
+          { value: '6', label: '6' }, { value: '12', label: '12' },
+          { value: '25', label: '25' }, { value: '50', label: '50' },
+          { value: '100', label: '100' }
+        ], '3'),
+      ];
+
+      case 'input': return [
+        _ejsItem('menubarBehavior', 'Menu Bar Trigger', [
+          { value: 'downward', label: 'Move Down' }, { value: 'anywhere', label: 'Any Movement' }
+        ], 'downward'),
+        _ejsToggle('keyboardInput', 'Keyboard Input', 'enabled'),
+        _ejsToggle('altKeyboardInput', 'Forward Alt Key', 'disabled'),
+        _ejsToggle('lockMouse', 'Lock Mouse', 'disabled'),
+        _ejsItem('autofireInterval', 'Autofire Interval', [
+          { value: '100', label: '100ms' }, { value: '200', label: '200ms' },
+          { value: '300', label: '300ms' }, { value: '500', label: '500ms' },
+          { value: '750', label: '750ms' }, { value: '1000', label: '1000ms' }
+        ], '100'),
+        _ejsToggle('virtual-gamepad', 'Virtual Gamepad', 'disabled'),
+        _ejsToggle('virtual-gamepad-left-handed-mode', 'Left-Handed Mode', 'disabled'),
+      ];
+
+      case 'saves': return [
+        _ejsItem('save-state-slot', 'Save State Slot',
+          Array.from({ length: 9 }, function(_, i) { return { value: String(i + 1), label: 'Slot ' + (i + 1) }; }), '1'),
+        _ejsItem('save-state-location', 'Save Location', [
+          { value: 'download', label: 'Download' }, { value: 'keep in browser', label: 'Browser' }
+        ], 'keep in browser'),
+        _ejsItem('save-save-interval', 'Auto-Save Interval', [
+          { value: '0', label: 'Disabled' }, { value: '15', label: '15 sec' },
+          { value: '30', label: '30 sec' }, { value: '60', label: '1 min' },
+          { value: '120', label: '2 min' }, { value: '300', label: '5 min' }
+        ], '0'),
+      ];
+
+      case 'controls': return _getControlsItems();
+      case 'cheats':   return _getCheatsItems();
+      case 'core':     return _getCoreItems();
+      default: return [];
+    }
+  }
+
+  // ── Rendering ──────────────────────────────────────────────────────────
+
+  function _renderCats() {
+    const container = document.getElementById('gd-cats-list');
+    container.innerHTML = CATS.map((cat, i) => {
+      return '<div class="gd-mi' + (i === _catFocus ? ' gd-mi-focus' : '') +
+        (cat.key === 'restart' ? ' gd-mi-danger' : '') +
+        '" data-cat="' + cat.key + '">' +
+        (CAT_ICONS[cat.key] || '') + cat.label + '</div>';
+    }).join('');
+    // Bind mouse/touch
+    const els = [...container.querySelectorAll('.gd-mi')];
+    els.forEach((el, i) => {
+      el.addEventListener('click', () => { _catFocus = i; _catConfirm(); });
+      el.addEventListener('mouseenter', () => _setCatFocus(i));
+    });
+  }
+
+  function _setCatFocus(i) {
+    _catFocus = ((i % CATS.length) + CATS.length) % CATS.length;
+    const els = [...document.getElementById('gd-cats-list').querySelectorAll('.gd-mi')];
+    els.forEach((el, j) => el.classList.toggle('gd-mi-focus', j === _catFocus));
+  }
+
+  function _renderSubPage(cat) {
+    _subItems = _getSubItems(cat);
+    const catDef = CATS.find(c => c.key === cat);
+    document.getElementById('gd-sub-title').textContent = catDef ? catDef.label : 'Settings';
+
+    const container = document.getElementById('gd-sub-items');
+    if (!_subItems.length) {
+      container.innerHTML = '<div style="padding:16px;color:#4a4a6a;font-size:13px;text-align:center;">No options available</div>';
+      return;
+    }
+
+    container.innerHTML = _subItems.map((item, i) => {
+      const focused = i === _subFocus ? ' gd-si-focus' : '';
+      const isInfo = item.type === 'info';
+      const infoClass = isInfo ? ' gd-si-info' : '';
+      const actionClass = item.type === 'action' ? ' gd-si-action' : '';
+
+      let valHtml = '';
+      if (item.type === 'range') {
+        const v = item.get();
+        const display = item.fmt ? item.fmt(v) : String(v);
+        valHtml = '<span class="gd-si-val"><span class="gd-si-arrow">\u25c0</span><span class="gd-sub-val" data-idx="' + i + '">' + display + '</span><span class="gd-si-arrow">\u25b6</span></span>';
+      } else if (item.type === 'toggle') {
+        const v = item.get();
+        valHtml = '<span class="gd-si-val"><span class="gd-si-arrow">\u25c0</span><span class="gd-sub-val" data-idx="' + i + '">' + (v ? 'ON' : 'OFF') + '</span><span class="gd-si-arrow">\u25b6</span></span>';
+      } else if (item.type === 'cycle') {
+        // options are {value, label} objects; get() returns raw value string
+        const curVal = item.get();
+        const match = item.options.find(function(o) { return o.value === curVal; });
+        const display = match ? match.label : (item.options[0] ? item.options[0].label : '');
+        valHtml = '<span class="gd-si-val"><span class="gd-si-arrow">\u25c0</span><span class="gd-sub-val" data-idx="' + i + '">' + display + '</span><span class="gd-si-arrow">\u25b6</span></span>';
+      } else if (item.type === 'action') {
+        valHtml = '<span class="gd-si-val">' + (item.text || 'press A') + '</span>';
+      } else if (item.type === 'info') {
+        valHtml = item.text ? '<span class="gd-si-val">' + item.text + '</span>' : '';
+      }
+
+      const iconHtml = i === 0 ? (CAT_ICONS[_settingsCat] || '') : '<svg width="16" height="16"></svg>';
+
+      return '<div class="gd-si' + focused + infoClass + actionClass + '" data-sub-idx="' + i + '">' +
+        iconHtml +
+        '<span class="gd-si-label">' + item.label + '</span>' +
+        valHtml + '</div>';
+    }).join('');
+
+    // Bind mouse/touch
+    const els = [...container.querySelectorAll('.gd-si')];
+    els.forEach((el, i) => {
+      if (_subItems[i].type === 'info') return;
+      el.addEventListener('click', () => { _subFocus = i; _subConfirm(); });
+      el.addEventListener('mouseenter', () => _setSubFocus(i));
+    });
+  }
+
+  function _setSubFocus(i) {
+    const len = _subItems.length;
+    if (!len) return;
+    let next = ((i % len) + len) % len;
+    // Skip info items
+    const dir = i >= _subFocus ? 1 : -1;
+    let tries = 0;
+    while (_subItems[next]?.type === 'info' && tries < len) {
+      next = ((next + dir) % len + len) % len;
+      tries++;
+    }
+    if (_subItems[next]?.type === 'info') return;
+    _subFocus = next;
+    const els = [...document.getElementById('gd-sub-items').querySelectorAll('.gd-si')];
+    els.forEach((el, j) => el.classList.toggle('gd-si-focus', j === _subFocus));
+    els[_subFocus]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function _subUpdateVal(idx) {
+    const item = _subItems[idx];
+    if (!item) return;
+    const el = document.querySelector('.gd-sub-val[data-idx="' + idx + '"]');
+    if (!el) return;
+    if (item.type === 'range') {
+      el.textContent = item.fmt ? item.fmt(item.get()) : String(item.get());
+    } else if (item.type === 'toggle') {
+      el.textContent = item.get() ? 'ON' : 'OFF';
+    } else if (item.type === 'cycle') {
+      // options are {value, label}; get() returns raw value string
+      const curVal = item.get();
+      const match = item.options.find(function(o) { return o.value === curVal; });
+      el.textContent = match ? match.label : (item.options[0] ? item.options[0].label : '');
+    }
+  }
+
+  function _subChange(dir) {
+    const item = _subItems[_subFocus];
+    if (!item) return;
+    if (item.type === 'range') {
+      const cur = item.get();
+      const next = Math.max(item.min, Math.min(item.max, cur + dir * item.step));
+      item.set(next);
+    } else if (item.type === 'toggle') {
+      item.set(!item.get());
+    } else if (item.type === 'cycle') {
+      // options are {value, label}; get() returns raw value, find index, move, set new value
+      const curVal = item.get();
+      let curIdx = item.options.findIndex(function(o) { return o.value === curVal; });
+      if (curIdx < 0) curIdx = 0;
+      const nextIdx = Math.max(0, Math.min(item.options.length - 1, curIdx + dir));
+      item.set(item.options[nextIdx].value);
+    }
+    _subUpdateVal(_subFocus);
+  }
+
+  function _subConfirm() {
+    const item = _subItems[_subFocus];
+    if (!item) return;
+    if (item.type === 'action' && item.fn) {
+      item.fn();
+    } else if (item.type === 'toggle') {
+      item.set(!item.get());
+      _subUpdateVal(_subFocus);
+    } else {
+      _subChange(1);
+    }
+  }
+
+  function _catConfirm() {
+    const cat = CATS[_catFocus];
+    if (!cat) return;
+    if (cat.key === 'restart') {
+      _doRestart();
+      return;
+    }
+    _openSub(cat.key);
+  }
+
+  // ── Panel open/close ───────────────────────────────────────────────────
+
+  const _catsPanel = document.getElementById('gd-settings-cats');
+  const _subPanel  = document.getElementById('gd-settings-sub');
+
+  function _openCats() {
+    _settingsPage = 'cats';
+    _catFocus = 0;
+    _renderCats();
+    _catsPanel.classList.add('gd-open');
+    _subPanel.classList.remove('gd-open');
+  }
+
+  function _openSub(catKey) {
+    _settingsPage = 'sub';
+    _settingsCat = catKey;
+    _subFocus = 0;
+    _renderSubPage(catKey);
+    // Find first non-info item
+    for (let i = 0; i < _subItems.length; i++) {
+      if (_subItems[i].type !== 'info') { _subFocus = i; break; }
+    }
+    _setSubFocus(_subFocus);
+    _catsPanel.classList.remove('gd-open');
+    _subPanel.classList.add('gd-open');
+  }
+
+  function _closeSub() {
+    _subPanel.classList.remove('gd-open');
+    _settingsPage = 'cats';
+    _catsPanel.classList.add('gd-open');
+    _setCatFocus(_catFocus);
+  }
+
+  function _closeAllSettings(resume = true) {
+    _settingsPage = 'none';
+    _settingsCat = '';
+    _catsPanel.classList.remove('gd-open');
+    _subPanel.classList.remove('gd-open');
+    if (resume) try { window.EJS_emulator?.play(); } catch {}
+  }
+
+  // Mouse/touch for pause menu
+  _items.forEach((el, i) => {
+    el.addEventListener('click', () => _act(ACTIONS[i]));
+    el.addEventListener('mouseenter', () => _setFocus(i));
+  });
+
+  // ── Keyboard handler ───────────────────────────────────────────────────
+  document.addEventListener('keydown', (e) => {
+    const pickerOpen = document.getElementById('gd-state-picker')?.classList.contains('visible');
+    if (!_open && !pickerOpen && _settingsPage === 'none') return;
+
+    // Key capture mode for control remapping
+    if (_capturing) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (e.key === 'Escape') { _capturing = false; _renderSubPage('controls'); return; }
+      _finishKeyCapture(e.key, null);
+      return;
+    }
+
+    e.stopImmediatePropagation();
+
+    if (_settingsPage === 'sub') {
+      if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); _closeSub(); }
+      else if (e.key === 'ArrowUp')    { e.preventDefault(); _setSubFocus(_subFocus - 1); }
+      else if (e.key === 'ArrowDown')  { e.preventDefault(); _setSubFocus(_subFocus + 1); }
+      else if (e.key === 'ArrowLeft')  { e.preventDefault(); _subChange(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); _subChange(1); }
+      else if (e.key === 'Enter')      { e.preventDefault(); _subConfirm(); }
+    } else if (_settingsPage === 'cats') {
+      if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); _closeAllSettings(); }
+      else if (e.key === 'ArrowUp')   { e.preventDefault(); _setCatFocus(_catFocus - 1); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); _setCatFocus(_catFocus + 1); }
+      else if (e.key === 'Enter')     { e.preventDefault(); _catConfirm(); }
+    } else if (_open) {
+      if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); closeMenu(); }
+      else if (e.key === 'ArrowUp')   { e.preventDefault(); _setFocus(_focus - 1); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); _setFocus(_focus + 1); }
+      else if (e.key === 'Enter')     { e.preventDefault(); _act(ACTIONS[_focus]); }
+    } else if (pickerOpen) {
+      if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); closePicker(); }
+      else if (e.key === 'ArrowUp')   { e.preventDefault(); _setPickerFocus(_pickerFocus - 1); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); _setPickerFocus(_pickerFocus + 1); }
+      else if (e.key === 'Enter')     { e.preventDefault(); loadItem(_pickerFocus); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); switchTab('states'); }
+      else if (e.key === 'ArrowRight'){ e.preventDefault(); switchTab('saves'); }
+      else if (e.key === 'Delete' || e.key === 'x' || e.key === 'X') {
+        e.preventDefault();
+        var items = pickerMode === 'states' ? cachedStates : cachedSaves;
+        if (items && items[_pickerFocus]) deleteItem(items[_pickerFocus].id);
+      }
+    }
+  }, { capture: true });
+
+  // ── Gamepad polling ────────────────────────────────────────────────────
+  function _gpLoop() {
+    requestAnimationFrame(_gpLoop);
+    if (!document.hasFocus()) return;
+    const pads = navigator.getGamepads?.() ?? [];
+    const now  = performance.now();
+
+    for (const gp of pads) {
+      if (!gp) continue;
+      const idx = gp.index;
+      if (!_prevBtn[idx]) _prevBtn[idx] = new Array(gp.buttons.length).fill(false);
+      const prev    = _prevBtn[idx];
+      const pressed = (i) => !!gp.buttons[i]?.pressed;
+      const edge    = (i) => pressed(i) && !prev[i];
+
+      const pickerOpen = document.getElementById('gd-state-picker')?.classList.contains('visible');
+
+      if (_capturing) {
+        // Key capture mode - detect button press OR axis movement
+        var _captured = false;
+        for (var bi = 0; bi < gp.buttons.length && !_captured; bi++) {
+          if (edge(bi)) {
+            var gpNames = ['BUTTON_1','BUTTON_2','BUTTON_3','BUTTON_4',
+              'LEFT_TOP_SHOULDER','RIGHT_TOP_SHOULDER','LEFT_BOTTOM_SHOULDER','RIGHT_BOTTOM_SHOULDER',
+              'SELECT','START','LEFT_STICK','RIGHT_STICK',
+              'DPAD_UP','DPAD_DOWN','DPAD_LEFT','DPAD_RIGHT'];
+            _finishKeyCapture(null, gpNames[bi] || 'BUTTON_' + bi);
+            _captured = true; break;
+          }
+        }
+        // Detect analog stick axes (threshold 0.7)
+        if (!_captured && gp.axes) {
+          var axisNames = [
+            ['LEFT_STICK_X:-1','LEFT_STICK_X:+1'],   // axis 0: L stick X
+            ['LEFT_STICK_Y:-1','LEFT_STICK_Y:+1'],   // axis 1: L stick Y
+            ['RIGHT_STICK_X:-1','RIGHT_STICK_X:+1'],  // axis 2: R stick X
+            ['RIGHT_STICK_Y:-1','RIGHT_STICK_Y:+1'],  // axis 3: R stick Y
+          ];
+          for (var ai = 0; ai < gp.axes.length && ai < axisNames.length; ai++) {
+            var v = gp.axes[ai];
+            if (v < -0.7) { _finishKeyCapture(null, axisNames[ai][0]); break; }
+            if (v > 0.7)  { _finishKeyCapture(null, axisNames[ai][1]); break; }
+          }
+        }
+      } else if (_settingsPage === 'sub') {
+        if (edge(B.UP))    _setSubFocus(_subFocus - 1);
+        if (edge(B.DOWN))  _setSubFocus(_subFocus + 1);
+        if (edge(B.LEFT))  _subChange(-1);
+        if (edge(B.RIGHT)) _subChange(1);
+        if (edge(B.A))     _subConfirm();
+        if (edge(B.B))     _closeSub();
+      } else if (_settingsPage === 'cats') {
+        if (edge(B.UP))   _setCatFocus(_catFocus - 1);
+        if (edge(B.DOWN)) _setCatFocus(_catFocus + 1);
+        if (edge(B.A))    _catConfirm();
+        if (edge(B.B))    _closeAllSettings();
+      } else if (_open) {
+        if (edge(B.UP))   _setFocus(_focus - 1);
+        if (edge(B.DOWN)) _setFocus(_focus + 1);
+        if (edge(B.A))    _act(ACTIONS[_focus]);
+        if (edge(B.B))    closeMenu();
+      } else if (pickerOpen) {
+        if (edge(B.UP))    _setPickerFocus(_pickerFocus - 1);
+        if (edge(B.DOWN))  _setPickerFocus(_pickerFocus + 1);
+        if (edge(B.A))     loadItem(_pickerFocus);
+        if (edge(B.B))     closePicker();
+        if (edge(B.LEFT))  switchTab('states');
+        if (edge(B.RIGHT)) switchTab('saves');
+        if (edge(B.X)) {
+          // Delete focused save state/save
+          var items = pickerMode === 'states' ? cachedStates : cachedSaves;
+          if (items && items[_pickerFocus]) deleteItem(items[_pickerFocus].id);
+        }
+      } else {
+        // No overlay - Start+Select combo to open in-game menu
+        if (edge(B.SELECT)) {
+          _edgeTs[`sel${idx}`] = now;
+          if (now - (_edgeTs[`sta${idx}`] ?? -Infinity) <= COMBO_MS) openMenu();
+        }
+        if (edge(B.START)) {
+          _edgeTs[`sta${idx}`] = now;
+          if (now - (_edgeTs[`sel${idx}`] ?? -Infinity) <= COMBO_MS) openMenu();
+        }
+      }
+
+      for (let i = 0; i < gp.buttons.length; i++) prev[i] = !!gp.buttons[i]?.pressed;
+    }
+  }
+
+  // Exposed for EJS_onGameStart (game must be running before polling starts)
+  window._startIngameMenuPolling = _gpLoop;
+})();
+
+// ── Listen for messages from parent ─────────────────────────────────────────
+window.addEventListener('message', async (e) => {
+  if (e.data?.type === 'gd-open-picker') await openPicker(e.data.mode);
+});
+</script>
+</body>
+</html>

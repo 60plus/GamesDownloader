@@ -1,0 +1,84 @@
+# GamesDownloaderV3 - Docker Compose
+#
+# All data stored under GD_BASE_DIR (default: /APPS/GamesDownloaderV3)
+# Set GD_BASE_DIR in .env to change base path.
+
+services:
+
+  # ── Main application ─────────────────────────────────────────────────────
+  gamesdownloader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gamesdownloaderv3
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-}
+      - PGID=${PGID:-}
+      - DB_HOST=gd-mariadb
+      - DB_PORT=3306
+      - DB_NAME=${DB_NAME:-gamesdownloader}
+      - DB_USER=${DB_USER:-gd}
+      - DB_PASSWD=${DB_PASSWD:-gd}
+      - REDIS_HOST=gd-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-gd_redis_2026}
+      - GD_AUTH_SECRET_KEY=${GD_AUTH_SECRET_KEY:-change-me-in-production}
+      - GD_BASE_PATH=/data
+      - GD_DEBUG=${GD_DEBUG:-false}
+      - IGDB_CLIENT_ID=${IGDB_CLIENT_ID:-}
+      - IGDB_CLIENT_SECRET=${IGDB_CLIENT_SECRET:-}
+      - STEAMGRIDDB_API_KEY=${STEAMGRIDDB_API_KEY:-}
+      - RAWG_API_KEY=${RAWG_API_KEY:-}
+      - SCREENSCRAPER_USERNAME=${SCREENSCRAPER_USERNAME:-}
+      - SCREENSCRAPER_PASSWORD=${SCREENSCRAPER_PASSWORD:-}
+      - RA_API_KEY=${RA_API_KEY:-}
+    ports:
+      - "${GD_PORT:-8080}:8080"
+      - "${TR_WEBUI_PORT:-9091}:9091"
+      - "${TR_PEER_PORT:-51413}:51413"
+      - "${TR_PEER_PORT:-51413}:51413/udp"
+    volumes:
+      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/roms:/data/roms
+      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/games:/data/games
+      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/downloads:/data/downloads
+      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/resources:/data/resources
+      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/config:/data/config
+      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/plugins:/data/plugins
+      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/clamav:/data/clamav
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      gd-mariadb:
+        condition: service_healthy
+      gd-redis:
+        condition: service_started
+
+  # ── MariaDB ──────────────────────────────────────────────────────────────
+  gd-mariadb:
+    image: mariadb:11.3
+    container_name: gd-mariadb
+    restart: unless-stopped
+    environment:
+      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWD:-rootpassword}
+      - MARIADB_DATABASE=${DB_NAME:-gamesdownloader}
+      - MARIADB_USER=${DB_USER:-gd}
+      - MARIADB_PASSWORD=${DB_PASSWD:-gd}
+    volumes:
+      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb -u${DB_USER:-gd} -p${DB_PASSWD:-gd} ${DB_NAME:-gamesdownloader} -e 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── Redis ────────────────────────────────────────────────────────────────
+  gd-redis:
+    image: valkey/valkey:8
+    container_name: gd-redis
+    restart: unless-stopped
+    command: valkey-server --requirepass ${REDIS_PASSWORD:-gd_redis_2026}
+    volumes:
+      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/redis:/data

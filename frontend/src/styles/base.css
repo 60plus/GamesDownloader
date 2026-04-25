@@ -1,0 +1,152 @@
+/* GamesDownloaderV3 - Base styles (theme-agnostic) */
+
+:root {
+  /* ── Radius scale ────────────────────────────────────────────────────────── */
+  --radius-xs: 4px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  /* ── Typography scale ────────────────────────────────────────────────────── */
+  /* Use these instead of hardcoded font-size: Xpx so the whole app can scale   */
+  /* with a single edit and new skins/modes can override the base type rhythm. */
+  --fs-xs:  10px;
+  --fs-sm:  12px;
+  --fs-md:  14px;
+  --fs-lg:  16px;
+  --fs-xl:  18px;
+  --fs-2xl: 22px;
+  --fs-3xl: 28px;
+
+  /* ── Spacing scale (4px base) ────────────────────────────────────────────── */
+  --space-0:  0;
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ── Motion ──────────────────────────────────────────────────────────────── */
+  --transition: 0.16s ease;
+  --transition-slow: 0.32s ease;
+
+  /* ── Layout ──────────────────────────────────────────────────────────────── */
+  --sidebar-width: 272px;
+  --navbar-height: 62px;
+
+  /* ── Glass defaults (overridden per-skin and per-theme-setting) ──────────── */
+  --glass-blur-px: 22px;
+  --glass-sat: 180%;
+  --navbar-blur-px: 28px;
+
+  /* ── Card behavior (controlled by theme settings, 1 = on, 0 = off) ───────── */
+  --card-glow: 1;
+  --hover-lift: 1;
+
+  /* ── Glow multipliers (controlled by theme settings, 1 = default, 0 = off) ─ */
+  --logo-glow: 1;
+  --ui-glow-mult: 1;
+  --tab-glow: 1;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* ── Focus ring (keyboard only) ──────────────────────────────────────────────
+   :focus-visible is the modern selector for keyboard-triggered focus - mouse
+   clicks won't trigger this.  Satisfies WCAG 2.1 SC 2.4.7 (Focus Visible).
+   !important is used to defeat legacy `outline: none` rules scattered across
+   scoped component styles that were silently disabling accessibility.
+   Specific components may override with their own :focus-visible rule. */
+:focus-visible {
+  outline: 2px solid var(--pl, #7c3aed) !important;
+  outline-offset: 2px !important;
+  border-radius: inherit;
+}
+
+/* ── Kill-switch: disable all animations ─────────────────────────────────── */
+:root[data-animations="false"] *,
+:root[data-animations="false"] *::before,
+:root[data-animations="false"] *::after {
+  animation-duration: 0s !important;
+  transition-duration: 0s !important;
+}
+
+/* ── Scrollbar (base) ────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb, rgba(124, 58, 237, 0.3));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--pl, #7c3aed);
+}
+
+/* ── Shared keyframes ────────────────────────────────────────────────────── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.25); }
+}
+
+@keyframes orb-drift {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(45px, 65px) scale(1.2); }
+}
+
+@keyframes dot-pulse {
+  0%, 80%, 100% { transform: scale(0.8); opacity: 0.3; }
+  40% { transform: scale(1.1); opacity: 1; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-right {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* ── Vue transitions ─────────────────────────────────────────────────────── */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.15s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.page-enter-active, .page-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  position: absolute;
+  top: 0; left: 0; right: 0;
+}
+.page-enter-from { opacity: 0; transform: translateX(12px); }
+.page-leave-to   { opacity: 0; transform: translateX(-8px); }
+
+.slide-down-enter-active, .slide-down-leave-active { transition: opacity 0.2s, transform 0.2s; }
+.slide-down-enter-from { opacity: 0; transform: translateY(-12px); }
+.slide-down-leave-to { opacity: 0; transform: translateY(-6px); }
+
+.menu-drop-enter-active, .menu-drop-leave-active { transition: opacity 0.15s, transform 0.15s; }
+.menu-drop-enter-from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+.menu-drop-leave-to { opacity: 0; transform: translateY(-4px) scale(0.98); }
+
+.menu-up-enter-active, .menu-up-leave-active { transition: opacity 0.15s, transform 0.15s; }
+.menu-up-enter-from { opacity: 0; transform: translateY(8px); }
+.menu-up-leave-to { opacity: 0; transform: translateY(8px); }

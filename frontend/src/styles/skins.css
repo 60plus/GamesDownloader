@@ -1,0 +1,331 @@
+/* GamesDownloaderV3 - Skin color palettes
+   Each skin sets CSS custom properties on :root[data-skin="..."]
+   Skins work independently of themes - any skin + any theme combo works.
+*/
+
+/* ── Purple (default) ────────────────────────────────────────────────────── */
+:root[data-skin="purple"] {
+  --bg: #0a0618;
+  --bg2: #110d24;
+  --bg3: #1a1333;
+  --text: #e8e2f4;
+  --muted: rgba(232, 226, 244, 0.55);
+  --pl: #7c3aed;
+  --pl2: #6d28d9;
+  --pl-light: #a78bfa;
+  --pl-dim: rgba(124, 58, 237, 0.12);
+  --pglow: rgba(124, 58, 237, 0.5);
+  --pglow2: rgba(124, 58, 237, 0.25);
+  --ok: #4ade80;
+  --ok-glow: rgba(74, 222, 128, 0.4);
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --info: #3b82f6;
+  --info-glow: rgba(59, 130, 246, 0.4);
+  --border: rgba(124, 58, 237, 0.18);
+  --glass-bg: rgba(10, 6, 24, 0.75);
+  --glass-blur-px: 22px;
+  --glass-sat: 180%;
+  --navbar-blur-px: 28px;
+  --glass-border: rgba(124, 58, 237, 0.15);
+  --glass-highlight: rgba(124, 58, 237, 0.06);
+  --scrollbar-thumb: rgba(124, 58, 237, 0.3);
+}
+
+/* ── Blue ────────────────────────────────────────────────────────────────── */
+:root[data-skin="blue"] {
+  --bg: #030c1a;
+  --bg2: #071428;
+  --bg3: #0d1f3c;
+  --text: #e2ecf8;
+  --muted: rgba(226, 236, 248, 0.55);
+  --pl: #2563eb;
+  --pl2: #1d4ed8;
+  --pl-light: #60a5fa;
+  --pl-dim: rgba(37, 99, 235, 0.12);
+  --pglow: rgba(37, 99, 235, 0.5);
+  --pglow2: rgba(37, 99, 235, 0.25);
+  --ok: #4ade80;
+  --ok-glow: rgba(74, 222, 128, 0.4);
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --info: #38bdf8;
+  --info-glow: rgba(56, 189, 248, 0.4);
+  --border: rgba(37, 99, 235, 0.18);
+  --glass-bg: rgba(3, 12, 26, 0.75);
+  --glass-blur-px: 22px;
+  --glass-sat: 180%;
+  --navbar-blur-px: 28px;
+  --glass-border: rgba(37, 99, 235, 0.15);
+  --glass-highlight: rgba(37, 99, 235, 0.06);
+  --scrollbar-thumb: rgba(37, 99, 235, 0.3);
+}
+
+/* ── Teal ────────────────────────────────────────────────────────────────── */
+:root[data-skin="teal"] {
+  --bg: #011515;
+  --bg2: #041e1e;
+  --bg3: #082c2c;
+  --text: #e0f4f4;
+  --muted: rgba(224, 244, 244, 0.55);
+  --pl: #0891b2;
+  --pl2: #0e7490;
+  --pl-light: #22d3ee;
+  --pl-dim: rgba(8, 145, 178, 0.12);
+  --pglow: rgba(8, 145, 178, 0.5);
+  --pglow2: rgba(8, 145, 178, 0.25);
+  --ok: #4ade80;
+  --ok-glow: rgba(74, 222, 128, 0.4);
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --info: #38bdf8;
+  --info-glow: rgba(56, 189, 248, 0.4);
+  --border: rgba(8, 145, 178, 0.18);
+  --glass-bg: rgba(1, 21, 21, 0.75);
+  --glass-blur-px: 22px;
+  --glass-sat: 180%;
+  --navbar-blur-px: 28px;
+  --glass-border: rgba(8, 145, 178, 0.15);
+  --glass-highlight: rgba(8, 145, 178, 0.06);
+  --scrollbar-thumb: rgba(8, 145, 178, 0.3);
+}
+
+/* ── Pink ────────────────────────────────────────────────────────────────── */
+:root[data-skin="pink"] {
+  --bg: #180510;
+  --bg2: #220a18;
+  --bg3: #2f1024;
+  --text: #f8e2f0;
+  --muted: rgba(248, 226, 240, 0.55);
+  --pl: #db2777;
+  --pl2: #be185d;
+  --pl-light: #f472b6;
+  --pl-dim: rgba(219, 39, 119, 0.12);
+  --pglow: rgba(219, 39, 119, 0.5);
+  --pglow2: rgba(219, 39, 119, 0.25);
+  --ok: #4ade80;
+  --ok-glow: rgba(74, 222, 128, 0.4);
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --info: #3b82f6;
+  --info-glow: rgba(59, 130, 246, 0.4);
+  --border: rgba(219, 39, 119, 0.18);
+  --glass-bg: rgba(24, 5, 16, 0.75);
+  --glass-blur-px: 22px;
+  --glass-sat: 180%;
+  --navbar-blur-px: 28px;
+  --glass-border: rgba(219, 39, 119, 0.15);
+  --glass-highlight: rgba(219, 39, 119, 0.06);
+  --scrollbar-thumb: rgba(219, 39, 119, 0.3);
+}
+
+/* ── Green ───────────────────────────────────────────────────────────────── */
+:root[data-skin="green"] {
+  --bg: #040e08;
+  --bg2: #081a10;
+  --bg3: #0e261a;
+  --text: #e2f8ec;
+  --muted: rgba(226, 248, 236, 0.55);
+  --pl: #16a34a;
+  --pl2: #15803d;
+  --pl-light: #4ade80;
+  --pl-dim: rgba(22, 163, 74, 0.12);
+  --pglow: rgba(22, 163, 74, 0.5);
+  --pglow2: rgba(22, 163, 74, 0.25);
+  --ok: #4ade80;
+  --ok-glow: rgba(74, 222, 128, 0.4);
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --info: #3b82f6;
+  --info-glow: rgba(59, 130, 246, 0.4);
+  --border: rgba(22, 163, 74, 0.18);
+  --glass-bg: rgba(4, 14, 8, 0.75);
+  --glass-blur-px: 22px;
+  --glass-sat: 180%;
+  --navbar-blur-px: 28px;
+  --glass-border: rgba(22, 163, 74, 0.15);
+  --glass-highlight: rgba(22, 163, 74, 0.06);
+  --scrollbar-thumb: rgba(22, 163, 74, 0.3);
+}
+
+/* ── Red ─────────────────────────────────────────────────────────────────── */
+:root[data-skin="red"] {
+  --bg: #180505;
+  --bg2: #220a0a;
+  --bg3: #301010;
+  --text: #f8e2e2;
+  --muted: rgba(248, 226, 226, 0.55);
+  --pl: #dc2626;
+  --pl2: #b91c1c;
+  --pl-light: #f87171;
+  --pl-dim: rgba(220, 38, 38, 0.12);
+  --pglow: rgba(220, 38, 38, 0.5);
+  --pglow2: rgba(220, 38, 38, 0.25);
+  --ok: #4ade80;
+  --ok-glow: rgba(74, 222, 128, 0.4);
+  --danger: #fca5a5;
+  --warning: #f59e0b;
+  --info: #3b82f6;
+  --info-glow: rgba(59, 130, 246, 0.4);
+  --border: rgba(220, 38, 38, 0.18);
+  --glass-bg: rgba(24, 5, 5, 0.75);
+  --glass-blur-px: 22px;
+  --glass-sat: 180%;
+  --navbar-blur-px: 28px;
+  --glass-border: rgba(220, 38, 38, 0.15);
+  --glass-highlight: rgba(220, 38, 38, 0.06);
+  --scrollbar-thumb: rgba(220, 38, 38, 0.3);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   DUAL-COLOR SKINS  - gradient from --pl  to --pl-light (two distinct hues)
+   ──────────────────────────────────────────────────────────────────────────
+   --pglow2 intentionally uses the secondary hue so dual-glow effects work. */
+
+/* ── Neon Dusk  (Magenta → Cyan) ─────────────────────────────────────────── */
+:root[data-skin="magenta-cyan"] {
+  --bg: #0d0318; --bg2: #140526; --bg3: #1c0a30;
+  --text: #f0e2f8; --muted: rgba(240,226,248, 0.55);
+  --pl: #d946ef; --pl2: #c026d3; --pl-light: #22d3ee;
+  --pl-dim: rgba(217,70,239,.12);
+  --pglow: rgba(217,70,239,.5); --pglow2: rgba(34,211,238,.25);
+  --ok: #4ade80; --ok-glow: rgba(74,222,128,.4);
+  --danger: #ef4444; --warning: #f59e0b;
+  --info: #22d3ee; --info-glow: rgba(34,211,238,.4);
+  --border: rgba(217,70,239,.18);
+  --glass-bg: rgba(13,3,24,.75); --glass-blur-px: 22px; --glass-sat: 180%; --navbar-blur-px: 28px;
+  --glass-border: rgba(217,70,239,.15);
+  --glass-highlight: rgba(217,70,239,.06);
+  --scrollbar-thumb: rgba(217,70,239,.3);
+}
+
+/* ── Synthwave  (Violet → Cyan) ──────────────────────────────────────────── */
+:root[data-skin="violet-cyan"] {
+  --bg: #070414; --bg2: #0c0920; --bg3: #110f30;
+  --text: #e8e2fc; --muted: rgba(232,226,252, 0.55);
+  --pl: #8b5cf6; --pl2: #7c3aed; --pl-light: #06b6d4;
+  --pl-dim: rgba(139,92,246,.12);
+  --pglow: rgba(139,92,246,.5); --pglow2: rgba(6,182,212,.25);
+  --ok: #4ade80; --ok-glow: rgba(74,222,128,.4);
+  --danger: #ef4444; --warning: #f59e0b;
+  --info: #06b6d4; --info-glow: rgba(6,182,212,.4);
+  --border: rgba(139,92,246,.18);
+  --glass-bg: rgba(7,4,20,.75); --glass-blur-px: 22px; --glass-sat: 180%; --navbar-blur-px: 28px;
+  --glass-border: rgba(139,92,246,.15);
+  --glass-highlight: rgba(139,92,246,.06);
+  --scrollbar-thumb: rgba(139,92,246,.3);
+}
+
+/* ── Sunset  (Orange → Pink) ─────────────────────────────────────────────── */
+:root[data-skin="orange-pink"] {
+  --bg: #1a0810; --bg2: #260d18; --bg3: #321424;
+  --text: #fceef6; --muted: rgba(252,238,246, 0.55);
+  --pl: #f97316; --pl2: #ea580c; --pl-light: #ec4899;
+  --pl-dim: rgba(249,115,22,.12);
+  --pglow: rgba(249,115,22,.5); --pglow2: rgba(236,72,153,.25);
+  --ok: #4ade80; --ok-glow: rgba(74,222,128,.4);
+  --danger: #ef4444; --warning: #fbbf24;
+  --info: #38bdf8; --info-glow: rgba(56,189,248,.4);
+  --border: rgba(249,115,22,.18);
+  --glass-bg: rgba(26,8,16,.75); --glass-blur-px: 22px; --glass-sat: 180%; --navbar-blur-px: 28px;
+  --glass-border: rgba(249,115,22,.15);
+  --glass-highlight: rgba(249,115,22,.06);
+  --scrollbar-thumb: rgba(249,115,22,.3);
+}
+
+/* ── Aurora  (Emerald → Sky Blue) ────────────────────────────────────────── */
+:root[data-skin="emerald-sky"] {
+  --bg: #021010; --bg2: #061818; --bg3: #0a2020;
+  --text: #e2f8f4; --muted: rgba(226,248,244, 0.55);
+  --pl: #10b981; --pl2: #059669; --pl-light: #60a5fa;
+  --pl-dim: rgba(16,185,129,.12);
+  --pglow: rgba(16,185,129,.5); --pglow2: rgba(96,165,250,.25);
+  --ok: #4ade80; --ok-glow: rgba(74,222,128,.4);
+  --danger: #ef4444; --warning: #f59e0b;
+  --info: #60a5fa; --info-glow: rgba(96,165,250,.4);
+  --border: rgba(16,185,129,.18);
+  --glass-bg: rgba(2,16,16,.75); --glass-blur-px: 22px; --glass-sat: 180%; --navbar-blur-px: 28px;
+  --glass-border: rgba(16,185,129,.15);
+  --glass-highlight: rgba(16,185,129,.06);
+  --scrollbar-thumb: rgba(16,185,129,.3);
+}
+
+/* ── Vulcan  (Red → Orange) ──────────────────────────────────────────────── */
+:root[data-skin="red-orange"] {
+  --bg: #180402; --bg2: #220806; --bg3: #2e0e0a;
+  --text: #fde8e2; --muted: rgba(253,232,226, 0.55);
+  --pl: #ef4444; --pl2: #dc2626; --pl-light: #fb923c;
+  --pl-dim: rgba(239,68,68,.12);
+  --pglow: rgba(239,68,68,.5); --pglow2: rgba(251,146,60,.25);
+  --ok: #4ade80; --ok-glow: rgba(74,222,128,.4);
+  --danger: #fca5a5; --warning: #fbbf24;
+  --info: #38bdf8; --info-glow: rgba(56,189,248,.4);
+  --border: rgba(239,68,68,.18);
+  --glass-bg: rgba(24,4,2,.75); --glass-blur-px: 22px; --glass-sat: 180%; --navbar-blur-px: 28px;
+  --glass-border: rgba(239,68,68,.15);
+  --glass-highlight: rgba(239,68,68,.06);
+  --scrollbar-thumb: rgba(239,68,68,.3);
+}
+
+/* ── Midnight  (Blue → Violet) ───────────────────────────────────────────── */
+:root[data-skin="blue-violet"] {
+  --bg: #030a18; --bg2: #071020; --bg3: #0e1838;
+  --text: #e2ecfc; --muted: rgba(226,236,252, 0.55);
+  --pl: #2563eb; --pl2: #1d4ed8; --pl-light: #a78bfa;
+  --pl-dim: rgba(37,99,235,.12);
+  --pglow: rgba(37,99,235,.5); --pglow2: rgba(167,139,250,.25);
+  --ok: #4ade80; --ok-glow: rgba(74,222,128,.4);
+  --danger: #ef4444; --warning: #f59e0b;
+  --info: #a78bfa; --info-glow: rgba(167,139,250,.4);
+  --border: rgba(37,99,235,.18);
+  --glass-bg: rgba(3,10,24,.75); --glass-blur-px: 22px; --glass-sat: 180%; --navbar-blur-px: 28px;
+  --glass-border: rgba(37,99,235,.15);
+  --glass-highlight: rgba(37,99,235,.06);
+  --scrollbar-thumb: rgba(37,99,235,.3);
+}
+
+/* ── Cosmic  (Indigo → Rose) ─────────────────────────────────────────────── */
+:root[data-skin="indigo-rose"] {
+  --bg: #08041a; --bg2: #0f0826; --bg3: #160d32;
+  --text: #f0e8fc; --muted: rgba(240,232,252, 0.55);
+  --pl: #4f46e5; --pl2: #4338ca; --pl-light: #fb7185;
+  --pl-dim: rgba(79,70,229,.12);
+  --pglow: rgba(79,70,229,.5); --pglow2: rgba(251,113,133,.25);
+  --ok: #4ade80; --ok-glow: rgba(74,222,128,.4);
+  --danger: #ef4444; --warning: #f59e0b;
+  --info: #fb7185; --info-glow: rgba(251,113,133,.4);
+  --border: rgba(79,70,229,.18);
+  --glass-bg: rgba(8,4,26,.75); --glass-blur-px: 22px; --glass-sat: 180%; --navbar-blur-px: 28px;
+  --glass-border: rgba(79,70,229,.15);
+  --glass-highlight: rgba(79,70,229,.06);
+  --scrollbar-thumb: rgba(79,70,229,.3);
+}
+
+/* ── Orange ──────────────────────────────────────────────────────────────── */
+:root[data-skin="orange"] {
+  --bg: #170901;
+  --bg2: #221005;
+  --bg3: #30180a;
+  --text: #f8ede2;
+  --muted: rgba(248, 237, 226, 0.55);
+  --pl: #ea580c;
+  --pl2: #c2410c;
+  --pl-light: #fb923c;
+  --pl-dim: rgba(234, 88, 12, 0.12);
+  --pglow: rgba(234, 88, 12, 0.5);
+  --pglow2: rgba(234, 88, 12, 0.25);
+  --ok: #4ade80;
+  --ok-glow: rgba(74, 222, 128, 0.4);
+  --danger: #ef4444;
+  --warning: #fbbf24;
+  --info: #3b82f6;
+  --info-glow: rgba(59, 130, 246, 0.4);
+  --border: rgba(234, 88, 12, 0.18);
+  --glass-bg: rgba(23, 9, 1, 0.75);
+  --glass-blur-px: 22px;
+  --glass-sat: 180%;
+  --navbar-blur-px: 28px;
+  --glass-border: rgba(234, 88, 12, 0.15);
+  --glass-highlight: rgba(234, 88, 12, 0.06);
+  --scrollbar-thumb: rgba(234, 88, 12, 0.3);
+}
