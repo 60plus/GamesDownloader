@@ -2,6 +2,8 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import { io, type Socket } from "socket.io-client";
 
+const TOKEN_KEY = "gd3_token";
+
 export const useSocketStore = defineStore("socket", () => {
   const socket = ref<Socket | null>(null);
   const syncProgress = ref({ current: 0, total: 0, progress: 0, message: "" });
@@ -18,7 +20,23 @@ export const useSocketStore = defineStore("socket", () => {
   function connect() {
     if (socket.value?.connected) return;
 
-    socket.value = io({ path: "/socket.io", transports: ["websocket"] });
+    const token = localStorage.getItem(TOKEN_KEY) || "";
+    if (!token) {
+      // No token => server will refuse the handshake. Skip connecting.
+      return;
+    }
+
+    socket.value = io({
+      path: "/socket.io",
+      transports: ["websocket"],
+      auth: { token },
+    });
+
+    socket.value.on("connect_error", (err) => {
+      // Common case: token expired. Surface to console; auth refresh will reconnect.
+      // eslint-disable-next-line no-console
+      console.warn("Socket.IO connect_error:", err?.message || err);
+    });
 
     socket.value.on("sync_progress", (data) => {
       syncProgress.value = data;
@@ -35,10 +53,18 @@ export const useSocketStore = defineStore("socket", () => {
     });
   }
 
+  function reconnectWithFreshToken() {
+    if (socket.value) {
+      socket.value.disconnect();
+      socket.value = null;
+    }
+    connect();
+  }
+
   function disconnect() {
     socket.value?.disconnect();
     socket.value = null;
   }
 
-  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, connect, disconnect };
+  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, connect, disconnect, reconnectWithFreshToken };
 });

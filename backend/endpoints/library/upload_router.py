@@ -113,6 +113,39 @@ async def upload_game_file(
                        f"({max_bytes // (1024 ** 3)} GB).",
             )
 
+    # ── Optional ClamAV scan on upload ────────────────────────────────────────
+    # Controlled by the `clamav_auto_scan_upload` admin setting (off by default).
+    # Only "FOUND" rejects the upload - scan errors fail open so a broken
+    # daemon does not block legitimate users.
+    try:
+        from handler.clamav import clamav_handler as _clam
+        if await _clam.is_upload_scanning_enabled():
+            scan_res = await _clam.scan_file(str(dest_path))
+            if scan_res.get("status") == "FOUND":
+                threat = scan_res.get("threat") or "unknown"
+                actor = (request.state.user.username
+                         if getattr(request.state, "user", None) else None)
+                action_res = await _clam.quarantine_or_delete(
+                    str(dest_path), threat, triggered_by=actor
+                )
+                logger.warning(
+                    "ClamAV blocked upload '%s' (game=%d, threat=%s, action=%s)",
+                    filename, game_id, threat, action_res.get("action"),
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code":   "virus_detected",
+                        "threat": threat,
+                        "action": action_res.get("action"),
+                    },
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        # Don't fail the upload because the scanner choked - log and continue.
+        logger.exception("ClamAV scan check failed for %s; allowing upload", dest_path)
+
     rel = _rel_from_abs(str(dest_path))
 
     # Check for duplicate record

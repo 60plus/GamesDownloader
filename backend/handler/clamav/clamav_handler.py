@@ -104,6 +104,97 @@ def _quarantine_file(fpath: str) -> str:
 
 # ── public API ────────────────────────────────────────────────────────────────
 
+async def is_upload_scanning_enabled() -> bool:
+    """True when the admin has enabled `clamav_auto_scan_upload`."""
+    from handler.config.config_handler import config_handler
+    if not await config_handler.get_bool("clamav_enabled", default=True):
+        return False
+    return await config_handler.get_bool("clamav_auto_scan_upload", default=False)
+
+
+async def scan_file(fpath: str) -> dict:
+    """Scan a single absolute file path against the running clamd daemon.
+
+    Returns a dict:
+      ok        bool   - True when the daemon responded
+      status    str    - "ok" | "FOUND" | "error" | "skipped"
+      threat    str?   - signature name when status == "FOUND"
+      message   str?   - human-readable reason for "skipped" or "error"
+
+    Network/IO errors fail OPEN (status="skipped") so a broken daemon does not
+    block all uploads. Callers MUST treat `status == "FOUND"` as the only
+    rejection signal.
+    """
+    if not os.path.isfile(fpath):
+        return {"ok": False, "status": "skipped", "message": "file not found"}
+
+    loop = asyncio.get_running_loop()
+
+    def _scan():
+        try:
+            cd = _get_clamd()
+            result = cd.scan(fpath)
+            if result is None:
+                return {"ok": True, "status": "ok"}
+            status, name = result.get(fpath, ("ok", None))
+            if status == "FOUND":
+                return {"ok": True, "status": "FOUND", "threat": name}
+            return {"ok": True, "status": status.lower() if isinstance(status, str) else "ok"}
+        except RuntimeError as exc:
+            return {"ok": False, "status": "skipped", "message": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "status": "error", "message": str(exc)}
+
+    return await loop.run_in_executor(None, _scan)
+
+
+async def quarantine_or_delete(fpath: str, threat: str | None, *, scan_id: int | None = None,
+                                triggered_by: str | None = None) -> dict:
+    """Apply the configured action to an infected file.
+
+    Returns dict:
+      action    str   - "quarantine" | "delete" | "none"
+      ok        bool  - whether the action completed
+      detail    str?  - error message on failure, quarantine_id/path on success
+    """
+    action = await _get_action()
+    if action == "none":
+        return {"action": "none", "ok": True}
+
+    loop = asyncio.get_running_loop()
+
+    if action == "quarantine":
+        try:
+            file_size = os.path.getsize(fpath)
+            qpath = await loop.run_in_executor(None, _quarantine_file, fpath)
+            from handler.database.quarantine_handler import quarantine_handler
+            entry = await quarantine_handler.create(
+                original_path=fpath,
+                quarantine_path=qpath,
+                threat=threat or "unknown",
+                filename=os.path.basename(fpath),
+                file_size=file_size,
+                scan_id=scan_id,
+                triggered_by=triggered_by,
+            )
+            logger.warning("ClamAV: quarantined %s (%s) -> %s", fpath, threat, qpath)
+            return {"action": "quarantine", "ok": True, "quarantine_id": entry.id, "quarantine_path": qpath}
+        except Exception as exc:
+            logger.error("ClamAV: failed to quarantine %s: %s", fpath, exc)
+            return {"action": "quarantine_failed", "ok": False, "detail": str(exc)}
+
+    if action == "delete":
+        try:
+            await loop.run_in_executor(None, os.remove, fpath)
+            logger.warning("ClamAV: deleted infected file %s (%s)", fpath, threat)
+            return {"action": "delete", "ok": True}
+        except Exception as exc:
+            logger.error("ClamAV: failed to delete %s: %s", fpath, exc)
+            return {"action": "delete_failed", "ok": False, "detail": str(exc)}
+
+    return {"action": action, "ok": False, "detail": "unknown action"}
+
+
 async def daemon_status() -> dict:
     """
     Return current ClamAV daemon status.
@@ -189,7 +280,7 @@ async def scan_paths(
         cd = await loop.run_in_executor(None, _get_clamd)
     except RuntimeError as exc:
         await scan_handler.update(scan_id, status="error", error_message=str(exc))
-        await emit_event("clamav:scan_complete", {"scan_id": scan_id, "error": str(exc)})
+        await emit_event("clamav:scan_complete", {"scan_id": scan_id, "error": str(exc)}, to_role="admin")
         return
 
     for idx, fpath in enumerate(files, start=1):
@@ -198,7 +289,7 @@ async def scan_paths(
             "current": idx,
             "total":   total,
             "path":    os.path.basename(fpath),
-        })
+        }, to_role="admin")
 
         def _scan_one(path: str):
             try:
@@ -282,7 +373,7 @@ async def scan_paths(
         "errors":        error_count,
         "infected_files": infected,
         "action_taken":  action,
-    })
+    }, to_role="admin")
 
 
 async def update_definitions() -> None:
@@ -293,7 +384,7 @@ async def update_definitions() -> None:
     from handler.socket_handler import emit_event
 
     async def _emit(msg: str, status: str = "running") -> None:
-        await emit_event("clamav:update_progress", {"status": status, "message": msg})
+        await emit_event("clamav:update_progress", {"status": status, "message": msg}, to_role="admin")
 
     await _emit("Starting freshclam...")
 

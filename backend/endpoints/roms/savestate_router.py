@@ -54,6 +54,40 @@ def _saves_dir(platform_slug: str, rom_id: int, user_id: int) -> Path:
     return Path(RESOURCES_PATH) / "roms" / platform_slug / str(rom_id) / "saves" / str(user_id)
 
 
+async def _scan_or_reject(file_path: Path, *, username: str | None) -> None:
+    """Run ClamAV on `file_path` if upload scanning is enabled.
+
+    Raises HTTPException(422) when the file is infected. Scanner errors
+    fail open so a broken daemon does not block legitimate users.
+    """
+    try:
+        from handler.clamav import clamav_handler as _clam
+        if not await _clam.is_upload_scanning_enabled():
+            return
+        res = await _clam.scan_file(str(file_path))
+        if res.get("status") == "FOUND":
+            threat = res.get("threat") or "unknown"
+            action = await _clam.quarantine_or_delete(
+                str(file_path), threat, triggered_by=username
+            )
+            logger.warning(
+                "ClamAV blocked savestate upload '%s' (threat=%s, action=%s)",
+                file_path.name, threat, action.get("action"),
+            )
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code":   "virus_detected",
+                    "threat": threat,
+                    "action": action.get("action"),
+                },
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("ClamAV scan failed for %s; allowing upload", file_path)
+
+
 async def _quota_limit() -> int:
     raw = await config_handler.get("saves_quota_bytes")
     try:
@@ -206,7 +240,11 @@ async def upload_state(
     ts       = datetime.utcnow().strftime("%Y-%m-%d %H-%M-%S")
     rom_name = (rom.name or rom.fs_name_no_ext or f"rom_{rom_id}")[:80]
     filename = f"{rom_name} [{ts}].state"
-    (save_dir / filename).write_bytes(data)
+    state_fp = save_dir / filename
+    state_fp.write_bytes(data)
+
+    actor = request.state.user.username if getattr(request.state, "user", None) else None
+    await _scan_or_reject(state_fp, username=actor)
 
     screenshot_path = None
     if screenshotFile:
@@ -215,6 +253,7 @@ async def upload_state(
             ss_name = filename.replace(".state", ".png")
             ss_fp   = save_dir / ss_name
             ss_fp.write_bytes(ss_data)
+            await _scan_or_reject(ss_fp, username=actor)
             screenshot_path = str(ss_fp)
 
     state = await save_state_handler.create_state(RomSaveState(
@@ -298,7 +337,11 @@ async def upload_save(
     ts       = datetime.utcnow().strftime("%Y-%m-%d %H-%M-%S")
     rom_name = (rom.name or rom.fs_name_no_ext or f"rom_{rom_id}")[:80]
     filename = f"{rom_name} [{ts}].srm"
-    (save_dir / filename).write_bytes(data)
+    srm_fp = save_dir / filename
+    srm_fp.write_bytes(data)
+
+    actor = request.state.user.username if getattr(request.state, "user", None) else None
+    await _scan_or_reject(srm_fp, username=actor)
 
     save = await save_state_handler.create_save(RomSave(
         rom_id=rom_id,

@@ -1181,6 +1181,18 @@ async def upload_roms(
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     saved: list[str] = []
+    rejected: list[dict] = []
+
+    # Pre-resolve once so per-file scanning is cheap when disabled
+    try:
+        from handler.clamav import clamav_handler as _clam
+        scan_uploads = await _clam.is_upload_scanning_enabled()
+    except Exception:
+        scan_uploads = False
+
+    actor = (request.state.user.username
+             if getattr(request.state, "user", None) else None)
+
     for upload in files:
         if not upload.filename:
             continue
@@ -1190,8 +1202,30 @@ async def upload_roms(
             with open(dest_path, "wb") as fh:
                 while chunk := await upload.read(256 * 1024):
                     fh.write(chunk)
+
+            if scan_uploads:
+                try:
+                    res = await _clam.scan_file(str(dest_path))
+                    if res.get("status") == "FOUND":
+                        threat = res.get("threat") or "unknown"
+                        action_res = await _clam.quarantine_or_delete(
+                            str(dest_path), threat, triggered_by=actor
+                        )
+                        logger.warning(
+                            "ClamAV blocked ROM upload '%s' (threat=%s, action=%s)",
+                            safe_name, threat, action_res.get("action"),
+                        )
+                        rejected.append({
+                            "filename": safe_name,
+                            "threat":   threat,
+                            "action":   action_res.get("action"),
+                        })
+                        continue
+                except Exception:
+                    logger.exception("ClamAV scan failed for %s; allowing upload", dest_path)
+
             saved.append(safe_name)
-            logger.info("ROM uploaded: %s → %s", safe_name, dest_dir)
+            logger.info("ROM uploaded: %s -> %s", safe_name, dest_dir)
         except Exception as exc:
             logger.error("Failed to save ROM %s: %s", safe_name, exc)
             raise HTTPException(status_code=500, detail=f"Failed to save {safe_name}: {exc}")
@@ -1211,7 +1245,13 @@ async def upload_roms(
 
         background_tasks.add_task(_post_upload_scan)
 
-    return {"ok": True, "saved": saved, "platform_slug": slug, "scan_triggered": bool(saved)}
+    return {
+        "ok": True,
+        "saved": saved,
+        "rejected": rejected,
+        "platform_slug": slug,
+        "scan_triggered": bool(saved),
+    }
 
 
 # ── Scan ──────────────────────────────────────────────────────────────────────

@@ -86,6 +86,11 @@ client.interceptors.response.use(
         const { data } = await axios.post("/api/auth/refresh", { refresh_token: refreshToken });
         localStorage.setItem(TOKEN_KEY, data.access_token);
         localStorage.setItem(REFRESH_KEY, data.refresh_token);
+        // Reopen Socket.IO with the new token (handshake auth requires it)
+        try {
+          const { useSocketStore } = await import("@/stores/socket");
+          useSocketStore().reconnectWithFreshToken();
+        } catch { /* socket store may not be initialised yet */ }
         processQueue(null, data.access_token);
         if (original.headers) original.headers.Authorization = `Bearer ${data.access_token}`;
         return client(original);

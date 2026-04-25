@@ -19,6 +19,14 @@ export const useAuthStore = defineStore("auth", () => {
     localStorage.setItem(TOKEN_KEY, data.access_token);
     localStorage.setItem(REFRESH_KEY, data.refresh_token);
     await fetchUser();
+    await _reopenSocket();
+  }
+
+  async function _reopenSocket() {
+    try {
+      const { useSocketStore } = await import("@/stores/socket");
+      useSocketStore().reconnectWithFreshToken();
+    } catch { /* socket store optional */ }
   }
 
   async function fetchUser() {
@@ -46,6 +54,7 @@ export const useAuthStore = defineStore("auth", () => {
     localStorage.setItem(TOKEN_KEY, accessToken);
     localStorage.setItem(REFRESH_KEY, refreshToken);
     await fetchUser();
+    await _reopenSocket();
   }
 
   function logout() {
@@ -53,6 +62,8 @@ export const useAuthStore = defineStore("auth", () => {
     user.value = null;
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(REFRESH_KEY);
+    // Drop the WebSocket so the next user gets a fresh handshake
+    import("@/stores/socket").then(m => m.useSocketStore().disconnect()).catch(() => {});
   }
 
   return { token, user, isAuthenticated, isAdmin, login, loginWithTokens, fetchUser, logout };
