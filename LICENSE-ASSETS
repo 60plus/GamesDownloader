@@ -1,0 +1,70 @@
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+(CC BY-NC-SA 4.0)
+
+https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+================================================================================
+SCOPE
+================================================================================
+
+This licence applies to the platform artwork bundled in this repository
+at the following paths (and only to those files):
+
+  frontend/public/platforms/icons/*
+  frontend/public/platforms/names/*
+  frontend/public/platforms/fanart/*
+
+These assets are sourced from the open-source EmulationStation community
+themes by RobZombie9043 (primarily "Colorful Pop" and "Elementerial"),
+which are distributed under CC BY-NC-SA 4.0.  The files are redistributed
+here under the same licence with attribution preserved.
+
+The application source code is licensed separately under AGPL-3.0 (see
+LICENSE).  Third-party icons representing metadata service brands (GOG,
+IGDB, RAWG, Steam, Metacritic, ScreenScraper, SteamGridDB, LaunchBox,
+RetroAchievements, System Requirements Lab) are not covered by this
+licence and remain trademarks of their respective owners; they appear in
+this repository for nominative identification only.
+
+================================================================================
+ATTRIBUTION
+================================================================================
+
+The platform artwork is the work of RobZombie9043.  If you redistribute
+this repository or any derivative, you must preserve attribution to:
+
+  RobZombie9043
+  Colorful Pop / Elementerial EmulationStation themes
+  https://github.com/RobZombie9043
+
+================================================================================
+NON-COMMERCIAL CLAUSE (IMPORTANT)
+================================================================================
+
+The NC clause of CC BY-NC-SA 4.0 means:
+
+  You MAY:
+    - self-host the application for personal use
+    - share with family and friends on a private network
+    - modify the code and run your modified version privately
+    - redistribute the repository for non-commercial purposes with
+      attribution and under the same licence
+
+  You MAY NOT:
+    - offer the application as a paid hosted service (SaaS) if that
+      service bundles these platform assets
+    - sell access to the application or use it to generate revenue
+      while redistributing the bundled assets
+
+If you want to run a commercial hosted version of this application, you
+must remove the affected asset directories (frontend/public/platforms/)
+and source your own platform artwork with a compatible licence.
+
+================================================================================
+FULL LICENCE TEXT
+================================================================================
+
+The full text of CC BY-NC-SA 4.0 is available at:
+  https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode
+
+A plain-text version is also bundled as LICENSE-ASSETS-FULL (if present).
