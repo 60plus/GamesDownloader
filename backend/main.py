@@ -401,6 +401,7 @@ from endpoints.settings.speed_limit_router import router as speed_limit_router
 from endpoints.settings.security_report_router import router as security_report_router
 from endpoints.settings.sso_settings_router import router as sso_settings_router
 from endpoints.settings.plugins_router import plugins_router
+from endpoints.settings.metadata_backup_router import router as metadata_backup_router
 from endpoints.sso_router import router as sso_router
 from endpoints.dl_router import router as dl_router
 from endpoints.settings.transmission_router import transmission_router
@@ -416,6 +417,7 @@ app.include_router(speed_limit_router)
 app.include_router(security_report_router)
 app.include_router(sso_settings_router)
 app.include_router(plugins_router)
+app.include_router(metadata_backup_router)
 app.include_router(sso_router)
 app.include_router(dl_router)
 app.include_router(transmission_router)

@@ -98,6 +98,170 @@
           {{ t('metadata.save_changes') }}
         </button>
       </div>
+
+      <!-- ── Metadata backup ──────────────────────────────────────────── -->
+      <div class="backup-section">
+        <div class="sm-header">
+          <div class="sm-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </div>
+          <div>
+            <div class="sm-title">{{ t('metadata.backup_title') }}</div>
+            <div class="sm-subtitle">{{ t('metadata.backup_subtitle') }}</div>
+          </div>
+        </div>
+
+        <div class="backup-card">
+          <div v-if="preview" class="backup-counts">
+            <div class="backup-count" v-for="(n, key) in preview.counts" :key="key">
+              <div class="backup-count-num">{{ n.toLocaleString() }}</div>
+              <div class="backup-count-label">{{ t('metadata.backup_count_' + key, key) }}</div>
+            </div>
+            <div v-if="preview.media_files !== undefined" class="backup-count">
+              <div class="backup-count-num">{{ preview.media_files.toLocaleString() }}</div>
+              <div class="backup-count-label">{{ t('metadata.backup_count_media') }}</div>
+            </div>
+            <div v-if="preview.media_bytes !== undefined" class="backup-count">
+              <div class="backup-count-num">{{ formatBytes(preview.media_bytes) }}</div>
+              <div class="backup-count-label">{{ t('metadata.backup_count_media_size') }}</div>
+            </div>
+          </div>
+          <div v-else-if="previewLoading" class="sm-loading">
+            <span class="spinner" /> {{ t('common.loading') }}
+          </div>
+
+          <div class="backup-options">
+            <label class="backup-opt">
+              <input type="checkbox" v-model="includeMedia" />
+              <span>{{ t('metadata.backup_opt_media') }}</span>
+            </label>
+            <label class="backup-opt">
+              <input type="checkbox" v-model="includeSettings" />
+              <span>
+                {{ t('metadata.backup_opt_settings') }}
+                <small v-if="includeSettings" class="backup-opt-info">{{ t('metadata.backup_opt_settings_what') }}</small>
+                <small class="backup-opt-warn">{{ t('metadata.backup_opt_settings_warn') }}</small>
+              </span>
+            </label>
+          </div>
+
+          <div class="backup-actions">
+            <button class="action-btn action-btn--primary" :disabled="exporting" @click="downloadBackup">
+              <span v-if="exporting" class="spinner" />
+              <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              {{ t('metadata.backup_download') }}
+            </button>
+            <span class="backup-hint">{{ t('metadata.backup_hint') }}</span>
+          </div>
+        </div>
+
+        <div v-if="backupError" class="field-server-error">{{ backupError }}</div>
+      </div>
+
+      <!-- ── Restore ──────────────────────────────────────────────────── -->
+      <div class="backup-section">
+        <div class="sm-header">
+          <div class="sm-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 12a9 9 0 1 0 9-9"/>
+              <polyline points="3 5 3 12 10 12"/>
+            </svg>
+          </div>
+          <div>
+            <div class="sm-title">{{ t('metadata.restore_title') }}</div>
+            <div class="sm-subtitle">{{ t('metadata.restore_subtitle') }}</div>
+          </div>
+        </div>
+
+        <div class="backup-card">
+          <div class="restore-warn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <span>{{ t('metadata.restore_warn') }}</span>
+          </div>
+
+          <div class="backup-options">
+            <label class="backup-opt">
+              <input type="checkbox" v-model="restoreMetadata" />
+              <span>{{ t('metadata.restore_opt_metadata') }}</span>
+            </label>
+            <label class="backup-opt">
+              <input type="checkbox" v-model="restoreMedia" />
+              <span>{{ t('metadata.restore_opt_media') }}</span>
+            </label>
+            <label class="backup-opt">
+              <input type="checkbox" v-model="restoreSettings" />
+              <span>
+                {{ t('metadata.restore_opt_settings') }}
+                <small class="backup-opt-warn">{{ t('metadata.restore_opt_settings_warn') }}</small>
+              </span>
+            </label>
+          </div>
+
+          <input
+            ref="restoreFileInput"
+            type="file"
+            accept=".zip,application/zip"
+            class="restore-file-input"
+            @change="onRestoreFile"
+          />
+
+          <div class="backup-actions">
+            <button
+              class="action-btn"
+              :disabled="restoring"
+              @click="restoreFileInput?.click()"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              {{ restoreFile ? restoreFile.name : t('metadata.restore_pick_file') }}
+            </button>
+            <button
+              class="action-btn action-btn--primary"
+              :disabled="!restoreFile || restoring"
+              @click="doRestore"
+            >
+              <span v-if="restoring" class="spinner" />
+              <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M3 12a9 9 0 1 0 9-9"/>
+                <polyline points="3 5 3 12 10 12"/>
+              </svg>
+              {{ t('metadata.restore_run') }}
+            </button>
+          </div>
+
+          <div v-if="restoreError" class="field-server-error">{{ restoreError }}</div>
+          <div v-if="restoreResult" class="field-ok">
+            <div style="font-weight: 700; margin-bottom: 6px;">{{ t('metadata.restore_done') }}</div>
+            <div v-for="(s, name) in restoreResult.tables" :key="name" class="restore-stat">
+              <span>{{ name }}:</span>
+              <span>+{{ s.inserted }} ~{{ s.updated }} ({{ t('metadata.restore_skipped', { n: s.skipped }) }})</span>
+            </div>
+            <div v-if="restoreResult.media_extracted" class="restore-stat">
+              <span>{{ t('metadata.restore_stat_media') }}:</span>
+              <span>{{ restoreResult.media_extracted }}</span>
+            </div>
+            <div v-if="restoreResult.settings_applied" class="restore-stat">
+              <span>{{ t('metadata.restore_stat_settings') }}:</span>
+              <span>{{ restoreResult.settings_applied }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -138,6 +302,131 @@ const scrapers: Scraper[] = [
 
 const form = reactive<Record<string, string>>({})
 
+// ── Metadata backup state ───────────────────────────────────────────────────
+interface BackupCounts {
+  counts: Record<string, number>
+  schema_version: number
+  total_rows: number
+  media_files?: number
+  media_bytes?: number
+}
+const preview = ref<BackupCounts | null>(null)
+const previewLoading = ref(true)
+const exporting = ref(false)
+const backupError = ref('')
+
+const includeMedia = ref(true)
+const includeSettings = ref(false)
+
+// ── Restore state ───────────────────────────────────────────────────────────
+interface RestoreTableStat { inserted: number; updated: number; skipped: number }
+interface RestoreResult {
+  tables: Record<string, RestoreTableStat>
+  media_extracted: number
+  media_skipped: number
+  settings_applied: number
+}
+
+const restoreFileInput = ref<HTMLInputElement | null>(null)
+const restoreFile = ref<File | null>(null)
+const restoring = ref(false)
+const restoreError = ref('')
+const restoreResult = ref<RestoreResult | null>(null)
+const restoreMetadata = ref(true)
+const restoreMedia = ref(true)
+const restoreSettings = ref(false)
+
+function formatBytes(b: number): string {
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
+  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`
+  return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+async function loadBackupPreview() {
+  previewLoading.value = true
+  try {
+    const data = await client.get('/settings/metadata-backup/preview').then(r => r.data)
+    preview.value = data
+  } catch (e: any) {
+    // Non-fatal: hide the counts row
+    preview.value = null
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+async function downloadBackup() {
+  exporting.value = true
+  backupError.value = ''
+  try {
+    const res = await client.get('/settings/metadata-backup/export', {
+      responseType: 'blob',
+      params: {
+        include_media:    includeMedia.value ? 'true' : 'false',
+        include_settings: includeSettings.value ? 'true' : 'false',
+      },
+      // Media bundles can be multi-GB - disable axios timeout
+      timeout: 0,
+    })
+    const blob = res.data instanceof Blob ? res.data : new Blob([res.data], { type: 'application/zip' })
+    // Filename from Content-Disposition (fallback to a date-stamped default)
+    const cd = res.headers?.['content-disposition'] || ''
+    const m = /filename="?([^"]+)"?/i.exec(cd)
+    const fname = m ? m[1] : `metadata-backup-${new Date().toISOString().slice(0,10)}.zip`
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fname
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (e: any) {
+    backupError.value = e?.response?.data?.detail || t('metadata.backup_failed')
+  } finally {
+    exporting.value = false
+  }
+}
+
+function onRestoreFile(ev: Event) {
+  const input = ev.target as HTMLInputElement
+  restoreFile.value = (input.files && input.files[0]) || null
+  restoreResult.value = null
+  restoreError.value = ''
+}
+
+async function doRestore() {
+  if (!restoreFile.value) return
+  if (!restoreMetadata.value && !restoreMedia.value && !restoreSettings.value) {
+    restoreError.value = t('metadata.restore_nothing_picked')
+    return
+  }
+  if (!confirm(t('metadata.restore_confirm'))) return
+
+  restoring.value = true
+  restoreError.value = ''
+  restoreResult.value = null
+  try {
+    const fd = new FormData()
+    fd.append('file', restoreFile.value)
+    fd.append('restore_metadata', restoreMetadata.value ? 'true' : 'false')
+    fd.append('restore_media',    restoreMedia.value    ? 'true' : 'false')
+    fd.append('restore_settings', restoreSettings.value ? 'true' : 'false')
+    const res = await client.post('/settings/metadata-backup/restore', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    })
+    restoreResult.value = res.data?.stats || null
+    // Refresh counts after restore
+    loadBackupPreview()
+  } catch (e: any) {
+    restoreError.value = e?.response?.data?.detail || t('metadata.restore_failed')
+  } finally {
+    restoring.value = false
+  }
+}
+
 onMounted(async () => {
   try {
     const data = await client.get('/settings/scrapers').then(r => r.data)
@@ -149,6 +438,7 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+  loadBackupPreview()
 })
 
 function canTest(scraper: Scraper): boolean {
@@ -310,4 +600,72 @@ async function save() {
 }
 .spinner--sm { width: 10px; height: 10px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Metadata backup ──────────────────────────────────────────── */
+.backup-section {
+  margin-top: var(--space-6, 24px);
+  padding-top: var(--space-5, 20px);
+  border-top: 1px solid var(--glass-border);
+  display: flex; flex-direction: column; gap: var(--space-4, 16px);
+}
+.backup-card {
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm); padding: 16px;
+  display: flex; flex-direction: column; gap: var(--space-3, 12px);
+}
+.backup-counts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: var(--space-2, 8px);
+}
+.backup-count {
+  background: rgba(255,255,255,.04); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm); padding: 10px 12px; text-align: center;
+}
+.backup-count-num { font-size: 18px; font-weight: 700; color: var(--text); }
+.backup-count-label { font-size: 11px; color: var(--muted); margin-top: 2px; text-transform: capitalize; }
+.backup-actions {
+  display: flex; align-items: center; gap: var(--space-3, 12px);
+  flex-wrap: wrap;
+}
+.backup-hint { font-size: 11px; color: var(--muted); flex: 1; min-width: 200px; }
+
+.backup-options {
+  display: flex; flex-direction: column; gap: var(--space-2, 8px);
+  padding: var(--space-2, 8px) 0;
+}
+.backup-opt {
+  display: flex; align-items: flex-start; gap: var(--space-2, 8px);
+  font-size: 13px; color: var(--text); cursor: pointer; user-select: none;
+}
+.backup-opt input[type="checkbox"] {
+  width: 16px; height: 16px; margin: 2px 0 0; flex-shrink: 0; accent-color: var(--pl, #7c3aed);
+}
+.backup-opt span { display: flex; flex-direction: column; gap: 2px; }
+.backup-opt-warn {
+  font-size: 11px; color: #fbbf24;
+}
+.backup-opt-info {
+  font-size: 11px; color: var(--muted);
+  background: rgba(255,255,255,.03); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm); padding: 8px 10px; margin-top: 4px;
+  line-height: 1.5;
+}
+
+.restore-warn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: var(--radius-sm);
+  background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.25);
+  color: #fbbf24; font-size: 12px;
+}
+.restore-file-input { display: none; }
+.restore-stat {
+  display: flex; justify-content: space-between;
+  font-size: 12px; padding: 2px 0;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.restore-stat span:first-child { color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; border-top-color: rgba(255,255,255,.6); }
+}
 </style>
