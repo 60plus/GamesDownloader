@@ -1,0 +1,47 @@
+name: Discord release announce
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post release to Discord
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          TAG: ${{ github.event.release.tag_name }}
+          NAME: ${{ github.event.release.name }}
+          URL: ${{ github.event.release.html_url }}
+          BODY: ${{ github.event.release.body }}
+          AUTHOR: ${{ github.event.release.author.login }}
+        run: |
+          # Truncate body to 1500 chars to fit in Discord embed
+          DESCRIPTION=$(echo "$BODY" | head -c 1500)
+
+          # Build JSON payload using jq for safe escaping
+          PAYLOAD=$(jq -n \
+            --arg title "$NAME" \
+            --arg url "$URL" \
+            --arg desc "$DESCRIPTION" \
+            --arg tag "$TAG" \
+            --arg author "$AUTHOR" \
+            '{
+              content: ":rocket: **New release published!**",
+              embeds: [{
+                title: $title,
+                url: $url,
+                description: $desc,
+                color: 10180351,
+                fields: [
+                  { name: "Tag", value: $tag, inline: true },
+                  { name: "By", value: $author, inline: true }
+                ],
+                footer: { text: "GamesDownloader" }
+              }]
+            }')
+
+          curl -X POST -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK_URL"
