@@ -154,7 +154,8 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - **Email security alerts** configurable email notifications for: failed login attempts, logins from new IP addresses, new user registrations, admin privilege grants, and brute-force IP bans; per-event toggles; Redis deduplication; uses shared Notifications SMTP
 - **Security report** periodic summary email (weekly or monthly) covering login activity, downloads, ClamAV scan results, new users, and most active users; live preview in the UI; manual send button
 - **Audit log** rolling log of security events (login, ban, unban) with filter and pagination; managed from the admin UI
-- **ClamAV antivirus** integrated in the same container; manual and automatic scans (on upload / after GOG download); real-time progress via Socket.IO; virus definition updates via freshclam; scan history stored in DB
+- **ClamAV antivirus** integrated in the same container; manual scans of GOG, Custom, and Downloads folders; opt-in upload scanning that quarantines or deletes infected files at write time (library uploads, ROM uploads, savestates, battery saves); real-time progress via Socket.IO; virus definition updates via freshclam; scan history stored in DB
+- **Authenticated WebSockets** Socket.IO handshake requires a valid Bearer JWT; per-user and per-role rooms so download / scan progress events reach only the originating user or admin
 - **Upload guard** streaming uploads aborted and file deleted if they exceed the configured `max_upload_bytes` limit (default 50 GB)
 - **Metadata field whitelist**ROM metadata updates restricted to safe fields; immutable fields (`id`, `platform_id`, filesystem paths) cannot be overwritten via API
 
@@ -193,11 +194,25 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - Platform filter (Games / Emulation)
 - GOG library quick-request tab
 
+### Backup & Restore
+- **Metadata backup** Settings > Metadata > Download backup builds a single ZIP containing JSON dumps of every scraped table (GOG games, Library games, ROMs, ROM platforms, Library files, Library torrents, plugin config, game requests)
+- **Media bundle (opt-in, on by default)** every cover, background, logo, icon, screenshot, support art, wheel, bezel, steamgrid, video and picto referenced by the metadata is added to the archive; preview shows total media count and size before download
+- **Settings bundle (opt-in, off by default)** includes scraper API keys, SMTP, webhook URL + avatar + all message templates, OAuth/SSO secrets, brute-force config, IP allowlist, ClamAV settings, Transmission, plugin store sources, registration mode, alert recipients and report schedule; values stay encrypted with the server `AUTH_SECRET_KEY` so the archive is portable only between installs that share the same key
+- **Streaming archive** ZIP is built into a temp file and served via `FileResponse` with a background cleanup task so multi-GB libraries do not blow RAM
+- **Restore** upload a backup ZIP and pick which slices to apply (metadata / media / settings); table rows are upserted by their natural keys (`gog_id`, `igdb_id+slug`, `fs_slug`, `platform_id+fs_path`, `plugin_id+key`) so re-running on the same install never touches primary key `id`
+- **Path safety** media extraction guards against `..` and absolute paths; only writes under `BASE_PATH`
+
+### Accessibility
+- **`prefers-reduced-motion`** honoured globally - ambient orbs, Ken Burns hero, carousel, and other heavy CSS animations stop when the operating system or browser asks for reduced motion; `useReducedMotion()` composable available for JS-driven animations
+- **Keyboard focus rings** visible on every interactive element via `:focus-visible` (WCAG 2.1 SC 2.4.7)
+- **Animation kill-switch** `[data-animations="false"]` toggle for users who want to stop motion regardless of OS settings
+
 ### Other
 - 7-step setup wizard for first-run configuration
 - SMTP email configuration with test
 - Webhook notifications (Discord rich embeds, generic JSON)
 - Real-time events via Socket.IO (sync progress, download progress, scan progress, antivirus progress)
+- **Cloud save auto-sync (opt-in)** for the in-browser emulator: Settings > ROMs toggle uploads battery saves to the server every 30/60/120/300 s while you play, content-hashed so unchanged saves do not waste storage
 - GOG metadata fallback for published games (zero data duplication)
 - Library media handler downloads external images to server for offline serving
 - Random Game picker with library/platform/genre/file filters

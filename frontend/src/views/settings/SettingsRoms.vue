@@ -262,6 +262,39 @@
           </svg>
           {{ t('roms.ejs_threads_restart', 'Reload the emulator page for this change to take effect.') }}
         </div>
+
+        <div class="sr-row"
+          @mouseenter="setHint(t('roms.auto_sync_saves', 'Cloud auto-sync saves'), t('rhint.auto_sync_saves', 'When enabled, the in-browser emulator periodically uploads the battery save (.srm) to the server while you play. The server deduplicates by content hash so unchanged saves do not waste storage.'))"
+          @mouseleave="clearHint"
+        >
+          <div class="sr-row-label">
+            <span class="sr-label">{{ t('roms.auto_sync_saves', 'Cloud auto-sync saves') }}</span>
+            <span class="sr-sub">{{ t('roms.auto_sync_saves_hint', 'Periodically upload battery saves while you play, so a tab crash never loses progress') }}</span>
+          </div>
+          <div class="sr-row-control">
+            <button class="sr-toggle" :class="{ 'sr-toggle--on': autoSyncSaves }" @click="toggleAutoSyncSaves">
+              <span class="sr-toggle-thumb" />
+            </button>
+          </div>
+        </div>
+
+        <div v-if="autoSyncSaves" class="sr-row"
+          @mouseenter="setHint(t('roms.auto_sync_interval', 'Sync interval'), t('rhint.auto_sync_interval', 'Lower values protect against crashes more aggressively but make more network requests. Most games are fine with 60s.'))"
+          @mouseleave="clearHint"
+        >
+          <div class="sr-row-label">
+            <span class="sr-label">{{ t('roms.auto_sync_interval', 'Sync interval') }}</span>
+            <span class="sr-sub">{{ t('roms.auto_sync_interval_hint', 'How often to check for save changes') }}</span>
+          </div>
+          <div class="sr-row-control">
+            <select class="sr-preset-select" v-model.number="autoSyncInterval" @change="saveAutoSyncInterval">
+              <option :value="30">30s</option>
+              <option :value="60">60s</option>
+              <option :value="120">2m</option>
+              <option :value="300">5m</option>
+            </select>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -293,6 +326,21 @@ function toggleEjsThreads() {
   ejsThreads.value = !ejsThreads.value
   localStorage.setItem('gd_ejs_threads', ejsThreads.value ? '1' : '0')
   ejsThreadsChanged.value = ejsThreads.value !== _ejsInitial
+}
+
+// ── Save auto-sync (localStorage) ────────────────────────────────────────────
+// Default OFF: opt-in feature. When enabled, persists battery saves to the
+// server every N seconds while a game is running so a tab crash does not
+// lose progress.
+const autoSyncSaves = ref(localStorage.getItem('gd_auto_sync_saves') === '1')
+const autoSyncInterval = ref(parseInt(localStorage.getItem('gd_auto_sync_interval') || '60', 10))
+function toggleAutoSyncSaves() {
+  autoSyncSaves.value = !autoSyncSaves.value
+  localStorage.setItem('gd_auto_sync_saves', autoSyncSaves.value ? '1' : '0')
+}
+function saveAutoSyncInterval() {
+  if (![30, 60, 120, 300].includes(autoSyncInterval.value)) autoSyncInterval.value = 60
+  localStorage.setItem('gd_auto_sync_interval', String(autoSyncInterval.value))
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────

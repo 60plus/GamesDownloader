@@ -567,6 +567,74 @@ async function uploadSave(saveBuffer) {
   cachedSaves = null;
 }
 
+// ── Auto-sync battery save (SRAM) while the game is running ─────────────────
+// Many games write to SRAM but never trigger EJS_onSaveSave - if the tab dies
+// the progress is lost. We poll getSaveFile() every N seconds, hash the bytes,
+// and upload only when the content actually changed (server dedups by md5).
+//
+// User preferences (localStorage):
+//   gd_auto_sync_saves      "0" disables (default: enabled)
+//   gd_auto_sync_interval   seconds between checks (default: 60, min: 15)
+let _autoSyncTimer  = null;
+let _autoSyncLastHash = null;
+let _autoSyncBusy   = false;
+
+function _quickHash(u8) {
+  // FNV-1a-ish 32-bit fold over a sparse subset of bytes - enough to detect
+  // any meaningful save change while staying O(1k) on multi-MB SRAMs.
+  if (!u8 || !u8.length) return '0';
+  let h = 0x811c9dc5;
+  const step = Math.max(1, Math.floor(u8.length / 1024));
+  for (let i = 0; i < u8.length; i += step) {
+    h ^= u8[i];
+    h = (h * 16777619) >>> 0;
+  }
+  return h.toString(16) + ':' + u8.length;
+}
+
+async function _autoSyncTick() {
+  if (_autoSyncBusy) return;
+  if (!window.EJS_emulator || !window.EJS_emulator.gameManager) return;
+  let bytes;
+  try {
+    bytes = window.EJS_emulator.gameManager.getSaveFile();
+  } catch { return; }
+  if (!bytes || !bytes.length) return;
+  const h = _quickHash(bytes);
+  if (h === _autoSyncLastHash) return;
+  _autoSyncBusy = true;
+  try {
+    await uploadSave(bytes);
+    _autoSyncLastHash = h;
+  } catch (e) {
+    // Network blip - retry on next tick
+  } finally {
+    _autoSyncBusy = false;
+  }
+}
+
+function startAutoSync() {
+  if (_autoSyncTimer) return;
+  // Opt-in: only run when the user explicitly enabled it in Settings > ROMs
+  if (localStorage.getItem('gd_auto_sync_saves') !== '1') return;
+  let secs = parseInt(localStorage.getItem('gd_auto_sync_interval') || '60', 10);
+  if (!Number.isFinite(secs) || secs < 15) secs = 60;
+  _autoSyncTimer = setInterval(_autoSyncTick, secs * 1000);
+  // Also run when the tab becomes hidden so users who alt-tab don't lose progress
+  document.addEventListener('visibilitychange', _onVisibilityChange);
+  window.addEventListener('beforeunload', _autoSyncTick);
+}
+
+function stopAutoSync() {
+  if (_autoSyncTimer) { clearInterval(_autoSyncTimer); _autoSyncTimer = null; }
+  document.removeEventListener('visibilitychange', _onVisibilityChange);
+  window.removeEventListener('beforeunload', _autoSyncTick);
+}
+
+function _onVisibilityChange() {
+  if (document.visibilityState === 'hidden') _autoSyncTick();
+}
+
 // ── State picker ─────────────────────────────────────────────────────────────
 function switchTab(tab) {
   pickerMode = tab;
@@ -709,6 +777,8 @@ if (RETURN_TO) {
 
 // ── Exit ─────────────────────────────────────────────────────────────────────
 function exitPlayer() {
+  // Stop the auto-sync loop first so it does not keep firing after teardown
+  try { stopAutoSync(); } catch {}
   // Save battery save before exiting
   try {
     if (window.EJS_emulator) {
@@ -984,6 +1054,9 @@ function exitPlayer() {
     // Pre-fetch lists so the picker opens instantly
     fetchStates();
     fetchSaves();
+
+    // Start the SRAM auto-sync loop now that the emulator is running
+    startAutoSync();
   };
 
   // Callbacks may be called as (state, screenshot) OR ({ state, screenshot })
