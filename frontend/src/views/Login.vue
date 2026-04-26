@@ -21,8 +21,49 @@
         </div>
       </Transition>
 
-      <!-- Local login form - hidden when mode is "replace" -->
-      <form v-if="showLocalForm" class="login-form" @submit.prevent="doLogin">
+      <!-- TOTP challenge: shown after password OK when 2FA is enabled -->
+      <form v-if="totpChallenge" class="login-form" @submit.prevent="doLoginTotp">
+        <div class="field">
+          <label class="field-label">{{ t('auth.totp_label') }}</label>
+          <input
+            v-model="totpCode"
+            type="text"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            class="field-input"
+            :placeholder="t('auth.totp_placeholder')"
+            maxlength="11"
+            ref="totpCodeRef"
+          />
+          <div class="totp-hint">{{ t('auth.totp_hint') }}</div>
+        </div>
+
+        <Transition name="err">
+          <div v-if="error" class="login-error">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            {{ error }}
+          </div>
+        </Transition>
+
+        <button type="submit" class="btn-login" :disabled="loading">
+          <span v-if="loading" class="btn-spinner" />
+          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z"/>
+          </svg>
+          {{ loading ? t('auth.signing_in') : t('auth.totp_verify') }}
+        </button>
+
+        <div class="forgot-link-row">
+          <button type="button" class="forgot-link" @click="cancelTotp">
+            {{ t('common.cancel') }}
+          </button>
+        </div>
+      </form>
+
+      <!-- Local login form - hidden when mode is "replace" or TOTP step is active -->
+      <form v-if="showLocalForm && !totpChallenge" class="login-form" @submit.prevent="doLogin">
         <div class="field">
           <label class="field-label">{{ t('auth.username') }}</label>
           <input
@@ -220,6 +261,11 @@ const usernameRef  = ref<HTMLInputElement>()
 const providers    = ref<Provider[]>([])
 const showLocalForm = ref(true)
 
+// TOTP step (after a successful password when 2FA is enabled on the account)
+const totpChallenge = ref<string | null>(null)
+const totpCode      = ref('')
+const totpCodeRef   = ref<HTMLInputElement>()
+
 // Forgot password state
 const showForgot      = ref(false)
 const forgotEmail     = ref('')
@@ -257,13 +303,48 @@ async function doLogin() {
   if (!password.value)        { error.value = t('auth.password_required'); return }
   loading.value = true
   try {
-    await auth.login(username.value.trim(), password.value)
+    const res = await auth.login(username.value.trim(), password.value)
+    if (res.requires_totp && res.challenge_token) {
+      totpChallenge.value = res.challenge_token
+      totpCode.value = ''
+      // Focus the code field once Vue has rendered it
+      setTimeout(() => totpCodeRef.value?.focus(), 60)
+      return
+    }
     router.push('/')
   } catch (e: any) {
     error.value = e?.response?.data?.detail || t('login.invalid_credentials')
   } finally {
     loading.value = false
   }
+}
+
+async function doLoginTotp() {
+  error.value = ''
+  const code = totpCode.value.trim()
+  if (!code) { error.value = t('auth.totp_required'); return }
+  if (!totpChallenge.value) { error.value = t('auth.totp_expired'); return }
+  loading.value = true
+  try {
+    await auth.loginTotp(totpChallenge.value, code)
+    router.push('/')
+  } catch (e: any) {
+    error.value = e?.response?.data?.detail || t('auth.totp_invalid')
+    // 5-min challenge expired or already burned: drop back to password step
+    if (e?.response?.status === 400) {
+      totpChallenge.value = null
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+function cancelTotp() {
+  totpChallenge.value = null
+  totpCode.value = ''
+  error.value = ''
+  password.value = ''
+  setTimeout(() => usernameRef.value?.focus(), 60)
 }
 
 async function doForgot() {
@@ -378,6 +459,11 @@ async function doForgot() {
   box-shadow: 0 0 0 3px var(--pl-dim, rgba(124,77,255,.15));
 }
 .field-input::placeholder { color: rgba(255,255,255,.25); }
+
+.totp-hint {
+  font-size: 11px; color: var(--muted, rgba(255,255,255,.55));
+  margin-top: 6px; line-height: 1.5;
+}
 
 .field-password { position: relative; }
 .field-password .field-input { padding-right: 44px; }

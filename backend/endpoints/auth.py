@@ -21,7 +21,18 @@ from handler.database.users_handler import UsersHandler
 from handler.database.session_handler import session_handler
 from handler.database.audit_handler import audit_handler
 from models.user import Role, User
-from schemas.user import TokenResponse, UserCreate, UserResponse
+from schemas.user import (
+    Disable2FARequest,
+    Enable2FAStartResponse,
+    Enable2FAVerifyRequest,
+    Enable2FAVerifyResponse,
+    LoginResponse,
+    LoginTotpRequest,
+    TokenResponse,
+    TotpStatusResponse,
+    UserCreate,
+    UserResponse,
+)
 from utils.async_utils import fire_task
 
 from jose import jwt, JWTError
@@ -40,35 +51,49 @@ class LoginRequest(BaseModel):
     password: str
 
 
-@router.post("/login", response_model=TokenResponse)
-async def login(req: LoginRequest, request: Request) -> TokenResponse:
-    """Authenticate a user. Credentials are sent as a JSON body (never in the URL)."""
-    blocked, remaining = await brute_force.check_ip(request)
-    if blocked:
-        await log_event(request, "login_blocked", username=req.username, details=f"Blocked, {remaining}s remaining", status="warn")
-        raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {remaining}s.")
+_TOTP_CHALLENGE_EXPIRE_MINUTES = 5
 
+
+def _create_totp_challenge_token(user_id: int) -> str:
+    """Issue a 5-min JWT that proves the user passed the password step.
+
+    Carries `type: "totp_challenge"` so a confused-deputy attacker cannot pass
+    it as an access token. The jti is one-shot via the existing Redis blacklist.
+    """
+    expire = datetime.now(timezone.utc) + timedelta(minutes=_TOTP_CHALLENGE_EXPIRE_MINUTES)
+    payload = {
+        "sub":  str(user_id),
+        "exp":  expire,
+        "type": "totp_challenge",
+        "jti":  secrets.token_hex(16),
+    }
+    return jwt.encode(payload, AUTH_SECRET_KEY, algorithm=AUTH_ALGORITHM)
+
+
+def _decode_totp_challenge_token(token: str) -> dict | None:
+    try:
+        payload = jwt.decode(token, AUTH_SECRET_KEY, algorithms=[AUTH_ALGORITHM])
+        if payload.get("type") != "totp_challenge":
+            return None
+        int(payload["sub"])
+        return payload
+    except (JWTError, KeyError, ValueError):
+        return None
+
+
+async def _issue_session_tokens(user: User, request: Request) -> TokenResponse:
+    """Create access + refresh tokens, persist the session, fire alerts.
+
+    Used by both the standard login path and the post-TOTP completion path so
+    the two stay in lockstep.
+    """
     ip = brute_force._client_ip(request)
     ua = _user_agent(request)
 
-    user = await _users_db.get_by_username(req.username)
-    if not user or not verify_password(req.password, user.hashed_password):
-        await brute_force.record_failure(request)
-        await log_event(request, "login_fail", username=req.username, status="fail")
-        from handler.email.alerts import maybe_alert
-        fire_task(maybe_alert("login_fail", req.username, ip, ua))
-        raise InvalidCredentialsException()
-    if not user.enabled:
-        raise UserDisabledException()
-
-    # Detect new IP before logging login_ok (so current IP is not yet in the set)
     known_ips = await audit_handler.get_known_ips(user.username)
     is_new_ip = bool(known_ips) and ip not in known_ips
 
-    await brute_force.record_success(request)
-    await log_event(request, "login_ok", username=user.username)
     scopes = scopes_for_role(user.role)
-
     access_jti  = secrets.token_hex(16)
     refresh_jti = secrets.token_hex(16)
 
@@ -96,6 +121,118 @@ async def login(req: LoginRequest, request: Request) -> TokenResponse:
         fire_task(maybe_alert("new_ip", user.username, ip, ua))
 
     return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login(req: LoginRequest, request: Request) -> LoginResponse:
+    """Authenticate a user. Returns access+refresh, or a TOTP challenge.
+
+    When the user has 2FA enabled, the response carries `requires_totp: True`
+    and a short-lived `challenge_token` instead of access/refresh tokens. The
+    client then submits the 6-digit code (or a recovery code) to
+    /auth/login-totp to complete the session.
+    """
+    blocked, remaining = await brute_force.check_ip(request)
+    if blocked:
+        await log_event(request, "login_blocked", username=req.username, details=f"Blocked, {remaining}s remaining", status="warn")
+        raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {remaining}s.")
+
+    ip = brute_force._client_ip(request)
+    ua = _user_agent(request)
+
+    user = await _users_db.get_by_username(req.username)
+    if not user or not verify_password(req.password, user.hashed_password):
+        await brute_force.record_failure(request)
+        await log_event(request, "login_fail", username=req.username, status="fail")
+        from handler.email.alerts import maybe_alert
+        fire_task(maybe_alert("login_fail", req.username, ip, ua))
+        raise InvalidCredentialsException()
+    if not user.enabled:
+        raise UserDisabledException()
+
+    # Password OK. If 2FA is enrolled, gate the session behind a TOTP challenge.
+    if user.totp_enabled and user.totp_secret:
+        challenge = _create_totp_challenge_token(user.id)
+        await log_event(request, "login_totp_required", username=user.username)
+        return LoginResponse(requires_totp=True, challenge_token=challenge)
+
+    # No 2FA: complete login immediately.
+    await brute_force.record_success(request)
+    await log_event(request, "login_ok", username=user.username)
+    tokens = await _issue_session_tokens(user, request)
+    return LoginResponse(
+        requires_totp=False,
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+    )
+
+
+@router.post("/login-totp", response_model=TokenResponse)
+async def login_totp(req: LoginTotpRequest, request: Request) -> TokenResponse:
+    """Complete a TOTP-gated login.
+
+    Accepts the challenge token issued by /auth/login plus either a 6-digit
+    code from the user's authenticator OR a single-use recovery code. Recovery
+    codes are bcrypt-hashed at rest and consumed on use. The challenge token's
+    jti is added to the Redis blacklist on success so it cannot be replayed.
+    """
+    blocked, remaining = await brute_force.check_ip(request)
+    if blocked:
+        raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {remaining}s.")
+
+    payload = _decode_totp_challenge_token(req.challenge_token)
+    if payload is None:
+        await brute_force.record_failure(request)
+        raise HTTPException(status_code=400, detail="Invalid or expired challenge")
+
+    jti = payload.get("jti")
+    if jti and await _is_reset_jti_revoked(jti):
+        # Re-using the revoked_jti namespace - same TTL contract, smaller code.
+        raise HTTPException(status_code=400, detail="Challenge already used")
+
+    try:
+        user_id = int(payload["sub"])
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid challenge")
+
+    user = await _users_db.get_by_id(user_id)
+    if not user or not user.enabled or not user.totp_enabled or not user.totp_secret:
+        raise HTTPException(status_code=400, detail="Invalid challenge")
+
+    from handler.auth.totp import verify_code, consume_recovery_code
+
+    # First try the live TOTP, fall back to recovery codes for the lockout case.
+    code_ok = verify_code(user.totp_secret, req.code)
+    used_recovery = False
+    new_recovery: list[str] | None = None
+    if not code_ok:
+        consumed, remaining_codes = consume_recovery_code(user.totp_recovery_codes, req.code)
+        if consumed:
+            code_ok = True
+            used_recovery = True
+            new_recovery = remaining_codes
+
+    if not code_ok:
+        await brute_force.record_failure(request)
+        await log_event(request, "login_totp_fail", username=user.username, status="fail")
+        raise HTTPException(status_code=401, detail="Invalid 2FA code")
+
+    if used_recovery and new_recovery is not None:
+        await _users_db.update(user, {"totp_recovery_codes": new_recovery})
+        await log_event(request, "totp_recovery_used", username=user.username,
+                        details=f"{len(new_recovery)} codes left", status="warn")
+
+    # Burn the challenge so it cannot be replayed within its 5-minute lifetime.
+    if jti:
+        try:
+            await _revoke_reset_jti(jti, int(payload.get("exp", 0)))
+        except Exception:
+            pass
+
+    await brute_force.record_success(request)
+    await log_event(request, "login_ok", username=user.username,
+                    details="totp" if not used_recovery else "totp_recovery")
+    return await _issue_session_tokens(user, request)
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -208,15 +345,43 @@ def _create_reset_token(user_id: int) -> str:
     return jwt.encode(payload, AUTH_SECRET_KEY, algorithm=AUTH_ALGORITHM)
 
 
-def _decode_reset_token(token: str) -> int | None:
-    """Decode a password-reset JWT. Returns user ID or None on failure."""
+def _decode_reset_token(token: str) -> dict | None:
+    """Decode a password-reset JWT. Returns the full payload or None on failure.
+
+    Caller is responsible for additionally checking the jti against the Redis
+    blacklist so a successfully used token cannot be replayed within its 1h TTL.
+    """
     try:
         payload = jwt.decode(token, AUTH_SECRET_KEY, algorithms=[AUTH_ALGORITHM])
         if payload.get("type") != "password_reset":
             return None
-        return int(payload["sub"])
+        # Sanity-check required claims
+        int(payload["sub"])
+        return payload
     except (JWTError, KeyError, ValueError):
         return None
+
+
+async def _is_reset_jti_revoked(jti: str) -> bool:
+    """Return True when the reset token's jti is on the Redis blacklist."""
+    try:
+        from handler.auth.brute_force import _get_redis
+        r = _get_redis()
+        return await r.exists(f"revoked_jti:{jti}") > 0
+    except Exception:
+        # Fail open on Redis outage - reset still gated by token validity
+        return False
+
+
+async def _revoke_reset_jti(jti: str, exp_unix: int) -> None:
+    """Add a reset token's jti to the Redis blacklist until it would expire."""
+    try:
+        from handler.auth.brute_force import _get_redis
+        r = _get_redis()
+        ttl = max(60, int(exp_unix - datetime.now(timezone.utc).timestamp()))
+        await r.set(f"revoked_jti:{jti}", "1", ex=ttl)
+    except Exception:
+        logger.warning("Could not blacklist reset jti (Redis unavailable)")
 
 
 async def _send_reset_email(to_addr: str, reset_url: str) -> None:
@@ -312,8 +477,18 @@ async def reset_password(req: ResetPasswordRequest, request: Request) -> dict:
     """Reset the user's password using a valid reset token."""
     await brute_force.rate_limit(request, limit=10, window=300, key_prefix="reset_pw")
 
-    user_id = _decode_reset_token(req.token)
-    if user_id is None:
+    payload = _decode_reset_token(req.token)
+    if payload is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+
+    jti = payload.get("jti")
+    if jti and await _is_reset_jti_revoked(jti):
+        # Token was already used to reset this account; do not allow replay.
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+
+    try:
+        user_id = int(payload["sub"])
+    except (KeyError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
     user = await _users_db.get_by_id(user_id)
@@ -326,7 +501,160 @@ async def reset_password(req: ResetPasswordRequest, request: Request) -> dict:
     await _users_db.update(user, {"hashed_password": hash_password(req.password)})
     await session_handler.revoke_all_for_user(user.username)
 
+    # Burn the reset jti so the same link cannot be used twice. TTL matches the
+    # token's remaining validity so Redis cleans up automatically.
+    if jti:
+        try:
+            await _revoke_reset_jti(jti, int(payload.get("exp", 0)))
+        except Exception:
+            logger.warning("Reset jti blacklist write failed (non-fatal)")
+
     await log_event(request, "password_reset", username=user.username)
     logger.info("Password reset completed for user %s", user.username)
 
     return {"ok": True}
+
+
+# ── Two-factor authentication (TOTP) ─────────────────────────────────────────
+# Enrollment is a two-step ritual:
+#   1. POST /auth/2fa/setup  - generates a candidate secret, stashes it in
+#      Redis under auth:totp_pending:<user_id>, returns the otpauth:// URI for
+#      the QR code and the base32 secret for manual entry.
+#   2. POST /auth/2fa/verify - the user submits a 6-digit code from their
+#      authenticator. On match the secret is moved from Redis to the users
+#      table, totp_enabled flips true, and a one-shot recovery list is shown.
+#
+# Disabling requires both the password (defence against a temporarily borrowed
+# session) and a valid current code (proof the user still has the device).
+
+from decorators.auth import protected_route
+from handler.auth.scopes import Scope
+
+
+def _user_or_401(request: Request) -> User:
+    user = getattr(request.state, "user", None)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
+
+
+@protected_route(router.post, "/2fa/setup", response_model=Enable2FAStartResponse, scopes=[Scope.LIBRARY_READ])
+async def setup_2fa(request: Request) -> Enable2FAStartResponse:
+    """Stage a fresh TOTP secret and return the provisioning URI.
+
+    Calling this while 2FA is already enabled rotates the staged secret without
+    breaking the live one - actual rotation happens only after /verify succeeds.
+    """
+    from handler.auth.totp import generate_secret, provisioning_uri, render_qr_svg, stash_pending_secret
+
+    user = _user_or_401(request)
+    secret = generate_secret()
+    await stash_pending_secret(user.id, secret)
+    uri = provisioning_uri(secret, user.username)
+    qr  = render_qr_svg(uri)
+    return Enable2FAStartResponse(secret=secret, provisioning_uri=uri, qr_svg=qr)
+
+
+@protected_route(router.post, "/2fa/verify", response_model=Enable2FAVerifyResponse, scopes=[Scope.LIBRARY_READ])
+async def verify_2fa(request: Request, req: Enable2FAVerifyRequest) -> Enable2FAVerifyResponse:
+    """Activate 2FA after the user proves they configured the authenticator."""
+    from handler.auth.totp import (
+        pop_pending_secret,
+        verify_code,
+        generate_recovery_codes,
+        hash_recovery_codes,
+    )
+
+    user = _user_or_401(request)
+    secret = await pop_pending_secret(user.id)
+    if not secret:
+        raise HTTPException(status_code=400, detail="No pending 2FA setup. Start over from Settings.")
+
+    if not verify_code(secret, req.code):
+        # Re-stash the secret so the user does not have to scan a fresh QR after
+        # one mistyped code.
+        from handler.auth.totp import stash_pending_secret
+        await stash_pending_secret(user.id, secret)
+        raise HTTPException(status_code=400, detail="Invalid code. Try again.")
+
+    plain_codes = generate_recovery_codes(10)
+    hashed = hash_recovery_codes(plain_codes)
+
+    await _users_db.update(user, {
+        "totp_secret":         secret,
+        "totp_enabled":        True,
+        "totp_recovery_codes": hashed,
+    })
+    await log_event(request, "totp_enabled", username=user.username)
+    logger.info("2FA enabled for user %s", user.username)
+
+    return Enable2FAVerifyResponse(enabled=True, recovery_codes=plain_codes)
+
+
+@protected_route(router.post, "/2fa/disable", scopes=[Scope.LIBRARY_READ])
+async def disable_2fa(request: Request, req: Disable2FARequest) -> dict:
+    """Turn 2FA off. Requires password AND a valid current TOTP / recovery code."""
+    from handler.auth.totp import verify_code, consume_recovery_code
+
+    user = _user_or_401(request)
+    if not user.totp_enabled or not user.totp_secret:
+        raise HTTPException(status_code=400, detail="2FA is not enabled")
+
+    if not verify_password(req.password, user.hashed_password):
+        await log_event(request, "totp_disable_fail", username=user.username, status="fail")
+        raise HTTPException(status_code=401, detail="Incorrect password")
+
+    code_ok = verify_code(user.totp_secret, req.code)
+    if not code_ok:
+        consumed, _remaining = consume_recovery_code(user.totp_recovery_codes, req.code)
+        if not consumed:
+            await log_event(request, "totp_disable_fail", username=user.username, status="fail")
+            raise HTTPException(status_code=401, detail="Invalid 2FA code")
+
+    await _users_db.update(user, {
+        "totp_secret":         None,
+        "totp_enabled":        False,
+        "totp_recovery_codes": None,
+    })
+    await log_event(request, "totp_disabled", username=user.username, status="warn")
+    logger.info("2FA disabled for user %s", user.username)
+    return {"ok": True}
+
+
+@protected_route(router.post, "/2fa/recovery-regenerate", response_model=Enable2FAVerifyResponse, scopes=[Scope.LIBRARY_READ])
+async def regenerate_recovery_codes(request: Request, req: Disable2FARequest) -> Enable2FAVerifyResponse:
+    """Mint a fresh recovery list. Old codes stop working immediately."""
+    from handler.auth.totp import (
+        verify_code,
+        consume_recovery_code,
+        generate_recovery_codes,
+        hash_recovery_codes,
+    )
+
+    user = _user_or_401(request)
+    if not user.totp_enabled or not user.totp_secret:
+        raise HTTPException(status_code=400, detail="2FA is not enabled")
+
+    if not verify_password(req.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect password")
+
+    code_ok = verify_code(user.totp_secret, req.code)
+    if not code_ok:
+        consumed, _remaining = consume_recovery_code(user.totp_recovery_codes, req.code)
+        if not consumed:
+            raise HTTPException(status_code=401, detail="Invalid 2FA code")
+
+    plain = generate_recovery_codes(10)
+    hashed = hash_recovery_codes(plain)
+    await _users_db.update(user, {"totp_recovery_codes": hashed})
+    await log_event(request, "totp_recovery_regenerated", username=user.username)
+    return Enable2FAVerifyResponse(enabled=True, recovery_codes=plain)
+
+
+@protected_route(router.get, "/2fa/status", response_model=TotpStatusResponse, scopes=[Scope.LIBRARY_READ])
+async def status_2fa(request: Request) -> TotpStatusResponse:
+    user = _user_or_401(request)
+    return TotpStatusResponse(
+        enabled=bool(user.totp_enabled),
+        recovery_codes_left=len(user.totp_recovery_codes or []),
+    )

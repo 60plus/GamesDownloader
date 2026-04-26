@@ -49,3 +49,9 @@ Pillow>=10.0.0
 
 # ClamAV integration (communicates with clamd Unix socket)
 clamd>=1.0.2
+
+# 2FA / TOTP (RFC 6238) - QR provisioning URIs decoded by authenticator apps
+pyotp>=2.9.0
+
+# QR code generation for 2FA enrollment
+qrcode[pil]>=7.4.0

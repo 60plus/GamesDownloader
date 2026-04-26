@@ -13,8 +13,39 @@ export const useAuthStore = defineStore("auth", () => {
   const isAuthenticated = computed(() => !!token.value);
   const isAdmin = computed(() => user.value?.role === "admin");
 
-  async function login(username: string, password: string) {
+  /**
+   * Attempt a password login.
+   *
+   * Returns either a final login (tokens already stored, user fetched) or a
+   * "needs TOTP" handoff carrying a short-lived challenge token. The Login
+   * view checks the return value to decide whether to redirect or render the
+   * 6-digit code prompt.
+   */
+  async function login(
+    username: string,
+    password: string,
+  ): Promise<{ requires_totp: boolean; challenge_token?: string }> {
     const { data } = await client.post("/auth/login", { username, password });
+    if (data.requires_totp) {
+      return { requires_totp: true, challenge_token: data.challenge_token };
+    }
+    token.value = data.access_token;
+    localStorage.setItem(TOKEN_KEY, data.access_token);
+    localStorage.setItem(REFRESH_KEY, data.refresh_token);
+    await fetchUser();
+    await _reopenSocket();
+    return { requires_totp: false };
+  }
+
+  /**
+   * Complete a TOTP-gated login with a 6-digit code or a recovery code.
+   * Throws on invalid code (caller surfaces the error).
+   */
+  async function loginTotp(challengeToken: string, code: string) {
+    const { data } = await client.post("/auth/login-totp", {
+      challenge_token: challengeToken,
+      code,
+    });
     token.value = data.access_token;
     localStorage.setItem(TOKEN_KEY, data.access_token);
     localStorage.setItem(REFRESH_KEY, data.refresh_token);
@@ -66,5 +97,5 @@ export const useAuthStore = defineStore("auth", () => {
     import("@/stores/socket").then(m => m.useSocketStore().disconnect()).catch(() => {});
   }
 
-  return { token, user, isAuthenticated, isAdmin, login, loginWithTokens, fetchUser, logout };
+  return { token, user, isAuthenticated, isAdmin, login, loginTotp, loginWithTokens, fetchUser, logout };
 });

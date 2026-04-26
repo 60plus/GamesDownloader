@@ -145,6 +145,8 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - Admin dashboard
 
 ### Security
+- **Two-factor authentication (2FA / TOTP)** any user can enrol an authenticator app (Google Authenticator, Authy, 1Password, etc.) from Profile > Security; QR code is rendered as a self-contained inline SVG (no third-party image service); 10 single-use recovery codes (bcrypt-hashed at rest) for the lost-device case; secret is staged in Redis until the user proves possession by submitting a valid code, never persisted speculatively
+- **Single-use password-reset links** the jti of every consumed reset token is added to a Redis blacklist for the rest of its 1 h validity, so the same email link cannot be replayed after a successful reset
 - **Brute-force protection**Redis-based fixed-window rate limiting per IP with configurable thresholds, ban duration, and whitelist; safe real-IP extraction behind Cloudflare, nginx, or direct access (applied to login, register, and token refresh endpoints)
 - **Security headers**`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `X-XSS-Protection` sent on every response
 - **IP allowlist** optionally restrict access to specific IPs or CIDR ranges; Cloudflare-aware
@@ -266,7 +268,11 @@ DB_NAME=gamesdownloader
 DB_USER=gd
 DB_PASSWD=your-password
 
-# Auth (use a long random string, min 32 chars)
+# Auth (use a long random string, min 32 chars).
+# If left as the placeholder "change-me-in-production", the entrypoint
+# auto-generates a 256-bit key on first start and persists it to
+# /data/.secret_key. Keep that file safe: losing it invalidates every
+# active session and makes secrets in app_config unreadable.
 GD_AUTH_SECRET_KEY=your-very-long-random-secret-key
 
 # Base path for all data on the host machine

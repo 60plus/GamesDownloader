@@ -4,6 +4,29 @@ set -e
 PUID=${PUID:-0}
 PGID=${PGID:-0}
 
+# ── Auto-generate AUTH_SECRET_KEY when the default placeholder is in effect ──
+# The compose file exposes a placeholder ("change-me-in-production") so a
+# fresh `docker compose up` works out of the box, but that placeholder MUST
+# never be used as the actual signing key. We persist a random 64-char hex
+# secret to /data/.secret_key so it survives container restarts; the file is
+# created with mode 600 and is the single source of truth from then on.
+SECRET_FILE=/data/.secret_key
+mkdir -p /data
+if [ -z "${GD_AUTH_SECRET_KEY}" ] || [ "${GD_AUTH_SECRET_KEY}" = "change-me-in-production" ]; then
+    if [ -s "${SECRET_FILE}" ]; then
+        GD_AUTH_SECRET_KEY="$(cat "${SECRET_FILE}")"
+        echo "[entrypoint] AUTH_SECRET_KEY: loaded persisted key from ${SECRET_FILE}"
+    else
+        GD_AUTH_SECRET_KEY="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 0)"
+        umask 077
+        printf '%s' "${GD_AUTH_SECRET_KEY}" > "${SECRET_FILE}"
+        chmod 600 "${SECRET_FILE}" 2>/dev/null || true
+        echo "[entrypoint] AUTH_SECRET_KEY: generated and persisted a fresh 256-bit key to ${SECRET_FILE}"
+        echo "[entrypoint] AUTH_SECRET_KEY: keep this file safe - losing it invalidates all sessions and metadata-backup secrets"
+    fi
+    export GD_AUTH_SECRET_KEY
+fi
+
 # ── ClamAV - fix volume permissions ───────────────────────────────────────────
 # /data/clamav is a host-mounted volume created by Docker as root or the host
 # user.  freshclam and clamd run as UID 100 (clamav) and will fail with

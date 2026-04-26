@@ -124,6 +124,10 @@ async def _init_db() -> None:
         ("game_requests",  "username",           "VARCHAR(128) NULL"),
         ("game_requests",  "platform_slug",      "VARCHAR(64) NULL"),
         ("game_requests",  "cover_url",          "VARCHAR(512) NULL"),
+        # 2FA / TOTP (RFC 6238)
+        ("users",          "totp_secret",         "VARCHAR(64) NULL"),
+        ("users",          "totp_enabled",        "TINYINT(1) NOT NULL DEFAULT 0"),
+        ("users",          "totp_recovery_codes", "JSON NULL"),
     ]
     async with async_engine.begin() as conn:
         for table, column, col_ddl in _COLUMN_MIGRATIONS:

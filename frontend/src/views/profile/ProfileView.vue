@@ -388,6 +388,127 @@
           </form>
         </div>
 
+        <!-- ── 2FA / TOTP ─────────────────────────────────────────────────── -->
+        <div class="pv-section">
+          <div class="pv-section-title">{{ t('profile.totp_title') }}</div>
+          <div class="pv-section-sub">{{ t('profile.totp_desc') }}</div>
+
+          <div v-if="totpStatusLoading" class="pv-saves-loading"><span class="spinner spinner--sm" /></div>
+
+          <template v-else>
+            <!-- Disabled: show enable button -->
+            <div v-if="!totpEnabled && !totpSetup" class="pv-totp-row">
+              <div class="pv-totp-status pv-totp-status--off">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                {{ t('profile.totp_off') }}
+              </div>
+              <button class="pv-save-btn" :disabled="totpSetupLoading" @click="startTotpSetup">
+                <span v-if="totpSetupLoading" class="spinner spinner--sm" />
+                {{ t('profile.totp_enable') }}
+              </button>
+            </div>
+
+            <!-- In-progress enrollment: QR + verify -->
+            <div v-if="totpSetup" class="pv-totp-enroll">
+              <div class="pv-totp-step">
+                <div class="pv-totp-step-num">1</div>
+                <div class="pv-totp-step-body">
+                  <div class="pv-totp-step-title">{{ t('profile.totp_step1_title') }}</div>
+                  <div class="pv-totp-step-text">{{ t('profile.totp_step1_text') }}</div>
+                  <div class="pv-totp-qr">
+                    <img v-if="totpQrSvg" :src="totpQrSvg" alt="QR" />
+                  </div>
+                  <div class="pv-totp-secret">
+                    <span>{{ t('profile.totp_manual_key') }}</span>
+                    <code>{{ totpSetup.secret }}</code>
+                  </div>
+                </div>
+              </div>
+              <div class="pv-totp-step">
+                <div class="pv-totp-step-num">2</div>
+                <div class="pv-totp-step-body">
+                  <div class="pv-totp-step-title">{{ t('profile.totp_step2_title') }}</div>
+                  <div class="pv-totp-step-text">{{ t('profile.totp_step2_text') }}</div>
+                  <div class="pv-totp-verify-row">
+                    <input
+                      v-model="totpVerifyCode"
+                      type="text"
+                      inputmode="numeric"
+                      maxlength="6"
+                      :placeholder="t('profile.totp_code_placeholder')"
+                      class="pv-input pv-totp-code-input"
+                    />
+                    <button class="pv-save-btn" :disabled="totpVerifyLoading || totpVerifyCode.length < 6" @click="verifyTotp">
+                      <span v-if="totpVerifyLoading" class="spinner spinner--sm" />
+                      {{ t('profile.totp_verify') }}
+                    </button>
+                    <button class="pv-cancel-btn" @click="cancelTotpSetup">{{ t('common.cancel') }}</button>
+                  </div>
+                  <div v-if="totpEnrollError" class="pv-msg pv-msg--err">{{ totpEnrollError }}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Recovery codes (one-time view) -->
+            <div v-if="totpRecoveryCodes" class="pv-totp-recovery">
+              <div class="pv-totp-recovery-title">{{ t('profile.totp_recovery_title') }}</div>
+              <div class="pv-totp-recovery-warn">{{ t('profile.totp_recovery_warn') }}</div>
+              <div class="pv-totp-codes">
+                <code v-for="c in totpRecoveryCodes" :key="c">{{ c }}</code>
+              </div>
+              <div class="pv-totp-recovery-actions">
+                <button class="pv-save-btn" @click="copyRecoveryCodes">{{ t('profile.totp_recovery_copy') }}</button>
+                <button class="pv-cancel-btn" @click="dismissRecoveryCodes">{{ t('profile.totp_recovery_done') }}</button>
+              </div>
+            </div>
+
+            <!-- Enabled: show disable + regenerate -->
+            <div v-if="totpEnabled && !totpSetup && !totpRecoveryCodes" class="pv-totp-row">
+              <div class="pv-totp-status pv-totp-status--on">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                {{ t('profile.totp_on', { n: totpRecoveryLeft }) }}
+              </div>
+              <div class="pv-totp-row-actions">
+                <button class="pv-cancel-btn" @click="openManageDialog('regenerate')">{{ t('profile.totp_recovery_regenerate') }}</button>
+                <button class="pv-cancel-btn pv-cancel-btn--danger" @click="openManageDialog('disable')">{{ t('profile.totp_disable') }}</button>
+              </div>
+            </div>
+
+            <!-- Manage dialog: password + code (used for both disable & regenerate) -->
+            <div v-if="manageDialog" class="pv-totp-dialog">
+              <div class="pv-totp-dialog-title">
+                {{ manageDialog === 'disable' ? t('profile.totp_disable_title') : t('profile.totp_regenerate_title') }}
+              </div>
+              <div class="pv-totp-dialog-text">
+                {{ manageDialog === 'disable' ? t('profile.totp_disable_text') : t('profile.totp_regenerate_text') }}
+              </div>
+              <input
+                v-model="managePassword"
+                type="password"
+                :placeholder="t('profile.current_password')"
+                class="pv-input"
+                autocomplete="current-password"
+              />
+              <input
+                v-model="manageCode"
+                type="text"
+                inputmode="numeric"
+                maxlength="11"
+                :placeholder="t('profile.totp_code_or_recovery')"
+                class="pv-input"
+              />
+              <div v-if="manageError" class="pv-msg pv-msg--err">{{ manageError }}</div>
+              <div class="pv-totp-row-actions">
+                <button class="pv-save-btn" :disabled="manageLoading || !managePassword || !manageCode" @click="confirmManage">
+                  <span v-if="manageLoading" class="spinner spinner--sm" />
+                  {{ manageDialog === 'disable' ? t('profile.totp_disable') : t('profile.totp_recovery_regenerate') }}
+                </button>
+                <button class="pv-cancel-btn" @click="closeManageDialog">{{ t('common.cancel') }}</button>
+              </div>
+            </div>
+          </template>
+        </div>
+
       </template>
 
       <!-- ══════════════════════════════════════════════════════════════════════ -->
@@ -577,6 +698,136 @@ const pwOk        = ref(true)
 const pwError     = ref('')
 const pwForm      = ref({ current: '', newPw: '', confirm: '' })
 
+// ── 2FA / TOTP ─────────────────────────────────────────────────────────────
+interface TotpSetupResp { secret: string; provisioning_uri: string; qr_svg: string }
+const totpEnabled       = ref(false)
+const totpRecoveryLeft  = ref(0)
+const totpStatusLoading = ref(true)
+const totpSetup         = ref<TotpSetupResp | null>(null)
+const totpQrSvg         = ref<string>('')
+const totpVerifyCode    = ref('')
+const totpVerifyLoading = ref(false)
+const totpSetupLoading  = ref(false)
+const totpEnrollError   = ref('')
+const totpRecoveryCodes = ref<string[] | null>(null)
+
+// Manage dialog (used for both disable + regenerate, so the same fields are reusable)
+const manageDialog   = ref<'disable' | 'regenerate' | null>(null)
+const managePassword = ref('')
+const manageCode     = ref('')
+const manageError    = ref('')
+const manageLoading  = ref(false)
+
+async function loadTotpStatus() {
+  totpStatusLoading.value = true
+  try {
+    const { data } = await client.get('/auth/2fa/status')
+    totpEnabled.value      = !!data.enabled
+    totpRecoveryLeft.value = data.recovery_codes_left ?? 0
+  } catch {
+    totpEnabled.value = false
+    totpRecoveryLeft.value = 0
+  } finally {
+    totpStatusLoading.value = false
+  }
+}
+
+async function startTotpSetup() {
+  totpEnrollError.value = ''
+  totpSetupLoading.value = true
+  try {
+    const { data } = await client.post('/auth/2fa/setup')
+    totpSetup.value = data
+    totpVerifyCode.value = ''
+    // Backend returns inline SVG; wrap in a data URL for <img>
+    if (data.qr_svg) {
+      const b64 = btoa(unescape(encodeURIComponent(data.qr_svg)))
+      totpQrSvg.value = 'data:image/svg+xml;base64,' + b64
+    } else {
+      totpQrSvg.value = ''
+    }
+  } catch (e: any) {
+    totpEnrollError.value = e?.response?.data?.detail || t('profile.totp_setup_failed')
+  } finally {
+    totpSetupLoading.value = false
+  }
+}
+
+function cancelTotpSetup() {
+  totpSetup.value = null
+  totpQrSvg.value = ''
+  totpVerifyCode.value = ''
+  totpEnrollError.value = ''
+}
+
+async function verifyTotp() {
+  totpEnrollError.value = ''
+  totpVerifyLoading.value = true
+  try {
+    const { data } = await client.post('/auth/2fa/verify', { code: totpVerifyCode.value.trim() })
+    totpRecoveryCodes.value = data.recovery_codes || []
+    totpEnabled.value = true
+    totpRecoveryLeft.value = (data.recovery_codes || []).length
+    cancelTotpSetup()
+  } catch (e: any) {
+    totpEnrollError.value = e?.response?.data?.detail || t('profile.totp_verify_failed')
+  } finally {
+    totpVerifyLoading.value = false
+  }
+}
+
+function dismissRecoveryCodes() {
+  totpRecoveryCodes.value = null
+}
+
+async function copyRecoveryCodes() {
+  if (!totpRecoveryCodes.value) return
+  try {
+    await navigator.clipboard.writeText(totpRecoveryCodes.value.join('\n'))
+  } catch { /* clipboard API may be unavailable on http */ }
+}
+
+function openManageDialog(kind: 'disable' | 'regenerate') {
+  manageDialog.value = kind
+  managePassword.value = ''
+  manageCode.value = ''
+  manageError.value = ''
+}
+
+function closeManageDialog() {
+  manageDialog.value = null
+  managePassword.value = ''
+  manageCode.value = ''
+  manageError.value = ''
+}
+
+async function confirmManage() {
+  manageError.value = ''
+  manageLoading.value = true
+  try {
+    const url = manageDialog.value === 'disable'
+      ? '/auth/2fa/disable'
+      : '/auth/2fa/recovery-regenerate'
+    const { data } = await client.post(url, {
+      password: managePassword.value,
+      code:     manageCode.value.trim(),
+    })
+    if (manageDialog.value === 'disable') {
+      totpEnabled.value = false
+      totpRecoveryLeft.value = 0
+      totpRecoveryCodes.value = null
+    } else {
+      totpRecoveryCodes.value = data.recovery_codes || []
+      totpRecoveryLeft.value = (data.recovery_codes || []).length
+    }
+    closeManageDialog()
+  } catch (e: any) {
+    manageError.value = e?.response?.data?.detail || t('profile.totp_manage_failed')
+  } finally {
+    manageLoading.value = false
+  }
+}
+
 // ── Game Saves tab ─────────────────────────────────────────────────────────
 interface SaveState {
   id: number
@@ -699,6 +950,8 @@ onMounted(async () => {
     const { data } = await client.get('/gog/library/games')
     libraryGames.value = data
   } catch { /* library stats are best-effort */ }
+  // 2FA status (best-effort; endpoint requires auth which we already have)
+  loadTotpStatus()
 })
 
 const downloadedCount = computed(() =>
@@ -1055,6 +1308,94 @@ async function changePassword() {
 }
 .pv-msg--ok  { background: rgba(34,197,94,.08);  border: 1px solid rgba(34,197,94,.25);  color: #86efac; }
 .pv-msg--err { background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.3); color: #f87171; }
+
+/* ── 2FA / TOTP ──────────────────────────────────────────────────────────── */
+.pv-totp-row {
+  display: flex; align-items: center; gap: var(--space-3, 12px);
+  padding: 0 20px 16px; flex-wrap: wrap;
+}
+.pv-totp-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600;
+}
+.pv-totp-status--off { background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.3); color: #f87171; }
+.pv-totp-status--on  { background: rgba(34,197,94,.08);  border: 1px solid rgba(34,197,94,.25);  color: #86efac; }
+.pv-totp-row-actions { display: flex; gap: 8px; margin-left: auto; }
+
+.pv-cancel-btn {
+  background: rgba(255,255,255,.05); border: 1px solid var(--glass-border);
+  color: var(--muted); padding: 8px 14px; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+  transition: all var(--transition);
+}
+.pv-cancel-btn:hover { color: var(--text); border-color: var(--pl); }
+.pv-cancel-btn--danger { color: #fca5a5; border-color: rgba(248,113,113,.3); }
+.pv-cancel-btn--danger:hover { color: #fff; border-color: #f87171; background: rgba(248,113,113,.15); }
+
+.pv-totp-enroll {
+  padding: 0 20px 16px;
+  display: flex; flex-direction: column; gap: var(--space-4, 16px);
+}
+.pv-totp-step { display: flex; gap: 12px; }
+.pv-totp-step-num {
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+  background: var(--pl-dim); border: 1px solid var(--pl);
+  color: var(--pl-light); font-size: 13px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.pv-totp-step-body { flex: 1; min-width: 0; }
+.pv-totp-step-title { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.pv-totp-step-text { font-size: 12px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
+
+.pv-totp-qr {
+  display: inline-block; padding: 10px;
+  background: #fff; border-radius: var(--radius-sm); margin-bottom: 10px;
+}
+.pv-totp-qr img { display: block; width: 220px; height: 220px; }
+
+.pv-totp-secret {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; background: rgba(255,255,255,.04);
+  border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
+  font-size: 12px; color: var(--muted);
+}
+.pv-totp-secret code {
+  font-family: ui-monospace, SFMono-Regular, monospace; font-size: 13px;
+  color: var(--text); letter-spacing: .5px; user-select: all;
+}
+
+.pv-totp-verify-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pv-totp-code-input {
+  width: 130px; text-align: center; font-family: ui-monospace, monospace;
+  font-size: 18px; letter-spacing: 4px;
+}
+
+.pv-totp-recovery {
+  margin: 0 20px 16px; padding: 16px;
+  background: rgba(251,191,36,.06); border: 1px solid rgba(251,191,36,.25);
+  border-radius: var(--radius-sm);
+}
+.pv-totp-recovery-title { font-size: 14px; font-weight: 700; color: #fbbf24; margin-bottom: 6px; }
+.pv-totp-recovery-warn  { font-size: 12px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
+.pv-totp-codes {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px; margin-bottom: 12px;
+}
+.pv-totp-codes code {
+  padding: 8px 10px; background: rgba(0,0,0,.3); border: 1px solid var(--glass-border);
+  border-radius: 4px; font-family: ui-monospace, monospace; font-size: 13px;
+  color: var(--text); text-align: center; user-select: all;
+}
+.pv-totp-recovery-actions { display: flex; gap: 8px; }
+
+.pv-totp-dialog {
+  margin: 0 20px 16px; padding: 16px;
+  background: rgba(0,0,0,.3); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.pv-totp-dialog-title { font-size: 14px; font-weight: 700; color: var(--text); }
+.pv-totp-dialog-text { font-size: 12px; color: var(--muted); line-height: 1.5; }
 
 /* ── Library stats ────────────────────────────────────────────────────────── */
 .pv-stats-grid {
