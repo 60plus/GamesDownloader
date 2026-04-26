@@ -1132,7 +1132,12 @@ async function changePassword() {
 <style scoped>
 .pv-root {
   display: flex; flex-direction: column;
-  height: 100%; overflow: hidden;
+  /* Use flex sizing instead of height: 100% so the inner pv-body scroll
+     works inside any parent (Modern, Classic, Neon Horizon all use a
+     flex-column main element). min-height: 0 lets this child shrink below
+     its intrinsic content size, which is what makes the inner scroll
+     activate when sections (like the GOG connect form) overflow. */
+  flex: 1; min-height: 0; overflow: hidden;
 }
 
 /* ── Header ───────────────────────────────────────────────────────────────── */
@@ -1170,9 +1175,16 @@ async function changePassword() {
 .pv-tab.active { color: var(--pl-light); border-bottom-color: var(--pl); }
 
 /* ── Body ─────────────────────────────────────────────────────────────────── */
+/* Note: previously this used `display: flex; justify-content: center` to
+   centre .pv-content. With default `align-items: stretch` that forced
+   .pv-content to the container's height, so when its sections were taller
+   than the viewport (USER role with the GOG connect form) the inner
+   scrollbar never engaged and the "Connect GOG Account" button at the
+   bottom got clipped. Use `align-items: flex-start` so .pv-content keeps
+   its natural intrinsic height and overflow-y triggers scrolling. */
 .pv-body {
-  flex: 1; overflow-y: auto;
-  display: flex; justify-content: center;
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; justify-content: center; align-items: flex-start;
   padding: 0;
 }
 .pv-content {
