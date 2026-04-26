@@ -182,7 +182,8 @@ GamesDownloader is a personal project built on the belief that games you own sho
 
 ### Internationalization (i18n)
 - **8 languages**: English, Polish (hand-crafted), German, French, Spanish, Portuguese (BR), Russian, Italian (auto-translated, 1300+ keys each)
-- Language selector in Profile with flag icons
+- **Flag icons via SVG sprite (`flag-icons`)** language indicators throughout the UI - Profile picker, Setup wizard, GOG / Games / Classic detail pages - render the same crisp glyph on every OS. The previous Unicode regional-indicator emoji (`🇩🇪`, `🇫🇷`, ...) showed as bare two-letter codes on Windows Chrome / Edge because Windows ships no flag font; the sprite eliminates that gap.
+- Language selector in Profile and the setup wizard's first step is a custom dropdown (teleported popover so an `overflow: hidden` ancestor cannot clip it; outside-click closes it cleanly without eating the item click).
 - All Settings pages, libraries, detail pages, dialogs, metadata editors, Profile (incl. the full GOG-connect walkthrough and the connected-account panel), Couch Mode, theme settings translated
 - Plugin i18n: plugins deliver translations via `i18n.json`, auto-merged on startup via `/api/plugins/frontend/i18n`
 - Locale-aware date formatting throughout the UI
@@ -222,6 +223,13 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - **Conditional GET via ETag** authenticated `/api/` GET responses ship a weak `ETag` (blake2b of the body) and `Cache-Control: private, max-age=0, must-revalidate`; when the browser returns with `If-None-Match`, the server short-circuits with `304 Not Modified` and an empty body. Lists stay fresh on every interaction while unchanged payloads cost a single RTT instead of a full JSON transfer
 - **Auth user lookup cached in Redis** the bearer-token middleware used to fire `SELECT ... FROM users WHERE username = ?` on every authenticated request - one library page rendering 50 covers multiplied that into 50 round-trips to MariaDB. A 60 s Redis snapshot per username collapses that to one hit per minute; user updates (role, disable, password, TOTP) invalidate the snapshot for both the old and new username so changes propagate immediately
 - **Cache failures fall through** Redis errors and cache misses always fall back to a real DB query so the application keeps working when the cache is unreachable
+- **Layout-stable scroll containers** library and settings panels reserve their scrollbar gutter via `scrollbar-gutter: stable`, so paginating, filtering, or switching tabs no longer reflows the cover grid sideways by ~15 px when the scrollbar appears or disappears
+
+### Operations
+- **Container healthchecks** the app, MariaDB and Redis services all expose Docker healthchecks; the orchestrator marks them `(healthy)` only after `/api/health` returns 200 (with a 120 s `start_period` to absorb the LaunchBox metadata download on first boot), MariaDB answers `SELECT 1`, and Valkey answers `PING`. The app's `depends_on` waits for both data services to be `service_healthy` so startup never races against a still-loading DB or cache.
+
+### CI
+- **GitHub Actions lint workflow** runs on every push to `main` and every pull request: `ruff` for the Python backend, `vue-tsc --noEmit` for the frontend type-check, and a JSON-syntax pass over all `frontend/src/i18n/*.json` files. Failures show up as red checks on the public repo so contributors see the issue before review; the workflow is GitHub-side only and does not block deployment, which pulls from a separate Gitea remote
 
 ### Other
 - 7-step setup wizard for first-run configuration

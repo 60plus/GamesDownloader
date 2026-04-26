@@ -1,0 +1,85 @@
+name: Lint
+
+# Quick code-quality gate. Runs on every push to main and on PRs.
+# Failure here does NOT block deployment - the test server pulls from
+# Gitea, not from GitHub - it just signals to readers of the public repo
+# whether the published commit passes static checks.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel an in-flight run when a newer commit lands on the same ref so
+# we never pile up wasted minutes on outdated trees.
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Backend: Ruff ────────────────────────────────────────────────────────
+  ruff:
+    name: ruff (backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: pip install ruff==0.6.9
+      - name: Run ruff check
+        # Ruff with default rules (E, F) - syntax errors, undefined names,
+        # unused imports. Anything stricter is opt-in via pyproject.toml.
+        run: ruff check backend/
+
+  # ── Frontend: TypeScript type-check ──────────────────────────────────────
+  type-check:
+    name: vue-tsc (frontend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        # `npm ci` requires a lockfile; if missing, fall back to `npm install`
+        # so the workflow does not fail on a fresh repo before the first
+        # lockfile commit lands.
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+      - name: vue-tsc --noEmit
+        working-directory: frontend
+        run: npm run type-check
+
+  # ── i18n: JSON syntax validation ─────────────────────────────────────────
+  i18n-json:
+    name: i18n JSON syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate translation files
+        # Catches trailing commas, unterminated strings, mismatched braces -
+        # the kind of typos that previously broke the bundle silently and
+        # only surfaced as a missing translation at runtime.
+        run: |
+          set -e
+          fail=0
+          for f in frontend/src/i18n/*.json; do
+            if ! python -c "import json,sys; json.load(open(sys.argv[1], encoding='utf-8'))" "$f"; then
+              echo "::error file=$f::invalid JSON"
+              fail=1
+            fi
+          done
+          exit "$fail"
