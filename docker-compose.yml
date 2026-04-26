@@ -53,7 +53,19 @@ services:
       gd-mariadb:
         condition: service_healthy
       gd-redis:
-        condition: service_started
+        condition: service_healthy
+    # Override the Dockerfile HEALTHCHECK with a longer start_period.
+    # First boot pulls the LaunchBox metadata ZIP (~150 MB) and parses it
+    # before the API binds, so the container can take 60-90 s before
+    # /api/health responds 200. Without start_period the orchestrator
+    # would mark the container unhealthy and restart it before it ever
+    # finished initialising.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
 
   # ── MariaDB ──────────────────────────────────────────────────────────────
   gd-mariadb:
@@ -82,3 +94,9 @@ services:
     command: valkey-server --requirepass ${REDIS_PASSWORD:-gd_redis_2026}
     volumes:
       - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/redis:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${REDIS_PASSWORD:-gd_redis_2026}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
