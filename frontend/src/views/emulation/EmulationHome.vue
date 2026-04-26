@@ -808,6 +808,7 @@ onMounted(() => {
 /* Platform picker list */
 .emu-platform-picker {
   overflow-y: auto; flex: 1;
+  scrollbar-gutter: stable;
   padding: 0 12px 12px;
   display: flex; flex-direction: column; gap: 2px;
 }

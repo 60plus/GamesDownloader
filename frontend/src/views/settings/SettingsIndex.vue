@@ -252,6 +252,7 @@ const activeComponent = computed(() => {
   min-width: 0;
   overflow-y: auto;
   overflow-x: auto;
+  scrollbar-gutter: stable;
   padding: 28px;
 }
 

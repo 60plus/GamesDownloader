@@ -1100,7 +1100,7 @@ onBeforeUnmount(() => {
 
 /* ── Main area ──────────────────────────────────────────────────────────────── */
 .library-main { flex: 1; display: flex; gap: 0; overflow: hidden; min-height: 0; }
-.grid-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding-right: 8px; min-width: 0; }
+.grid-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; padding-right: 8px; min-width: 0; }
 
 /* ── Cover grid ─────────────────────────────────────────────────────────────── */
 .cover-grid {
