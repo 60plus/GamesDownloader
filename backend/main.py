@@ -195,9 +195,27 @@ async def _init_db() -> None:
                 await conn.execute(
                     text("UPDATE users SET role = 'user' WHERE role = 'viewer'")
                 )
-                logger.info("Migration: renamed %d user role(s) viewer → user", count)
+                logger.info("Migration: renamed %d user role(s) viewer -> user", count)
         except Exception as exc:
-            logger.warning("Role migration (viewer→user) failed: %s", exc)
+            logger.warning("Role migration (viewer->user) failed: %s", exc)
+
+    # ── SSRF hardening: NULL legacy http(s) avatar paths ──────────────────────
+    # Older versions stored remote CDN URLs as avatar_path and the GET handler
+    # issued a 302 redirect, which is an open-redirect / SSRF-adjacent surface.
+    # Profile avatars are now upload-only (or copied locally from the GOG flow).
+    async with async_engine.begin() as conn:
+        try:
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM users WHERE avatar_path LIKE 'http%'")
+            )
+            count = result.scalar()
+            if count:
+                await conn.execute(
+                    text("UPDATE users SET avatar_path = NULL WHERE avatar_path LIKE 'http%'")
+                )
+                logger.info("Migration: nulled %d remote avatar_path value(s) - upload-only policy", count)
+        except Exception as exc:
+            logger.warning("Avatar path migration failed: %s", exc)
 
     # No default admin seeding - admin is created through the setup wizard
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse
 
 from config import RESOURCES_PATH
 from decorators.auth import protected_route
@@ -91,15 +91,24 @@ async def upload_avatar(request: Request, file: UploadFile = File(...)) -> dict:
 
 @router.get("/me/avatar")
 async def get_avatar(request: Request):
-    """Serve the current user's avatar. Redirects to external URL or streams local file."""
+    """Serve the current user's avatar.
+
+    SECURITY: Only serves local files under the avatars directory. External
+    http(s) avatar paths (legacy values from older versions) are treated as
+    not-found - the user must re-upload via this endpoint or via the GOG
+    setup flow which downloads to /resources/avatars locally.
+    """
     _require_auth(request)
     user = request.state.user
-    if not user.avatar_path:
+    if not user.avatar_path or user.avatar_path.startswith("http"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No avatar set")
-    if user.avatar_path.startswith("http"):
-        return RedirectResponse(url=user.avatar_path, status_code=302)
-    p = Path(user.avatar_path)
-    if p.exists():
+    p = Path(user.avatar_path).resolve()
+    avatars_root = _AVATARS_DIR.resolve()
+    try:
+        p.relative_to(avatars_root)
+    except (ValueError, RuntimeError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No avatar set")
+    if p.is_file():
         return FileResponse(str(p))
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar file not found")
 

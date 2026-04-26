@@ -179,23 +179,37 @@ async def setup_gog(req: GogCodeRequest) -> dict:
 
 @setup_router.post("/gog/avatar")
 async def set_gog_avatar(req: GogAvatarRequest) -> dict:
-    """During setup: set the GOG avatar URL as the admin user's profile picture."""
+    """During setup: copy the locally-downloaded GOG avatar to the admin user's profile.
+
+    SECURITY: Only accepts server-controlled paths under /resources/avatars/.
+    External http(s) URLs are rejected to prevent SSRF and open-redirect via
+    the /users/me/avatar handler. The GOG flow downloads avatars locally first
+    via handler.gog.media_handler.download_avatar; only that local path is
+    accepted here.
+    """
     if await config_handler.is_setup_complete():
         raise HTTPException(status_code=404, detail="Not found")
-    avatar = req.avatar_url
-    # Convert server-relative resource path (locally downloaded avatar) to absolute filesystem path
-    if avatar.startswith("/resources/"):
-        try:
-            from config import GD_BASE_PATH
-            from pathlib import Path as _Path
-            fs_path = str(_Path(GD_BASE_PATH) / avatar.lstrip("/"))
-            avatar = fs_path
-        except Exception:
-            pass  # Fallback - stored as-is; avatar may not display but not fatal
-    elif not avatar.startswith("http"):
-        raise HTTPException(status_code=400, detail="Invalid avatar URL")
+    from pathlib import Path as _Path
+
+    from config import GD_BASE_PATH, RESOURCES_PATH
+
+    raw = (req.avatar_url or "").strip()
+    # Reject any external URL or non-resource path - upload-only policy
+    if not raw.startswith("/resources/avatars/"):
+        raise HTTPException(status_code=400, detail="Invalid avatar path - must be a server-downloaded resource")
+
+    avatars_dir = _Path(RESOURCES_PATH) / "avatars"
+    candidate = (_Path(GD_BASE_PATH) / raw.lstrip("/")).resolve()
+    try:
+        # Path traversal guard: candidate MUST live under avatars_dir
+        candidate.relative_to(avatars_dir.resolve())
+    except (ValueError, RuntimeError):
+        raise HTTPException(status_code=400, detail="Invalid avatar path")
+    if not candidate.is_file():
+        raise HTTPException(status_code=400, detail="Avatar file not found")
+
     # NOTE: uses a single DB session internally to avoid SQLAlchemy detached-instance bug
-    ok = await users_handler.update_first_user_avatar(avatar)
+    ok = await users_handler.update_first_user_avatar(str(candidate))
     if not ok:
         raise HTTPException(status_code=400, detail="No user found")
     return {"ok": True}
