@@ -43,10 +43,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Cache: hashed JS/CSS assets - immutable (filename changes on rebuild)
         elif request.url.path.startswith("/assets/"):
             response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
-        # Cache: private short-lived cache for authenticated API GET responses
+        # Cache: private revalidate-always for authenticated API GET responses.
+        # The ETagMiddleware turns matching If-None-Match requests into 304s so
+        # the browser still avoids the JSON transfer, while UI changes appear
+        # without the previous 30 s staleness window.
         # Skip user endpoint (preferences must always be fresh after save+reload)
         elif request.method == "GET" and request.url.path.startswith("/api/") and "/users/me" not in request.url.path:
-            response.headers.setdefault("Cache-Control", "private, max-age=30")
+            response.headers.setdefault("Cache-Control", "private, max-age=0, must-revalidate")
         # CSP: skip for player.html (EmulatorJS needs unrestricted JS execution)
         # COOP/COEP: enable SharedArrayBuffer for EmulatorJS threads
         if request.url.path.startswith("/player") or request.url.path.startswith("/emulatorjs"):

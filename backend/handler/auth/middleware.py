@@ -72,7 +72,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if sess is not None and not sess.is_active:
                 return  # session revoked in DB - treat as unauthenticated
 
-        user = await _users_db.get_by_username(username)
+        user = await _load_user(username)
         if user and user.enabled:
             request.state.user      = user
             request.state.token_jti = jti
@@ -86,8 +86,27 @@ class AuthMiddleware(BaseHTTPMiddleware):
         except Exception:
             return
 
-        user = await _users_db.get_by_username(username)
+        user = await _load_user(username)
         if user and user.enabled and verify_password(password, user.hashed_password):
             request.state.user = user
             base = scopes_for_role(user.role)
             request.state.scopes = apply_permission_overrides(user.permissions, base)
+
+
+async def _load_user(username: str):
+    """Cache-first user lookup used by both Bearer and Basic auth paths.
+
+    A 60 s Redis snapshot avoids the per-request `SELECT FROM users`
+    that previously fired on every authenticated HTTP call. Writes
+    invalidate the cache via UsersHandler.update / .delete, so role
+    or disable changes propagate without waiting for the TTL.
+    """
+    from handler.auth.user_cache import cache_user, get_cached_user_by_username
+
+    cached = await get_cached_user_by_username(username)
+    if cached is not None:
+        return cached
+    user = await _users_db.get_by_username(username)
+    if user is not None:
+        await cache_user(user)
+    return user

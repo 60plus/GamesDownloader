@@ -29,6 +29,7 @@ from starlette.responses import JSONResponse
 from config import DEBUG, DEV_HOST, DEV_PORT, RESOURCES_PATH
 from handler.auth.middleware import AuthMiddleware
 from middleware.ip_allowlist import IpAllowlistMiddleware
+from middleware.etag import ETagMiddleware
 from middleware.security_headers import SecurityHeadersMiddleware
 from handler.auth.passwords import hash_password
 from handler.database.session import async_engine, async_session_factory
@@ -364,6 +365,11 @@ class DynamicCORSMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(DynamicCORSMiddleware)
 app.add_middleware(AuthMiddleware)
+
+# ETag - turns matching `If-None-Match` GETs into 304 Not Modified, so the
+# blanket cache-control of `max-age=0, must-revalidate` does not waste
+# bandwidth on unchanged list payloads. Wraps Auth so 401 responses skip it.
+app.add_middleware(ETagMiddleware)
 
 # ── Setup guard - redirect to setup when not yet configured ───────────────────
 
