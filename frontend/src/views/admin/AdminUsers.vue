@@ -122,6 +122,14 @@
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                 </button>
                 <button
+                  v-if="u.totp_enabled"
+                  class="au-icon-btn au-icon-btn--warn"
+                  @click="confirmReset2fa(u)"
+                  :title="t('users.reset_2fa_title')"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                </button>
+                <button
                   class="au-icon-btn au-icon-btn--danger"
                   :disabled="u.id === myId"
                   @click="confirmDelete(u)"
@@ -368,6 +376,7 @@ interface UserRecord {
   avatar_path: string | null
   permissions: Record<string, boolean> | null
   created_at: string
+  totp_enabled?: boolean
 }
 
 const auth = useAuthStore()
@@ -670,6 +679,27 @@ async function doDelete() {
     deleting.value = false
   }
 }
+
+// ── 2FA admin reset ───────────────────────────────────────────────────────────
+async function confirmReset2fa(u: UserRecord) {
+  const ok = await gdConfirm(
+    t('users.reset_2fa_confirm', { name: u.username }),
+    {
+      title:       t('users.reset_2fa_title'),
+      confirmText: t('users.reset_2fa_ok'),
+      cancelText:  t('common.cancel'),
+      danger:      true,
+    },
+  )
+  if (!ok) return
+  try {
+    await client.post(`/auth/2fa/admin-disable/${u.id}`)
+    await gdAlert(t('users.reset_2fa_done', { name: u.username }), { title: t('users.reset_2fa_title') })
+    await fetchUsers()
+  } catch (e: any) {
+    await gdAlert(e?.response?.data?.detail || t('users.reset_2fa_failed'), { title: t('common.error'), danger: true })
+  }
+}
 </script>
 
 <style scoped>
@@ -777,6 +807,7 @@ async function doDelete() {
 }
 .au-icon-btn:hover { background: rgba(255,255,255,.1); color: var(--text); }
 .au-icon-btn--danger:hover { background: rgba(239,68,68,.15); color: #f87171; border-color: rgba(239,68,68,.3); }
+.au-icon-btn--warn:hover  { background: rgba(245,158,11,.15); color: #fbbf24; border-color: rgba(245,158,11,.3); }
 .au-icon-btn:disabled { opacity: .3; cursor: not-allowed; }
 
 /* ── Dialogs ─────────────────────────────────────────────────────────────────── */

@@ -658,3 +658,51 @@ async def status_2fa(request: Request) -> TotpStatusResponse:
         enabled=bool(user.totp_enabled),
         recovery_codes_left=len(user.totp_recovery_codes or []),
     )
+
+
+@protected_route(router.post, "/2fa/admin-disable/{user_id}", scopes=[Scope.USERS_WRITE])
+async def admin_disable_2fa(request: Request, user_id: int) -> dict:
+    """Admin recovery: clear another user's 2FA when they have lost their device.
+
+    This is the break-glass path for the lockout case where the user has neither
+    their authenticator nor any recovery codes. It bypasses the password+code
+    proof required by /2fa/disable. To keep the admin pool honest:
+
+    - it is restricted to USERS_WRITE (admin role)
+    - the action is recorded in the audit log with `actor_username` and target
+    - both the target user (if they have an email on file) and the admin alert
+      pool receive an email notification when SMTP is configured
+    """
+    admin = _user_or_401(request)
+    target = await _users_db.get_by_id(user_id)
+    if not target:
+        from exceptions.common import NotFoundException
+        raise NotFoundException("User", user_id)
+    if not target.totp_enabled and not target.totp_secret and not target.totp_recovery_codes:
+        # Idempotent no-op: 2FA was already off. Still log it for audit clarity.
+        await log_event(
+            request, "totp_admin_disable_noop", username=target.username,
+            details=f"by={admin.username}", status="info",
+        )
+        return {"ok": True, "already_disabled": True}
+
+    target_email = target.email
+    target_username = target.username
+
+    await _users_db.update(target, {
+        "totp_secret":         None,
+        "totp_enabled":        False,
+        "totp_recovery_codes": None,
+    })
+    await log_event(
+        request, "totp_admin_disabled", username=target_username,
+        details=f"by={admin.username}", status="warn",
+    )
+    logger.info("Admin %s reset 2FA for user %s", admin.username, target_username)
+
+    # Email both parties. Best-effort, never blocks the response.
+    from handler.email.alerts import notify_2fa_admin_reset
+    client_ip = request.client.host if request.client else None
+    fire_task(notify_2fa_admin_reset(target_username, target_email, admin.username, client_ip))
+
+    return {"ok": True, "already_disabled": False}
