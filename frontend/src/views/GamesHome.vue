@@ -1,8 +1,110 @@
 <template>
   <div class="home-view">
 
+    <!-- ══ Global search results (only when navbar query is active) ════════ -->
+    <template v-if="searchActive">
+      <section class="home-search-section">
+        <div class="home-section-head">
+          <span class="home-section-title">{{ t('home.search_results_for', { q: searchQuery }) }}</span>
+          <span class="home-section-count">
+            {{ searchLoading ? t('common.loading') : t('home.search_total', { count: searchTotal }) }}
+          </span>
+        </div>
+
+        <!-- Empty results -->
+        <div
+          v-if="!searchLoading && searchTotal === 0"
+          class="home-search-empty"
+        >
+          <p>{{ t('home.search_no_results', { q: searchQuery }) }}</p>
+        </div>
+
+        <!-- Emulation hits -->
+        <div v-if="searchResults.emulation.length" class="home-search-group">
+          <div class="home-search-group-head">
+            <button class="home-section-title home-section-link" @click="router.push('/emulation')">
+              {{ t('home.search_emulation', { count: searchResults.emulation.length }) }}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+          <div class="home-recent-scroll">
+            <div
+              v-for="rom in searchResults.emulation"
+              :key="'emu-' + rom.id"
+              class="emu-recent-item"
+              @click="openEmuRom(rom as any)"
+            >
+              <div class="emu-recent-img-wrap" :style="{ aspectRatio: searchRomAspect(rom) }">
+                <img v-if="rom.cover_path" :src="rom.cover_path" :alt="rom.name" class="home-recent-img" loading="lazy" />
+                <div v-else class="home-recent-fallback emu-recent-fallback">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="opacity:.3">
+                    <rect x="2" y="6" width="20" height="14" rx="2"/>
+                    <circle cx="8" cy="13" r="1.5"/><circle cx="16" cy="13" r="1.5"/>
+                    <path d="M6 10h4M8 8v4M14 11h4"/>
+                  </svg>
+                </div>
+                <div class="home-recent-overlay"><span class="home-recent-overlay-title">{{ rom.name }}</span></div>
+              </div>
+              <div class="emu-recent-platform">
+                <img
+                  v-if="rom.platform_fs_slug"
+                  :src="`/platforms/names/${rom.platform_fs_slug}.svg`"
+                  :alt="rom.platform_name || ''"
+                  class="emu-recent-platform-logo"
+                  @error="($event.target as HTMLImageElement).style.display='none'; ($event.target as HTMLImageElement).nextElementSibling?.removeAttribute('style')"
+                />
+                <span class="emu-recent-platform-text" :style="rom.platform_fs_slug ? 'display:none' : ''">
+                  {{ rom.platform_name || '' }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- GOG hits (admin only) -->
+        <div v-if="searchResults.gog.length" class="home-search-group">
+          <div class="home-search-group-head">
+            <button class="home-section-title home-section-link" @click="router.push('/library')">
+              {{ t('home.search_gog', { count: searchResults.gog.length }) }}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+          <div class="home-recent-scroll">
+            <div v-for="game in searchResults.gog" :key="'gog-' + game.id" class="home-recent-cover" @click="openGogGame(game as any)">
+              <div class="home-recent-img-wrap">
+                <img v-if="gogCoverSrc(game as any)" :src="gogCoverSrc(game as any)" :alt="game.title" class="home-recent-img" loading="lazy" />
+                <div v-else class="home-recent-fallback" />
+                <div class="home-recent-overlay"><span class="home-recent-overlay-title">{{ game.title }}</span></div>
+              </div>
+              <div class="home-recent-title">{{ game.title }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Library hits -->
+        <div v-if="searchResults.library.length" class="home-search-group">
+          <div class="home-search-group-head">
+            <button class="home-section-title home-section-link" @click="router.push('/games')">
+              {{ t('home.search_games', { count: searchResults.library.length }) }}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+          <div class="home-recent-scroll">
+            <div v-for="game in searchResults.library" :key="'lib-' + game.id" class="home-recent-cover" @click="openGame(game as any)">
+              <div class="home-recent-img-wrap">
+                <img v-if="game.cover_path" :src="game.cover_path" :alt="game.title" class="home-recent-img" loading="lazy" />
+                <div v-else class="home-recent-fallback" />
+                <div class="home-recent-overlay"><span class="home-recent-overlay-title">{{ game.title }}</span></div>
+              </div>
+              <div class="home-recent-title">{{ game.title }}</div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </template>
+
     <!-- ── Library cards ──────────────────────────────────────────────────── -->
-    <section class="home-libs">
+    <section v-show="!searchActive" class="home-libs">
       <div class="home-section-head">
         <span class="home-section-title">{{ t('home.your_libraries') }}</span>
         <span class="home-section-count">{{ t('home.games_total', { count: totalGames }) }}</span>
@@ -158,7 +260,7 @@
 
     <!-- ── Recently Added rows ────────────────────────────────────────────── -->
 
-    <section v-if="isAdmin && gogLib.recent.length" class="home-recent-section">
+    <section v-if="!searchActive && isAdmin && gogLib.recent.length" class="home-recent-section">
       <div class="home-section-head">
         <button class="home-section-title home-section-link" @click="router.push('/library')">
           {{ t('home.recently_added_gog') }}
@@ -181,7 +283,7 @@
       </div>
     </section>
 
-    <section v-if="customLib.recent.length" class="home-recent-section">
+    <section v-if="!searchActive && customLib.recent.length" class="home-recent-section">
       <div class="home-section-head">
         <button class="home-section-title home-section-link" @click="router.push('/games')">
           {{ t('home.recently_added_games') }}
@@ -205,7 +307,7 @@
     </section>
 
     <!-- ── Recently Added - Emulation Library ────────────────────────────── -->
-    <section v-if="emuRecent.length" class="home-recent-section">
+    <section v-if="!searchActive && emuRecent.length" class="home-recent-section">
       <div class="home-section-head">
         <button class="home-section-title home-section-link" @click="router.push('/emulation')">
           {{ t('home.recently_added_emu') }}
@@ -258,8 +360,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, type CSSProperties } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, watch, type CSSProperties } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import client from '@/services/api/client'
@@ -288,6 +390,7 @@ function gogCoverSrc(game: GogGame): string {
 }
 
 const router     = useRouter()
+const route      = useRoute()
 const auth       = useAuthStore()
 const themeStore = useThemeStore()
 
@@ -429,6 +532,79 @@ function scrollRow(key: string, dir: 'left' | 'right') {
   const el = rowRefs.value[key]
   if (el) el.scrollBy({ left: dir === 'right' ? 420 : -420, behavior: 'smooth' })
 }
+
+// ── Global search ─────────────────────────────────────────────────────────────
+// Driven by the navbar input - the layout component writes the active query
+// into route.query.q. We mirror it here, debounce, and call /api/search/global
+// which returns three buckets (emulation / gog / library). When a query is
+// active the normal "Recently Added" rows are hidden so the search results
+// take over the whole view.
+const searchQuery = computed(() => {
+  const q = route.query.q
+  return (Array.isArray(q) ? q[0] : q) || ''
+})
+const searchActive = computed(() => searchQuery.value.trim().length >= 2)
+
+interface SearchResults {
+  emulation: Array<{
+    id: number; name: string; cover_path: string | null;
+    cover_type: string | null; cover_aspect: string | null;
+    platform_slug: string | null; platform_fs_slug: string | null;
+    platform_name: string | null; platform_cover_aspect: string;
+  }>
+  gog:     Array<{ id: number; title: string; slug: string; cover_path: string | null; cover_url: string | null }>
+  library: Array<{ id: number; title: string; slug: string; cover_path: string | null }>
+}
+
+const searchResults = ref<SearchResults>({ emulation: [], gog: [], library: [] })
+const searchLoading = ref(false)
+const searchTotal   = computed(() =>
+  searchResults.value.emulation.length +
+  searchResults.value.gog.length +
+  searchResults.value.library.length,
+)
+
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+let searchAbort:  AbortController | null = null
+
+function searchRomAspect(rom: SearchResults['emulation'][number]): string {
+  if (rom.cover_type === 'box-3D') return '16/9'
+  return rom.cover_aspect || rom.platform_cover_aspect || '3/4'
+}
+
+async function runSearch(q: string) {
+  if (searchAbort) searchAbort.abort()
+  searchAbort = new AbortController()
+  searchLoading.value = true
+  try {
+    const { data } = await client.get('/search/global', {
+      params: { q, limit: 50 },
+      signal: searchAbort.signal,
+    })
+    searchResults.value = {
+      emulation: data.emulation ?? [],
+      gog:       data.gog       ?? [],
+      library:   data.library   ?? [],
+    }
+  } catch (e: any) {
+    if (e?.name === 'CanceledError' || e?.name === 'AbortError') return
+    searchResults.value = { emulation: [], gog: [], library: [] }
+  } finally {
+    searchLoading.value = false
+  }
+}
+
+watch(searchQuery, (q) => {
+  if (searchTimer) clearTimeout(searchTimer)
+  const trimmed = q.trim()
+  if (trimmed.length < 2) {
+    searchResults.value = { emulation: [], gog: [], library: [] }
+    searchLoading.value = false
+    if (searchAbort) searchAbort.abort()
+    return
+  }
+  searchTimer = setTimeout(() => runSearch(trimmed), 280)
+}, { immediate: true })
 
 onMounted(fetchAll)
 </script>
@@ -706,6 +882,27 @@ onMounted(fetchAll)
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 120px;
+}
+
+/* ── Global search results (Home navbar driven) ───────────────────────────── */
+.home-search-section {
+  display: flex; flex-direction: column; gap: var(--space-7, 28px);
+}
+.home-search-empty {
+  padding: 40px 20px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur-px, 22px)) saturate(var(--glass-sat, 180%));
+  -webkit-backdrop-filter: blur(var(--glass-blur-px, 22px)) saturate(var(--glass-sat, 180%));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--fs-md, 14px);
+}
+.home-search-group { display: flex; flex-direction: column; }
+.home-search-group-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 12px;
 }
 
 /* ── Couch Mode card ───────────────────────────────────────────────────────── */

@@ -146,6 +146,8 @@ GamesDownloader is a personal project built on the belief that games you own sho
 
 ### Security
 - **Two-factor authentication (2FA / TOTP)** any user can enrol an authenticator app (Google Authenticator, Authy, 1Password, etc.) from Profile > Security; QR code is rendered as a self-contained inline SVG (no third-party image service); 10 single-use recovery codes (bcrypt-hashed at rest) for the lost-device case; secret is staged in Redis until the user proves possession by submitting a valid code, never persisted speculatively
+- **2FA admin recovery** when a user loses both their authenticator and their recovery codes, an admin can clear their 2FA from the Users panel; both the user (if they have an email on file) and the admin alert pool receive an email notification, and the action is recorded in the audit log with actor and target
+- **Avatars are upload-only** profile pictures are accepted only via direct file upload, with a path-traversal guard against the avatars directory; the GOG-derived avatar flow stores the locally-downloaded file path, never an external URL, eliminating the open-redirect / SSRF surface that the previous redirect-based handler exposed
 - **Single-use password-reset links** the jti of every consumed reset token is added to a Redis blacklist for the rest of its 1 h validity, so the same email link cannot be replayed after a successful reset
 - **Brute-force protection**Redis-based fixed-window rate limiting per IP with configurable thresholds, ban duration, and whitelist; safe real-IP extraction behind Cloudflare, nginx, or direct access (applied to login, register, and token refresh endpoints)
 - **Security headers**`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `X-XSS-Protection` sent on every response
@@ -181,7 +183,7 @@ GamesDownloader is a personal project built on the belief that games you own sho
 ### Internationalization (i18n)
 - **8 languages**: English, Polish (hand-crafted), German, French, Spanish, Portuguese (BR), Russian, Italian (auto-translated, 1300+ keys each)
 - Language selector in Profile with flag icons
-- All Settings pages, libraries, detail pages, dialogs, metadata editors, Couch Mode, theme settings translated
+- All Settings pages, libraries, detail pages, dialogs, metadata editors, Profile (incl. the full GOG-connect walkthrough and the connected-account panel), Couch Mode, theme settings translated
 - Plugin i18n: plugins deliver translations via `i18n.json`, auto-merged on startup via `/api/plugins/frontend/i18n`
 - Locale-aware date formatting throughout the UI
 - Language detection from browser with localStorage persistence
@@ -196,6 +198,13 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - Platform filter (Games / Emulation)
 - GOG library quick-request tab
 
+### Smart Home Search
+- **One search box, every library** the navbar input on Home queries emulation ROMs, GOG games and the local Games Library at once and renders the hits grouped by source, so finding a title across hundreds of platforms takes a single keystroke instead of opening each library separately
+- **Server-side, paginated, debounced** queries hit `/api/search/global` with a 280 ms debounce and an AbortController so in-flight requests are cancelled while the user keeps typing; each bucket is capped at 50 hits independently so a generic word cannot crowd one library out of the others
+- **Per-library views unchanged** EmulationLibrary, GogLibrary and GamesLibrary keep their dedicated single-scope search boxes for users who already know which library they want to drill into
+- **Privacy aware** the GOG bucket is admin-only - mirroring the Home GOG card - so a non-admin token cannot enumerate the admin's private GOG list through the global endpoint
+- **Short queries skipped** queries below 2 characters return empty buckets so the database is not scanned while the user is still typing the first letter
+
 ### Backup & Restore
 - **Metadata backup** Settings > Metadata > Download backup builds a single ZIP containing JSON dumps of every scraped table (GOG games, Library games, ROMs, ROM platforms, Library files, Library torrents, plugin config, game requests)
 - **Media bundle (opt-in, on by default)** every cover, background, logo, icon, screenshot, support art, wheel, bezel, steamgrid, video and picto referenced by the metadata is added to the archive; preview shows total media count and size before download
@@ -208,6 +217,11 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - **`prefers-reduced-motion`** honoured globally - ambient orbs, Ken Burns hero, carousel, and other heavy CSS animations stop when the operating system or browser asks for reduced motion; `useReducedMotion()` composable available for JS-driven animations
 - **Keyboard focus rings** visible on every interactive element via `:focus-visible` (WCAG 2.1 SC 2.4.7)
 - **Animation kill-switch** `[data-animations="false"]` toggle for users who want to stop motion regardless of OS settings
+
+### Performance
+- **Conditional GET via ETag** authenticated `/api/` GET responses ship a weak `ETag` (blake2b of the body) and `Cache-Control: private, max-age=0, must-revalidate`; when the browser returns with `If-None-Match`, the server short-circuits with `304 Not Modified` and an empty body. Lists stay fresh on every interaction while unchanged payloads cost a single RTT instead of a full JSON transfer
+- **Auth user lookup cached in Redis** the bearer-token middleware used to fire `SELECT ... FROM users WHERE username = ?` on every authenticated request - one library page rendering 50 covers multiplied that into 50 round-trips to MariaDB. A 60 s Redis snapshot per username collapses that to one hit per minute; user updates (role, disable, password, TOTP) invalidate the snapshot for both the old and new username so changes propagate immediately
+- **Cache failures fall through** Redis errors and cache misses always fall back to a real DB query so the application keeps working when the cache is unreachable
 
 ### Other
 - 7-step setup wizard for first-run configuration

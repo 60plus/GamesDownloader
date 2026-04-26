@@ -465,6 +465,11 @@ app.include_router(roms_router)
 app.include_router(savestate_router)
 app.include_router(roms_settings_router)
 
+# ── Global search (Home navbar) ───────────────────────────────────────────────
+from endpoints.search_router import router as search_router  # noqa: E402
+
+app.include_router(search_router)
+
 # ── WebSocket / Socket.IO ─────────────────────────────────────────────────────
 # socketio.ASGIApp wraps the FastAPI app so Socket.IO WS connections are handled
 # before regular HTTP traffic is forwarded to FastAPI.

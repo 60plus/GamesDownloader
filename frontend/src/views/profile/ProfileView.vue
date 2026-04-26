@@ -173,51 +173,51 @@
               </div>
               <div class="sg-profile-info">
                 <div class="sg-username">{{ gogStatus.username }}</div>
-                <div class="sg-sub">Connected GOG account</div>
+                <div class="sg-sub">{{ t('profile.gog_connected_account') }}</div>
               </div>
               <button class="sg-disconnect-btn" @click="disconnectGog">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
                 </svg>
-                Disconnect
+                {{ t('profile.gog_disconnect_btn') }}
               </button>
             </div>
 
             <!-- Details table -->
             <div class="sg-details">
               <div v-if="gogStatus.email" class="sg-detail-row">
-                <span class="sg-detail-label">Email</span>
+                <span class="sg-detail-label">{{ t('profile.gog_email') }}</span>
                 <span class="sg-detail-value">{{ gogStatus.email }}</span>
               </div>
               <div class="sg-detail-row">
-                <span class="sg-detail-label">GOG User ID</span>
+                <span class="sg-detail-label">{{ t('profile.gog_user_id') }}</span>
                 <span class="sg-detail-value sg-mono">{{ gogStatus.user_id || '-' }}</span>
               </div>
               <div v-if="gogStatus.country" class="sg-detail-row">
-                <span class="sg-detail-label">Country</span>
+                <span class="sg-detail-label">{{ t('profile.gog_country') }}</span>
                 <span class="sg-detail-value">{{ gogStatus.country }}</span>
               </div>
               <div v-if="gogStatus.created_date" class="sg-detail-row">
-                <span class="sg-detail-label">GOG member since</span>
+                <span class="sg-detail-label">{{ t('profile.gog_member_since') }}</span>
                 <span class="sg-detail-value">{{ formatDate(gogStatus.created_date) }}</span>
               </div>
               <div v-if="gogStatus.games_count !== undefined && gogStatus.games_count !== null" class="sg-detail-row">
-                <span class="sg-detail-label">GOG games owned</span>
+                <span class="sg-detail-label">{{ t('profile.gog_games_owned') }}</span>
                 <span class="sg-detail-value"><span class="sg-count">{{ gogStatus.games_count }}</span></span>
               </div>
               <div v-if="gogStatus.movies_count !== undefined && gogStatus.movies_count !== null && gogStatus.movies_count > 0" class="sg-detail-row">
-                <span class="sg-detail-label">GOG movies owned</span>
+                <span class="sg-detail-label">{{ t('profile.gog_movies_owned') }}</span>
                 <span class="sg-detail-value"><span class="sg-count">{{ gogStatus.movies_count }}</span></span>
               </div>
               <div class="sg-detail-row">
-                <span class="sg-detail-label">Games in library</span>
+                <span class="sg-detail-label">{{ t('profile.gog_games_in_library') }}</span>
                 <span class="sg-detail-value">
                   <span v-if="gogStatus.game_count !== undefined" class="sg-count">{{ gogStatus.game_count }}</span>
                   <span v-else>-</span>
                 </span>
               </div>
               <div class="sg-detail-row">
-                <span class="sg-detail-label">Token expires</span>
+                <span class="sg-detail-label">{{ t('profile.gog_token_expires') }}</span>
                 <span class="sg-detail-value">{{ formatExpiry(gogStatus.expires_at) }}</span>
               </div>
             </div>
@@ -232,8 +232,8 @@
                   </svg>
                 </div>
                 <div>
-                  <div class="sg-section-title">Library sync</div>
-                  <div class="sg-section-sub">Refresh your GOG game library from the server.</div>
+                  <div class="sg-section-title">{{ t('profile.gog_library_sync') }}</div>
+                  <div class="sg-section-sub">{{ t('profile.gog_library_sync_sub') }}</div>
                 </div>
                 <button class="sg-sync-btn" :class="{ 'sg-sync-btn--running': gogSyncing }" :disabled="gogSyncing" @click="syncGog">
                   <span v-if="gogSyncing" class="spinner spinner--sm" />
@@ -241,7 +241,7 @@
                     <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
                     <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
                   </svg>
-                  {{ gogSyncing ? 'Syncing...' : 'Sync Now' }}
+                  {{ gogSyncing ? t('profile.gog_syncing') : t('profile.gog_sync_now') }}
                 </button>
               </div>
               <div v-if="gogSyncMsg" class="sg-sync-msg" :class="gogSyncOk ? 'sg-sync-msg--ok' : 'sg-sync-msg--err'">
@@ -256,43 +256,43 @@
             <div class="pv-gog-connect-info">
               <img src="/icons/gog.ico" width="20" height="20" alt="GOG" style="image-rendering:pixelated;opacity:.7" />
               <div>
-                <div class="pv-gog-connect-title">Connect your GOG account</div>
-                <div class="pv-gog-connect-desc">Link your GOG.com account to import your game library.</div>
+                <div class="pv-gog-connect-title">{{ t('profile.gog_connect_title') }}</div>
+                <div class="pv-gog-connect-desc">{{ t('profile.gog_connect_desc') }}</div>
               </div>
             </div>
 
             <!-- Step-by-step instructions -->
             <div class="pv-gog-steps">
-              <div class="pv-gog-steps-title">How to connect</div>
+              <div class="pv-gog-steps-title">{{ t('profile.gog_how_to_connect') }}</div>
               <ol class="pv-gog-steps-list">
-                <li>Click "Connect GOG Account" below</li>
-                <li>A new tab will open with the GOG.com login page</li>
-                <li>Log in with your GOG credentials</li>
-                <li>After login, you will be redirected to a URL like:<br/>
+                <li>{{ t('profile.gog_step_click') }}</li>
+                <li>{{ t('profile.gog_step_new_tab') }}</li>
+                <li>{{ t('profile.gog_step_login') }}</li>
+                <li>{{ t('profile.gog_step_redirect') }}<br/>
                   <code class="pv-gog-url-example">https://embed.gog.com/on_login_success?code=XXXXX</code>
                 </li>
-                <li>Copy the entire URL from the address bar</li>
-                <li>Paste it in the field below and click "Connect"</li>
+                <li>{{ t('profile.gog_step_copy_url') }}</li>
+                <li>{{ t('profile.gog_step_paste') }}</li>
               </ol>
-              <div class="pv-gog-steps-title" style="margin-top:12px">After connecting</div>
+              <div class="pv-gog-steps-title" style="margin-top:12px">{{ t('profile.gog_after_connecting') }}</div>
               <ul class="pv-gog-after-list">
-                <li>Click "Sync Library" to import your games</li>
-                <li>Your games will appear in Game Requests under My GOG tab</li>
-                <li>You can request games for the admin to download</li>
-                <li>If you disconnect, non-downloaded games will be removed</li>
+                <li>{{ t('profile.gog_after_sync') }}</li>
+                <li>{{ t('profile.gog_after_appear') }}</li>
+                <li>{{ t('profile.gog_after_request') }}</li>
+                <li>{{ t('profile.gog_after_disconnect') }}</li>
               </ul>
             </div>
 
             <button v-if="!gogCodeMode" class="pv-gog-action-btn pv-gog-action-btn--primary" @click="openGogAuth">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-              Connect GOG Account
+              {{ t('profile.gog_connect_btn') }}
             </button>
             <div v-if="gogCodeMode" class="pv-gog-code-wrap">
-              <div class="pv-gog-code-hint">Log in to GOG.com in the new tab, then paste the redirect URL here:</div>
+              <div class="pv-gog-code-hint">{{ t('profile.gog_code_hint') }}</div>
               <div class="pv-gog-code-row">
                 <input v-model="gogCode" class="pv-input" :placeholder="t('profile.paste_gog_code')" />
                 <button class="pv-gog-action-btn pv-gog-action-btn--primary" @click="submitGogCode" :disabled="gogLinking || !gogCode.trim()">
-                  {{ gogLinking ? 'Connecting...' : 'Connect' }}
+                  {{ gogLinking ? t('profile.gog_connecting') : t('profile.gog_connect_short') }}
                 </button>
               </div>
               <div v-if="gogError" class="pv-msg pv-msg--err" style="margin-top:8px">{{ gogError }}</div>
@@ -1064,7 +1064,7 @@ async function submitGogCode() {
     const { data: st } = await client.get('/gog/user/auth/status')
     gogStatus.value = st
   } catch (e: any) {
-    gogError.value = e?.response?.data?.detail || 'Failed to connect GOG account.'
+    gogError.value = e?.response?.data?.detail || t('profile.gog_failed_to_connect')
   } finally {
     gogLinking.value = false
   }
@@ -1080,17 +1080,17 @@ async function syncGog() {
     const { data } = await client.get('/gog/user/auth/status')
     gogStatus.value = data
     gogSyncOk.value  = true
-    gogSyncMsg.value = `Sync complete - ${data.game_count ?? 0} games`
+    gogSyncMsg.value = t('profile.gog_sync_complete', { count: data.game_count ?? 0 })
   } catch (e: any) {
     gogSyncOk.value  = false
-    gogSyncMsg.value = e?.response?.data?.detail || 'Sync failed.'
+    gogSyncMsg.value = e?.response?.data?.detail || t('profile.gog_sync_failed')
   } finally {
     gogSyncing.value = false
   }
 }
 
 async function disconnectGog() {
-  if (!confirm('Disconnect your GOG account? Non-downloaded games will be removed.')) return
+  if (!confirm(t('profile.gog_disconnect_confirm'))) return
   try {
     await client.delete('/gog/user/auth')
     gogStatus.value = { authenticated: false }

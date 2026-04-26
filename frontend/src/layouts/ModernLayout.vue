@@ -149,7 +149,11 @@ const userRole = computed(() => {
 const isAdmin = computed(() => auth.user?.role === 'admin');
 
 // ── Sync navbar searchQuery ↔ route.query.q ─────────────────────────────────
+// The Home view also consumes the navbar query (global search across all
+// libraries), so its route is treated as a library route here.
 const isLibraryRoute = computed(() =>
+  route.name === "home" ||
+  route.path === "/" ||
   route.path.startsWith("/games") ||
   route.path.startsWith("/library") ||
   route.path.startsWith("/emulation")
