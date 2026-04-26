@@ -3,15 +3,7 @@
     <!-- Language picker -->
     <div class="welcome-lang-row">
       <label class="welcome-lang-label">{{ t('setup.welcome.language_label') }}</label>
-      <select
-        class="welcome-lang-select"
-        :value="locale"
-        @change="setLocale(($event.target as HTMLSelectElement).value)"
-      >
-        <option v-for="lang in SUPPORTED" :key="lang.code" :value="lang.code">
-          {{ lang.flag }} {{ lang.name }}
-        </option>
-      </select>
+      <LanguagePicker />
     </div>
 
     <h2 class="step-title">{{ t('setup.welcome.title') }}</h2>
@@ -35,8 +27,9 @@
 
 <script setup lang="ts">
 import { useI18n } from '@/i18n'
+import LanguagePicker from '@/components/common/LanguagePicker.vue'
 
-const { t, locale, setLocale, SUPPORTED } = useI18n()
+const { t } = useI18n()
 const emit = defineEmits<{ next: [] }>()
 
 const checklist = [
@@ -73,20 +66,6 @@ const checklist = [
   text-transform: uppercase;
   letter-spacing: .05em;
 }
-.welcome-lang-select {
-  padding: 8px 14px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--glass-border, rgba(255,255,255,.1));
-  background: rgba(255,255,255,.04);
-  color: var(--text, #fff);
-  font-size: var(--fs-md, 14px);
-  font-family: inherit;
-  cursor: pointer;
-  outline: none;
-  transition: border-color var(--transition);
-}
-.welcome-lang-select:focus { border-color: var(--pl); box-shadow: 0 0 0 3px var(--pl-dim); }
-.welcome-lang-select option { background: var(--bg2, #0a0a1a); color: var(--text, #fff); }
 
 .step-title {
   font-size: 26px;

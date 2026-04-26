@@ -21,15 +21,17 @@ import it from './it.json'
 // All translations loaded statically (dynamic import breaks MIME type in production)
 const bundled: Record<string, Record<string, string>> = { en, pl, de, fr, es, pt, ru, it }
 
+// `flag` is an ISO 3166-1 alpha-2 country code (lowercase) used as the
+// flag-icons CSS class suffix - templates render <span class="fi fi-XX">.
 const SUPPORTED = [
-  { code: 'en', name: 'English', flag: '🇬🇧' },
-  { code: 'pl', name: 'Polski', flag: '🇵🇱' },
-  { code: 'de', name: 'Deutsch', flag: '🇩🇪' },
-  { code: 'fr', name: 'Français', flag: '🇫🇷' },
-  { code: 'es', name: 'Español', flag: '🇪🇸' },
-  { code: 'pt', name: 'Português', flag: '🇧🇷' },
-  { code: 'ru', name: 'Русский', flag: '🇷🇺' },
-  { code: 'it', name: 'Italiano', flag: '🇮🇹' },
+  { code: 'en', name: 'English',  flag: 'gb' },
+  { code: 'pl', name: 'Polski',   flag: 'pl' },
+  { code: 'de', name: 'Deutsch',  flag: 'de' },
+  { code: 'fr', name: 'Français', flag: 'fr' },
+  { code: 'es', name: 'Español',  flag: 'es' },
+  { code: 'pt', name: 'Português', flag: 'br' },
+  { code: 'ru', name: 'Русский',  flag: 'ru' },
+  { code: 'it', name: 'Italiano', flag: 'it' },
 ]
 
 // Detect initial locale

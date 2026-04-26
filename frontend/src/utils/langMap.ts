@@ -1,143 +1,149 @@
 /**
- * Shared language code → flag + display name mapping.
+ * Shared language code -> flag + display name mapping.
  * Used by GOG Detail, Games Detail, Classic Detail for consistent language display.
  *
+ * The `flag` field carries an ISO 3166-1 alpha-2 country code (lowercase),
+ * not a Unicode emoji. Templates render it as
+ *   <span class="fi" :class="`fi-${entry.flag}`"></span>
+ * so the CSS sprite from `flag-icons` shows on every platform - the bare
+ * regional-indicator emoji used to display as letters on Windows Chrome / Edge.
+ *
  * Normalization groups (deduplication):
- *   Portuguese (Brazil) + Portuguese → Portuguese
- *   Chinese (Simplified) + Chinese (Traditional) → Chinese
- *   English (US) + English → English
- *   Spanish (Latin America) + Spanish → Spanish
+ *   Portuguese (Brazil) + Portuguese -> Portuguese
+ *   Chinese (Simplified) + Chinese (Traditional) -> Chinese
+ *   English (US) + English -> English
+ *   Spanish (Latin America) + Spanish -> Spanish
  */
 
 export interface LangEntry {
-  flag: string;
+  flag: string;   // ISO 3166-1 alpha-2 (lowercase) for `<span class="fi fi-XX">`
   name: string;
   /** If set, this code is a variant of `group` - deduplicated to group in simplified display */
   group?: string;
 }
 
 export const LANG_MAP: Record<string, LangEntry> = {
-  en:       { flag: '🇬🇧', name: 'English' },
-  'en-US':  { flag: '🇺🇸', name: 'English (US)', group: 'en' },
-  pl:       { flag: '🇵🇱', name: 'Polish' },
-  de:       { flag: '🇩🇪', name: 'German' },
-  fr:       { flag: '🇫🇷', name: 'French' },
-  es:       { flag: '🇪🇸', name: 'Spanish' },
-  'es-419': { flag: '🇲🇽', name: 'Spanish (Latin America)', group: 'es' },
-  it:       { flag: '🇮🇹', name: 'Italian' },
-  ru:       { flag: '🇷🇺', name: 'Russian' },
-  cn:       { flag: '🇨🇳', name: 'Chinese', group: 'zh-group' },    // GOG code
-  zh:       { flag: '🇨🇳', name: 'Chinese', group: 'zh-group' },    // GOG code
-  'zh-Hans':{ flag: '🇨🇳', name: 'Chinese', group: 'zh-group' },    // ISO
-  'zh-Hant':{ flag: '🇹🇼', name: 'Chinese', group: 'zh-group' },    // ISO
-  jp:       { flag: '🇯🇵', name: 'Japanese' },   // GOG code
-  ja:       { flag: '🇯🇵', name: 'Japanese', group: 'jp' },   // ISO
-  ko:       { flag: '🇰🇷', name: 'Korean' },
-  pt:       { flag: '🇵🇹', name: 'Portuguese' },
-  br:       { flag: '🇧🇷', name: 'Portuguese', group: 'pt' }, // GOG code
-  'pt-BR':  { flag: '🇧🇷', name: 'Portuguese', group: 'pt' }, // ISO
-  nl:       { flag: '🇳🇱', name: 'Dutch' },
-  cz:       { flag: '🇨🇿', name: 'Czech' },  // GOG code
-  cs:       { flag: '🇨🇿', name: 'Czech', group: 'cz' },  // ISO
-  hu:       { flag: '🇭🇺', name: 'Hungarian' },
-  ro:       { flag: '🇷🇴', name: 'Romanian' },
-  sk:       { flag: '🇸🇰', name: 'Slovak' },
-  sv:       { flag: '🇸🇪', name: 'Swedish' },
-  fi:       { flag: '🇫🇮', name: 'Finnish' },
-  da:       { flag: '🇩🇰', name: 'Danish' },
-  no:       { flag: '🇳🇴', name: 'Norwegian' },
-  tr:       { flag: '🇹🇷', name: 'Turkish' },
-  uk:       { flag: '🇺🇦', name: 'Ukrainian' },
-  ar:       { flag: '🇸🇦', name: 'Arabic' },
-  el:       { flag: '🇬🇷', name: 'Greek' },
-  he:       { flag: '🇮🇱', name: 'Hebrew' },
-  th:       { flag: '🇹🇭', name: 'Thai' },
+  en:       { flag: 'gb', name: 'English' },
+  'en-US':  { flag: 'us', name: 'English (US)', group: 'en' },
+  pl:       { flag: 'pl', name: 'Polish' },
+  de:       { flag: 'de', name: 'German' },
+  fr:       { flag: 'fr', name: 'French' },
+  es:       { flag: 'es', name: 'Spanish' },
+  'es-419': { flag: 'mx', name: 'Spanish (Latin America)', group: 'es' },
+  it:       { flag: 'it', name: 'Italian' },
+  ru:       { flag: 'ru', name: 'Russian' },
+  cn:       { flag: 'cn', name: 'Chinese', group: 'zh-group' },    // GOG code
+  zh:       { flag: 'cn', name: 'Chinese', group: 'zh-group' },    // GOG code
+  'zh-Hans':{ flag: 'cn', name: 'Chinese', group: 'zh-group' },    // ISO
+  'zh-Hant':{ flag: 'tw', name: 'Chinese', group: 'zh-group' },    // ISO
+  jp:       { flag: 'jp', name: 'Japanese' },   // GOG code
+  ja:       { flag: 'jp', name: 'Japanese', group: 'jp' },   // ISO
+  ko:       { flag: 'kr', name: 'Korean' },
+  pt:       { flag: 'pt', name: 'Portuguese' },
+  br:       { flag: 'br', name: 'Portuguese', group: 'pt' }, // GOG code
+  'pt-BR':  { flag: 'br', name: 'Portuguese', group: 'pt' }, // ISO
+  nl:       { flag: 'nl', name: 'Dutch' },
+  cz:       { flag: 'cz', name: 'Czech' },  // GOG code
+  cs:       { flag: 'cz', name: 'Czech', group: 'cz' },  // ISO
+  hu:       { flag: 'hu', name: 'Hungarian' },
+  ro:       { flag: 'ro', name: 'Romanian' },
+  sk:       { flag: 'sk', name: 'Slovak' },
+  sv:       { flag: 'se', name: 'Swedish' },
+  fi:       { flag: 'fi', name: 'Finnish' },
+  da:       { flag: 'dk', name: 'Danish' },
+  no:       { flag: 'no', name: 'Norwegian' },
+  tr:       { flag: 'tr', name: 'Turkish' },
+  uk:       { flag: 'ua', name: 'Ukrainian' },
+  ar:       { flag: 'sa', name: 'Arabic' },
+  el:       { flag: 'gr', name: 'Greek' },
+  he:       { flag: 'il', name: 'Hebrew' },
+  th:       { flag: 'th', name: 'Thai' },
   // GOG non-standard codes
-  es_mx:    { flag: '🇲🇽', name: 'Spanish', group: 'es' },
-  gk:       { flag: '🇬🇷', name: 'Greek',   group: 'el' },
-  sb:       { flag: '🇷🇸', name: 'Serbian' },
+  es_mx:    { flag: 'mx', name: 'Spanish', group: 'es' },
+  gk:       { flag: 'gr', name: 'Greek',   group: 'el' },
+  sb:       { flag: 'rs', name: 'Serbian' },
 };
 
 /**
  * Normalize full language names to simplified base form.
- * "Spanish - Spain" → "Spanish", "Portuguese - Brazil" → "Portuguese",
- * "Simplified Chinese" → "Chinese", "Traditional Chinese" → "Chinese", etc.
+ * "Spanish - Spain" -> "Spanish", "Portuguese - Brazil" -> "Portuguese",
+ * "Simplified Chinese" -> "Chinese", "Traditional Chinese" -> "Chinese", etc.
  */
 const NAME_NORMALIZE: Record<string, { flag: string; name: string }> = {
-  'spanish - spain':        { flag: '🇪🇸', name: 'Spanish' },
-  'spanish - latin america':{ flag: '🇲🇽', name: 'Spanish' },
-  'portuguese - brazil':    { flag: '🇧🇷', name: 'Portuguese' },
-  'portuguese - portugal':  { flag: '🇵🇹', name: 'Portuguese' },
-  'portuguese (brazil)':    { flag: '🇧🇷', name: 'Portuguese' },
-  'simplified chinese':     { flag: '🇨🇳', name: 'Chinese' },
-  'traditional chinese':    { flag: '🇹🇼', name: 'Chinese' },
-  'chinese (simplified)':   { flag: '🇨🇳', name: 'Chinese' },
-  'chinese (traditional)':  { flag: '🇹🇼', name: 'Chinese' },
-  'brazilian portuguese':   { flag: '🇧🇷', name: 'Portuguese' },
-  'english (us)':           { flag: '🇺🇸', name: 'English' },
-  'english (uk)':           { flag: '🇬🇧', name: 'English' },
-  'english - united states':{ flag: '🇺🇸', name: 'English' },
-  'french - france':        { flag: '🇫🇷', name: 'French' },
-  'german - germany':       { flag: '🇩🇪', name: 'German' },
-  'italian - italy':        { flag: '🇮🇹', name: 'Italian' },
-  'russian - russia':       { flag: '🇷🇺', name: 'Russian' },
-  'japanese - japan':       { flag: '🇯🇵', name: 'Japanese' },
-  'korean - korea':         { flag: '🇰🇷', name: 'Korean' },
-  'polish - poland':        { flag: '🇵🇱', name: 'Polish' },
-  'dutch - netherlands':    { flag: '🇳🇱', name: 'Dutch' },
-  'czech - czech republic': { flag: '🇨🇿', name: 'Czech' },
-  'hungarian - hungary':    { flag: '🇭🇺', name: 'Hungarian' },
-  'romanian - romania':     { flag: '🇷🇴', name: 'Romanian' },
-  'turkish - turkey':       { flag: '🇹🇷', name: 'Turkish' },
-  'swedish - sweden':       { flag: '🇸🇪', name: 'Swedish' },
-  'finnish - finland':      { flag: '🇫🇮', name: 'Finnish' },
-  'danish - denmark':       { flag: '🇩🇰', name: 'Danish' },
-  'norwegian - norway':     { flag: '🇳🇴', name: 'Norwegian' },
-  'arabic - saudi arabia':  { flag: '🇸🇦', name: 'Arabic' },
-  'thai - thailand':        { flag: '🇹🇭', name: 'Thai' },
-  'greek - greece':         { flag: '🇬🇷', name: 'Greek' },
-  'ukrainian - ukraine':    { flag: '🇺🇦', name: 'Ukrainian' },
-  'slovak - slovakia':      { flag: '🇸🇰', name: 'Slovak' },
-  'hebrew - israel':        { flag: '🇮🇱', name: 'Hebrew' },
+  'spanish - spain':        { flag: 'es', name: 'Spanish' },
+  'spanish - latin america':{ flag: 'mx', name: 'Spanish' },
+  'portuguese - brazil':    { flag: 'br', name: 'Portuguese' },
+  'portuguese - portugal':  { flag: 'pt', name: 'Portuguese' },
+  'portuguese (brazil)':    { flag: 'br', name: 'Portuguese' },
+  'simplified chinese':     { flag: 'cn', name: 'Chinese' },
+  'traditional chinese':    { flag: 'tw', name: 'Chinese' },
+  'chinese (simplified)':   { flag: 'cn', name: 'Chinese' },
+  'chinese (traditional)':  { flag: 'tw', name: 'Chinese' },
+  'brazilian portuguese':   { flag: 'br', name: 'Portuguese' },
+  'english (us)':           { flag: 'us', name: 'English' },
+  'english (uk)':           { flag: 'gb', name: 'English' },
+  'english - united states':{ flag: 'us', name: 'English' },
+  'french - france':        { flag: 'fr', name: 'French' },
+  'german - germany':       { flag: 'de', name: 'German' },
+  'italian - italy':        { flag: 'it', name: 'Italian' },
+  'russian - russia':       { flag: 'ru', name: 'Russian' },
+  'japanese - japan':       { flag: 'jp', name: 'Japanese' },
+  'korean - korea':         { flag: 'kr', name: 'Korean' },
+  'polish - poland':        { flag: 'pl', name: 'Polish' },
+  'dutch - netherlands':    { flag: 'nl', name: 'Dutch' },
+  'czech - czech republic': { flag: 'cz', name: 'Czech' },
+  'hungarian - hungary':    { flag: 'hu', name: 'Hungarian' },
+  'romanian - romania':     { flag: 'ro', name: 'Romanian' },
+  'turkish - turkey':       { flag: 'tr', name: 'Turkish' },
+  'swedish - sweden':       { flag: 'se', name: 'Swedish' },
+  'finnish - finland':      { flag: 'fi', name: 'Finnish' },
+  'danish - denmark':       { flag: 'dk', name: 'Danish' },
+  'norwegian - norway':     { flag: 'no', name: 'Norwegian' },
+  'arabic - saudi arabia':  { flag: 'sa', name: 'Arabic' },
+  'thai - thailand':        { flag: 'th', name: 'Thai' },
+  'greek - greece':         { flag: 'gr', name: 'Greek' },
+  'ukrainian - ukraine':    { flag: 'ua', name: 'Ukrainian' },
+  'slovak - slovakia':      { flag: 'sk', name: 'Slovak' },
+  'hebrew - israel':        { flag: 'il', name: 'Hebrew' },
   // Native language names (GOG API returns these as values)
-  'deutsch':                { flag: '🇩🇪', name: 'German' },
-  'français':               { flag: '🇫🇷', name: 'French' },
-  'español':                { flag: '🇪🇸', name: 'Spanish' },
-  'italiano':               { flag: '🇮🇹', name: 'Italian' },
-  'português':              { flag: '🇵🇹', name: 'Portuguese' },
-  'português do brasil':    { flag: '🇧🇷', name: 'Portuguese' },
-  'polski':                 { flag: '🇵🇱', name: 'Polish' },
-  'русский':                { flag: '🇷🇺', name: 'Russian' },
-  'Nederlands':             { flag: '🇳🇱', name: 'Dutch' },
-  'nederlands':              { flag: '🇳🇱', name: 'Dutch' },
-  'čeština':                { flag: '🇨🇿', name: 'Czech' },
-  'magyar':                 { flag: '🇭🇺', name: 'Hungarian' },
-  'română':                 { flag: '🇷🇴', name: 'Romanian' },
-  'slovenčina':             { flag: '🇸🇰', name: 'Slovak' },
-  'svenska':                { flag: '🇸🇪', name: 'Swedish' },
-  'suomi':                  { flag: '🇫🇮', name: 'Finnish' },
-  'dansk':                  { flag: '🇩🇰', name: 'Danish' },
-  'norsk':                  { flag: '🇳🇴', name: 'Norwegian' },
-  'türkçe':                 { flag: '🇹🇷', name: 'Turkish' },
-  'українська':             { flag: '🇺🇦', name: 'Ukrainian' },
-  'العربية':                { flag: '🇸🇦', name: 'Arabic' },
-  'ελληνικά':               { flag: '🇬🇷', name: 'Greek' },
-  'עברית':                  { flag: '🇮🇱', name: 'Hebrew' },
-  'ไทย':                    { flag: '🇹🇭', name: 'Thai' },
-  '日本語':                  { flag: '🇯🇵', name: 'Japanese' },
-  '한국어':                  { flag: '🇰🇷', name: 'Korean' },
-  '中文':                    { flag: '🇨🇳', name: 'Chinese' },
-  '简体中文':                { flag: '🇨🇳', name: 'Chinese' },
-  '繁體中文':                { flag: '🇹🇼', name: 'Chinese' },
-  '中文(简体)':              { flag: '🇨🇳', name: 'Chinese' },
-  '中文(繁體)':              { flag: '🇹🇼', name: 'Chinese' },
-  'český':                  { flag: '🇨🇿', name: 'Czech' },
-  'español (al)':           { flag: '🇲🇽', name: 'Spanish' },
-  'српска':                 { flag: '🇷🇸', name: 'Serbian' },
-  'yкраїнська':             { flag: '🇺🇦', name: 'Ukrainian' },
+  'deutsch':                { flag: 'de', name: 'German' },
+  'français':               { flag: 'fr', name: 'French' },
+  'español':                { flag: 'es', name: 'Spanish' },
+  'italiano':               { flag: 'it', name: 'Italian' },
+  'português':              { flag: 'pt', name: 'Portuguese' },
+  'português do brasil':    { flag: 'br', name: 'Portuguese' },
+  'polski':                 { flag: 'pl', name: 'Polish' },
+  'русский':                { flag: 'ru', name: 'Russian' },
+  'Nederlands':             { flag: 'nl', name: 'Dutch' },
+  'nederlands':             { flag: 'nl', name: 'Dutch' },
+  'čeština':                { flag: 'cz', name: 'Czech' },
+  'magyar':                 { flag: 'hu', name: 'Hungarian' },
+  'română':                 { flag: 'ro', name: 'Romanian' },
+  'slovenčina':             { flag: 'sk', name: 'Slovak' },
+  'svenska':                { flag: 'se', name: 'Swedish' },
+  'suomi':                  { flag: 'fi', name: 'Finnish' },
+  'dansk':                  { flag: 'dk', name: 'Danish' },
+  'norsk':                  { flag: 'no', name: 'Norwegian' },
+  'türkçe':                 { flag: 'tr', name: 'Turkish' },
+  'українська':             { flag: 'ua', name: 'Ukrainian' },
+  'العربية':                { flag: 'sa', name: 'Arabic' },
+  'ελληνικά':               { flag: 'gr', name: 'Greek' },
+  'עברית':                  { flag: 'il', name: 'Hebrew' },
+  'ไทย':                    { flag: 'th', name: 'Thai' },
+  '日本語':                  { flag: 'jp', name: 'Japanese' },
+  '한국어':                  { flag: 'kr', name: 'Korean' },
+  '中文':                    { flag: 'cn', name: 'Chinese' },
+  '简体中文':                { flag: 'cn', name: 'Chinese' },
+  '繁體中文':                { flag: 'tw', name: 'Chinese' },
+  '中文(简体)':              { flag: 'cn', name: 'Chinese' },
+  '中文(繁體)':              { flag: 'tw', name: 'Chinese' },
+  'český':                  { flag: 'cz', name: 'Czech' },
+  'español (al)':           { flag: 'mx', name: 'Spanish' },
+  'српска':                 { flag: 'rs', name: 'Serbian' },
+  'yкраїнська':             { flag: 'ua', name: 'Ukrainian' },
 };
 
-/** Simple base-name lookup: "Spanish" → flag+name from LANG_MAP */
+/** Simple base-name lookup: "Spanish" -> flag+name from LANG_MAP */
 const BASE_NAME_MAP: Record<string, { flag: string; name: string }> = {};
 for (const entry of Object.values(LANG_MAP)) {
   const bn = entry.name.toLowerCase();
@@ -146,6 +152,10 @@ for (const entry of Object.values(LANG_MAP)) {
 
 /**
  * Resolve a language code or full name to a LangEntry.
+ *
+ * The returned `flag` is an ISO 3166-1 alpha-2 country code (lowercase) -
+ * empty string means "no flag known", in which case the consuming template
+ * should render a fallback (globe glyph or a bordered placeholder).
  */
 export function resolveLang(codeOrName: string): { flag: string; name: string } {
   const key = codeOrName.trim();
@@ -153,15 +163,15 @@ export function resolveLang(codeOrName: string): { flag: string; name: string } 
   if (LANG_MAP[key]) return { flag: LANG_MAP[key].flag, name: LANG_MAP[key].name };
   const lc = key.toLowerCase();
   if (LANG_MAP[lc]) return { flag: LANG_MAP[lc].flag, name: LANG_MAP[lc].name };
-  // Full name normalization ("Spanish - Spain" → Spanish)
+  // Full name normalization ("Spanish - Spain" -> Spanish)
   if (NAME_NORMALIZE[lc]) return NAME_NORMALIZE[lc];
-  // Base name match ("Spanish" → flag)
+  // Base name match ("Spanish" -> flag)
   if (BASE_NAME_MAP[lc]) return BASE_NAME_MAP[lc];
   // Strip " - Country" suffix and try again
   const stripped = lc.replace(/\s*[-–]\s*.+$/, '').trim();
   if (stripped !== lc && BASE_NAME_MAP[stripped]) return BASE_NAME_MAP[stripped];
-  // Fallback
-  return { flag: '🌐', name: key };
+  // Fallback - empty flag code, original key as name
+  return { flag: '', name: key };
 }
 
 /**

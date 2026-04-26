@@ -348,7 +348,10 @@
               <template v-if="gameLangs.length">
                 <span class="gd-dk">{{ t('detail.languages') }}</span>
                 <div class="gd-dv gd-lang-flags">
-                  <span v-for="l in gameLangs" :key="l.name" class="gd-lang-flag" :title="l.name">{{ l.flag }}</span>
+                  <span v-for="l in gameLangs" :key="l.name" class="gd-lang-flag" :title="l.name">
+                    <span v-if="l.flag" class="fi" :class="`fi-${l.flag}`"></span>
+                    <span v-else>{{ l.name }}</span>
+                  </span>
                 </div>
               </template>
               <template v-if="game.hltb_main_s || game.hltb_complete_s">
@@ -1616,10 +1619,12 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 }
 .gd-lang-flags { display: flex; flex-wrap: wrap; gap: var(--space-1, 4px); }
 .gd-lang-flag {
-  font-size: 20px; cursor: default;
+  display: inline-flex; align-items: center;
+  font-size: 20px; line-height: 1; cursor: default;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,.3));
   transition: transform .12s;
 }
+.gd-lang-flag .fi { width: 1.4em; height: 1em; border-radius: 2px; }
 .gd-lang-flag:hover { transform: scale(1.25); }
 
 /* ══ SECTION LABEL ═══════════════════════════════════════════════════════════ */

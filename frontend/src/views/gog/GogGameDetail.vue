@@ -340,7 +340,10 @@
               <template v-if="installerLanguages.length">
                 <span class="gd-dk">{{ t('detail.languages') }}</span>
                 <div class="gd-dv gd-lang-flags">
-                  <span v-for="lang in installerLanguages" :key="lang.code" class="gd-lang-flag" :title="lang.name">{{ lang.flag }}</span>
+                  <span v-for="lang in installerLanguages" :key="lang.code" class="gd-lang-flag" :title="lang.name">
+                    <span v-if="lang.flag" class="fi" :class="`fi-${lang.flag}`"></span>
+                    <span v-else>{{ lang.name }}</span>
+                  </span>
                 </div>
               </template>
               <template v-if="game.developer">
@@ -795,47 +798,51 @@ const extrasExpanded = ref(false)
 // External ratings (lazy-fetched after game loads)
 const externalRatings = ref<{ rawg?: number; igdb?: number; steam?: number; plugins?: { id: string; name: string; rating: number; logo: string }[] }>({})
 
-// Language code → { flag emoji, full name }
+// Language code -> { flag country code (ISO 3166-1 alpha-2 lowercase), full name }.
+// `flag` is consumed as `<span class="fi" :class="`fi-${flag}`">` so the
+// rendered glyph comes from the flag-icons CSS sprite, not a regional-
+// indicator emoji (which fails to render on Windows Chrome / Edge).
+//
 // Includes both ISO 639-1 codes AND GOG-specific non-standard codes:
 //   cn=Simplified Chinese, zh=Traditional Chinese, br=Brazilian Portuguese,
 //   cz=Czech, jp=Japanese (GOG uses these instead of standard ISO codes)
 const LANG_MAP: Record<string, { flag: string; name: string }> = {
-  en:       { flag: '🇬🇧', name: 'English' },
-  'en-US':  { flag: '🇺🇸', name: 'English (US)' },
-  pl:       { flag: '🇵🇱', name: 'Polish' },
-  de:       { flag: '🇩🇪', name: 'German' },
-  fr:       { flag: '🇫🇷', name: 'French' },
-  es:       { flag: '🇪🇸', name: 'Spanish' },
-  'es-419': { flag: '🇲🇽', name: 'Spanish (Latin America)' },
-  it:       { flag: '🇮🇹', name: 'Italian' },
-  ru:       { flag: '🇷🇺', name: 'Russian' },
+  en:       { flag: 'gb', name: 'English' },
+  'en-US':  { flag: 'us', name: 'English (US)' },
+  pl:       { flag: 'pl', name: 'Polish' },
+  de:       { flag: 'de', name: 'German' },
+  fr:       { flag: 'fr', name: 'French' },
+  es:       { flag: 'es', name: 'Spanish' },
+  'es-419': { flag: 'mx', name: 'Spanish (Latin America)' },
+  it:       { flag: 'it', name: 'Italian' },
+  ru:       { flag: 'ru', name: 'Russian' },
   // Chinese - GOG uses 'cn' for Simplified, 'zh' for Traditional
-  cn:       { flag: '🇨🇳', name: 'Chinese (Simplified)' },  // GOG code
-  zh:       { flag: '🇹🇼', name: 'Chinese (Traditional)' }, // GOG code
-  'zh-Hans':{ flag: '🇨🇳', name: 'Chinese (Simplified)' },  // ISO
-  'zh-Hant':{ flag: '🇹🇼', name: 'Chinese (Traditional)' }, // ISO
-  jp:       { flag: '🇯🇵', name: 'Japanese' },   // GOG code (ISO: ja)
-  ja:       { flag: '🇯🇵', name: 'Japanese' },   // ISO
-  ko:       { flag: '🇰🇷', name: 'Korean' },
-  pt:       { flag: '🇵🇹', name: 'Portuguese' },
-  br:       { flag: '🇧🇷', name: 'Portuguese (Brazil)' }, // GOG code (ISO: pt-BR)
-  'pt-BR':  { flag: '🇧🇷', name: 'Portuguese (Brazil)' }, // ISO
-  nl:       { flag: '🇳🇱', name: 'Dutch' },
-  cz:       { flag: '🇨🇿', name: 'Czech' },  // GOG code (ISO: cs)
-  cs:       { flag: '🇨🇿', name: 'Czech' },  // ISO
-  hu:       { flag: '🇭🇺', name: 'Hungarian' },
-  ro:       { flag: '🇷🇴', name: 'Romanian' },
-  sk:       { flag: '🇸🇰', name: 'Slovak' },
-  sv:       { flag: '🇸🇪', name: 'Swedish' },
-  fi:       { flag: '🇫🇮', name: 'Finnish' },
-  da:       { flag: '🇩🇰', name: 'Danish' },
-  no:       { flag: '🇳🇴', name: 'Norwegian' },
-  tr:       { flag: '🇹🇷', name: 'Turkish' },
-  uk:       { flag: '🇺🇦', name: 'Ukrainian' },
-  ar:       { flag: '🇸🇦', name: 'Arabic' },
-  el:       { flag: '🇬🇷', name: 'Greek' },
-  he:       { flag: '🇮🇱', name: 'Hebrew' },
-  th:       { flag: '🇹🇭', name: 'Thai' },
+  cn:       { flag: 'cn', name: 'Chinese (Simplified)' },  // GOG code
+  zh:       { flag: 'tw', name: 'Chinese (Traditional)' }, // GOG code
+  'zh-Hans':{ flag: 'cn', name: 'Chinese (Simplified)' },  // ISO
+  'zh-Hant':{ flag: 'tw', name: 'Chinese (Traditional)' }, // ISO
+  jp:       { flag: 'jp', name: 'Japanese' },   // GOG code (ISO: ja)
+  ja:       { flag: 'jp', name: 'Japanese' },   // ISO
+  ko:       { flag: 'kr', name: 'Korean' },
+  pt:       { flag: 'pt', name: 'Portuguese' },
+  br:       { flag: 'br', name: 'Portuguese (Brazil)' }, // GOG code (ISO: pt-BR)
+  'pt-BR':  { flag: 'br', name: 'Portuguese (Brazil)' }, // ISO
+  nl:       { flag: 'nl', name: 'Dutch' },
+  cz:       { flag: 'cz', name: 'Czech' },  // GOG code (ISO: cs)
+  cs:       { flag: 'cz', name: 'Czech' },  // ISO
+  hu:       { flag: 'hu', name: 'Hungarian' },
+  ro:       { flag: 'ro', name: 'Romanian' },
+  sk:       { flag: 'sk', name: 'Slovak' },
+  sv:       { flag: 'se', name: 'Swedish' },
+  fi:       { flag: 'fi', name: 'Finnish' },
+  da:       { flag: 'dk', name: 'Danish' },
+  no:       { flag: 'no', name: 'Norwegian' },
+  tr:       { flag: 'tr', name: 'Turkish' },
+  uk:       { flag: 'ua', name: 'Ukrainian' },
+  ar:       { flag: 'sa', name: 'Arabic' },
+  el:       { flag: 'gr', name: 'Greek' },
+  he:       { flag: 'il', name: 'Hebrew' },
+  th:       { flag: 'th', name: 'Thai' },
 }
 
 // ── 3D tilt effect ────────────────────────────────────────────────────────────
@@ -880,7 +887,7 @@ const installerLanguages = computed(() => {
     else keys = []
     if (keys.length > 0) return keys.map(code => ({
       code,
-      flag: LANG_MAP[code]?.flag || '🌐',
+      flag: LANG_MAP[code]?.flag || '',
       name: LANG_MAP[code]?.name || code,
     }))
   }
@@ -896,7 +903,7 @@ const installerLanguages = computed(() => {
   }
   return [...codes].map(code => ({
     code,
-    flag: LANG_MAP[code]?.flag || '🌐',
+    flag: LANG_MAP[code]?.flag || '',
     name: LANG_MAP[code]?.name || code,
   }))
 })
@@ -1908,9 +1915,10 @@ async function clearMetadata() {
   color: rgba(255,255,255,.58);
 }
 
-/* Language flags */
+/* Language flags - render flag-icons sprite via the inner `<span class="fi fi-XX">` */
 .gd-lang-flags { display: flex; flex-wrap: wrap; gap: var(--space-1, 4px); align-items: center; }
-.gd-lang-flag { font-size: 20px; line-height: 1; cursor: default; }
+.gd-lang-flag { display: inline-flex; align-items: center; font-size: 20px; line-height: 1; cursor: default; }
+.gd-lang-flag .fi { width: 1.4em; height: 1em; border-radius: 2px; }
 
 /* Installer groups */
 .gd-inst-group { margin-bottom: 6px; }

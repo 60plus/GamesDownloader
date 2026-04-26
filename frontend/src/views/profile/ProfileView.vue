@@ -50,9 +50,7 @@
         <div class="pv-section">
           <div class="pv-section-title">{{ t('profile.language') }}</div>
           <div class="pv-lang-row">
-            <select class="pv-lang-select" :value="locale" @change="setLocale(($event.target as HTMLSelectElement).value)">
-              <option v-for="lang in SUPPORTED" :key="lang.code" :value="lang.code">{{ lang.flag }} {{ lang.name }}</option>
-            </select>
+            <LanguagePicker />
           </div>
         </div>
 
@@ -641,8 +639,9 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
 import { useI18n } from '@/i18n'
+import LanguagePicker from '@/components/common/LanguagePicker.vue'
 
-const { t, locale, setLocale, SUPPORTED } = useI18n()
+const { t } = useI18n()
 
 interface UserInfo {
   id: number
@@ -1209,15 +1208,6 @@ async function changePassword() {
   font-size: var(--fs-sm, 12px); color: var(--muted); line-height: 1.55;
 }
 .pv-lang-row { padding: 4px 20px; }
-.pv-lang-select {
-  padding: 8px 14px; border-radius: 6px;
-  border: 1px solid var(--glass-border, rgba(255,255,255,.1));
-  background: rgba(255,255,255,.04); color: var(--text, #fff);
-  font-size: var(--fs-md, 14px); cursor: pointer; outline: none;
-  min-width: 200px;
-}
-.pv-lang-select:focus { border-color: var(--pl, #00d4ff); }
-.pv-lang-select option { background: var(--bg2, #0a0a1a); color: var(--text, #fff); }
 
 /* ── Avatar ───────────────────────────────────────────────────────────────── */
 .pv-avatar-row {

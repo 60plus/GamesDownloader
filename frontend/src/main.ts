@@ -2,6 +2,10 @@ import { createApp } from "vue";
 import * as VueRuntime from "vue";
 import * as VueRouterRuntime from "vue-router";
 import App from "./App.vue";
+// Country-flag icons (CSS sprites). Replaces the bare emoji flags that
+// failed to render on Windows Chrome / Edge - the package ships
+// `.fi.fi-<iso2>` classes plus the SVG masks they reference.
+import "flag-icons/css/flag-icons.min.css";
 import { createAppRouter } from "./plugins/router";
 import { createAppPinia } from "./plugins/pinia";
 import { vuetify } from "./plugins/vuetify";

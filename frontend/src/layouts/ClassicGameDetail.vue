@@ -211,7 +211,10 @@
             </div>
             <div class="icard-row" style="margin-bottom:4px"><span class="icard-label">{{ t('detail.languages') }}: </span></div>
             <div v-if="languageFlags.length" class="lang-flags">
-              <span v-for="l in languageFlags" :key="l.name" class="lang-flag-em" :title="l.name">{{ l.flag }}</span>
+              <span v-for="l in languageFlags" :key="l.name" class="lang-flag-em" :title="l.name">
+                <span v-if="l.flag" class="fi" :class="`fi-${l.flag}`"></span>
+                <span v-else>{{ l.name }}</span>
+              </span>
             </div>
             <div v-else class="icard-row"><span class="icard-val">-</span></div>
             <div class="icard-row" style="margin-top:6px">
@@ -1544,12 +1547,19 @@ onUnmounted(() => window.removeEventListener('message', onPlayerMessage))
   color: var(--muted); white-space: nowrap;
 }
 
-/* Language flags - emoji only, name on :title tooltip */
-.lang-flags { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 4px; }
+/* Language flags - flag-icons sprite, name on :title tooltip.
+   The wrapper carries the size + hover transform; the inner `<span class="fi fi-XX">`
+   inherits font-size and renders the country sprite via flag-icons CSS. */
+.lang-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
 .lang-flag-em {
+  display: inline-flex; align-items: center;
   font-size: var(--fs-xl, 18px); line-height: 1; cursor: default;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,.5));
   transition: transform .15s;
+}
+.lang-flag-em .fi {
+  width: 1.4em; height: 1em;
+  border-radius: 2px;
 }
 .lang-flag-em:hover { transform: scale(1.3); }
 
