@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, Boolean, Date, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import Base
+
+if TYPE_CHECKING:
+    # SQLAlchemy resolves the relationship via the string name "LibraryFile";
+    # this import only feeds static analysers (ruff F821, mypy) so the type
+    # annotation `Mapped[list["LibraryFile"]]` resolves without a runtime
+    # circular import.
+    from models.library_file import LibraryFile  # noqa: F401
 
 
 class LibraryGame(Base):

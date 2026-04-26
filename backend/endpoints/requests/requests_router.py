@@ -89,8 +89,6 @@ async def search_games_for_request(
         # Reuse the full SS + IGDB + LaunchBox search from roms_router
         from handler.metadata import screenscraper_handler, igdb_rom_handler, launchbox_handler
         from handler.metadata.rom_platform_map import get_ss_id, get_igdb_id, get_launchbox_name
-        import logging
-        logger = logging.getLogger(__name__)
 
         ss_user  = await config_handler.get("screenscraper_username") or ""
         ss_pass  = await config_handler.get("screenscraper_password") or ""

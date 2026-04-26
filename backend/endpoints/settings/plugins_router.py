@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 from config import PLUGINS_PATH
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope
+from handler.config.config_handler import config_handler
 from handler.database.session import async_session_factory
 from handler.plugins.install_handler import (
     install_plugin_from_zip,
@@ -200,8 +201,6 @@ async def install_plugin(request: Request, file: UploadFile) -> dict:
 )
 async def enable_plugin(request: Request, plugin_id: str) -> dict:
     """Enable a plugin and load it into the runtime."""
-    db_row = await _get_db_config(plugin_id)
-
     # Read manifest from filesystem
     plugin_dir = Path(PLUGINS_PATH) / plugin_id
     manifest = read_manifest(plugin_dir)
@@ -223,8 +222,6 @@ async def enable_plugin(request: Request, plugin_id: str) -> dict:
 )
 async def disable_plugin(request: Request, plugin_id: str) -> dict:
     """Disable a plugin and unload it from the runtime."""
-    db_row = await _get_db_config(plugin_id)
-
     plugin_dir = Path(PLUGINS_PATH) / plugin_id
     manifest = read_manifest(plugin_dir)
     if manifest is None:

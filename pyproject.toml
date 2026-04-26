@@ -1,0 +1,34 @@
+# Project-wide tool config. Currently scoped to ruff so the CI lint job
+# enforces a sane ruleset without flagging years of pre-existing style
+# choices that were not written against ruff in the first place.
+#
+# Philosophy: catch real bugs (undefined names, syntax errors, dead
+# control flow) at PR time. Style nits (line length, import sorting,
+# docstring shape) are NOT enforced here - they would generate hundreds
+# of fixups and drown the signal that matters.
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+extend-exclude = [
+    "Pomoc",            # imported third-party trees (RomM source mirror, ...)
+    "frontend",         # Vue / TS, lints elsewhere
+    "tools/scrap",      # one-shot scraping scripts
+    ".session_history", # local memory dumps
+]
+
+[tool.ruff.lint]
+# Bug-class rules only. Anything style-related is intentionally skipped.
+select = [
+    "F821",  # undefined name
+    "F823",  # local variable referenced before assignment
+    "F811",  # redefinition of unused name
+    "F501",  # invalid % format
+    "F502",  # % expected mapping but got sequence
+    "F632",  # `is` / `is not` literal comparisons
+    "F841",  # local variable assigned but never used (real dead-code signal)
+    "E9",    # syntax errors and indentation errors
+]
+
+# Ignore is empty - everything outside the select list is already off.
+ignore = []

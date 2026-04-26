@@ -7,12 +7,15 @@ GET  /api/dl/{token}?bt=xxx    - download with bypass token (never plain passwor
 from __future__ import annotations
 
 import asyncio
+import logging
 import mimetypes
 import os
 import secrets
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 
 from fastapi import Request
