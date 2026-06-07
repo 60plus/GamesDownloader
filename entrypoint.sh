@@ -8,11 +8,27 @@ PGID=${PGID:-0}
 # The compose file exposes a placeholder ("change-me-in-production") so a
 # fresh `docker compose up` works out of the box, but that placeholder MUST
 # never be used as the actual signing key. We persist a random 64-char hex
-# secret to /data/.secret_key so it survives container restarts; the file is
-# created with mode 600 and is the single source of truth from then on.
-SECRET_FILE=/data/.secret_key
-mkdir -p /data
+# secret so it survives container recreation; the file is created with mode
+# 600 and is the single source of truth from then on.
+#
+# IMPORTANT: the key MUST live under a mounted volume. Only sub-dirs of /data
+# are bind-mounted (see docker-compose.yml), so /data/.secret_key (the bare
+# root) lived in the container's ephemeral layer and was LOST on every
+# `docker compose up`/rebuild - rotating the key and breaking every Fernet
+# encrypted value (GOG tokens, scraper keys, SMTP password). We store it under
+# /data/config (a mounted volume) and migrate any legacy ephemeral key.
+SECRET_FILE=/data/config/.secret_key
+LEGACY_SECRET_FILE=/data/.secret_key
+mkdir -p /data/config
 if [ -z "${GD_AUTH_SECRET_KEY}" ] || [ "${GD_AUTH_SECRET_KEY}" = "change-me-in-production" ]; then
+    # Carry over a key written by an older build to the unmounted location, so
+    # instances upgraded via `restart` (where the ephemeral file still exists)
+    # keep their secret instead of rotating it.
+    if [ ! -s "${SECRET_FILE}" ] && [ -s "${LEGACY_SECRET_FILE}" ]; then
+        cp "${LEGACY_SECRET_FILE}" "${SECRET_FILE}" 2>/dev/null || true
+        chmod 600 "${SECRET_FILE}" 2>/dev/null || true
+        echo "[entrypoint] AUTH_SECRET_KEY: migrated legacy key to ${SECRET_FILE}"
+    fi
     if [ -s "${SECRET_FILE}" ]; then
         GD_AUTH_SECRET_KEY="$(cat "${SECRET_FILE}")"
         echo "[entrypoint] AUTH_SECRET_KEY: loaded persisted key from ${SECRET_FILE}"
