@@ -279,6 +279,16 @@ Open `http://localhost:8080` - the setup wizard will guide you through initial c
 
 > **ROMs:** Place ROM files in `GD_BASE_DIR/data/games/roms/{platform}/` (e.g. `roms/snes/`, `roms/n64/`). Then use the **Scan ROMs** button in the Emulation library to register them.
 
+### Run from Docker Hub (prebuilt image)
+
+Prebuilt multi-arch images (linux/amd64 and linux/arm64) are published to Docker Hub, so you can run without building locally:
+
+```bash
+docker pull 60plus/gamesdownloader:latest
+```
+
+To use it with the bundled `docker-compose.yml`, replace the app service `build:` block with `image: 60plus/gamesdownloader:latest`. Available tags: `latest`, plus `MAJOR.MINOR` and the full `MAJOR.MINOR.PATCH` for each tagged release.
+
 ---
 
 ## Configuration
