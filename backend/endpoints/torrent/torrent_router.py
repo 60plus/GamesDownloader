@@ -233,6 +233,7 @@ async def generate_game_torrent(request: Request, game_id: int, body: SeedGameBo
     regardless of where each file lives on disk.
     """
     import shutil
+    import tempfile
     from handler.database.session import async_session_factory
     from handler.torrent.torrent_generator import create_torrent
     from models.library_file import LibraryFile
@@ -271,30 +272,41 @@ async def generate_game_torrent(request: Request, game_id: int, body: SeedGameBo
             raise HTTPException(500, f"Torrent creation failed: {exc}")
         seed_dir = os.path.dirname(abs_paths[0])
     else:
-        # Multiple files - stage with symlinks so they share one directory.
-        # The directory name becomes the root folder name inside the torrent.
-        staging = os.path.join(_SEED_DIR, game_slug)
-        os.makedirs(staging, exist_ok=True)
+        # Multiple files - stage with symlinks in a temp tree that MIRRORS the
+        # on-disk layout, so the generated torrent preserves subdirectories
+        # (e.g. gra/DATA/file03.bin) instead of flattening every file into one
+        # folder. Using os.path.basename() used to drop the subdirectory and
+        # collapse the whole game into a flat root.
+        #
+        # The staging root is named after the files' common ancestor directory
+        # so the torrent's top-level folder matches the data on disk; that also
+        # lets Transmission seed the existing files without re-hashing, because
+        # it can find <seed_dir>/<root_name>/... exactly where the torrent says.
+        common = os.path.commonpath(abs_paths)
+        if not os.path.isdir(common):
+            common = os.path.dirname(common)
+        root_name = os.path.basename(common) or game_slug
+        staging_parent = tempfile.mkdtemp(prefix="seed_", dir=_SEED_DIR)
+        root_dir = os.path.join(staging_parent, root_name)
+        os.makedirs(root_dir, exist_ok=True)
         try:
-            seen: set[str] = set()
             for ap in abs_paths:
-                name = os.path.basename(ap)
-                # Avoid name collisions in staging dir
-                if name in seen:
-                    base, ext = os.path.splitext(name)
-                    name = f"{base}_{len(seen)}{ext}"
-                seen.add(name)
-                os.symlink(ap, os.path.join(staging, name))
+                rel = os.path.relpath(ap, common)
+                link = os.path.join(root_dir, rel)
+                if os.path.lexists(link):
+                    continue  # identical path listed twice - skip duplicate
+                os.makedirs(os.path.dirname(link), exist_ok=True)
+                os.symlink(ap, link)
             try:
-                torrent_path = await create_torrent(staging, _SEED_DIR)
+                torrent_path = await create_torrent(root_dir, _SEED_DIR)
             except RuntimeError as exc:
                 logger.error("Torrent creation failed for game %d: %s", game_id, exc)
                 raise HTTPException(500, f"Torrent creation failed: {exc}")
         finally:
-            shutil.rmtree(staging, ignore_errors=True)
-        seed_dir = os.path.commonpath(abs_paths)
-        if not os.path.isdir(seed_dir):
-            seed_dir = os.path.dirname(seed_dir)
+            shutil.rmtree(staging_parent, ignore_errors=True)
+        # Transmission must find <seed_dir>/<root_name>/... on disk to seed the
+        # already-present data, so point it at the common ancestor's parent.
+        seed_dir = os.path.dirname(common)
 
     await transmission_handler.add_torrent_file(torrent_path, seed_dir)
 
