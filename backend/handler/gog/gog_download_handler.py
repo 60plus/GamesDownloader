@@ -85,6 +85,24 @@ def _md5_sync(path: str) -> str:
     return h.hexdigest()
 
 
+def _seed_md5_from_file(hasher, path: str, nbytes: int) -> None:
+    """
+    Feed the first ``nbytes`` of an existing partial file into ``hasher``.
+
+    Used on resume: the running MD5 has to cover the bytes already on disk,
+    otherwise the final digest would only hash the resumed tail and never match
+    the full-file MD5. Runs in a thread (blocking I/O).
+    """
+    remaining = nbytes
+    with open(path, "rb") as fh:
+        while remaining > 0:
+            chunk = fh.read(min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            hasher.update(chunk)
+            remaining -= len(chunk)
+
+
 async def _fetch_cdn_md5(cdn_url: str) -> str:
     """
     GOG CDN serves an XML sidecar at <cdn_url>.xml that contains the MD5 hash.
@@ -687,14 +705,20 @@ class GogDownloadHandler(DBBaseHandler):
             if token:
                 headers["Authorization"] = f"Bearer {token}"
 
-            # Support HTTP range resume
+            # Support HTTP range resume. Trust the bytes actually on disk, not
+            # the periodically-flushed downloaded_size, which lags the real file
+            # by up to one update interval. Appending from the stale, lower
+            # offset would duplicate the bytes already written and corrupt the
+            # file (size too large + MD5 mismatch).
             open_mode = "wb"
             downloaded = 0
+            if resume_from > 0 and os.path.exists(dest_path):
+                resume_from = os.path.getsize(dest_path)
             if resume_from > 0:
                 headers["Range"] = f"bytes={resume_from}-"
                 open_mode        = "ab"   # append to existing partial file
                 downloaded       = resume_from
-                logger.info("Resuming job %s from byte %s", job_id, resume_from)
+                logger.info("Resuming job %s from byte %s (on-disk size)", job_id, resume_from)
 
             last_speed_time  = asyncio.get_running_loop().time()
             last_speed_bytes = downloaded
@@ -710,6 +734,15 @@ class GogDownloadHandler(DBBaseHandler):
                     # 206 = Partial Content (range accepted), 200 = full file
                     if resp.status_code not in (200, 206):
                         resp.raise_for_status()
+
+                    # If we asked for a range but the CDN sent the whole file
+                    # (HTTP 200, range ignored), appending would stack a full
+                    # copy onto the partial one. Restart from scratch instead.
+                    if resume_from > 0 and resp.status_code == 200:
+                        logger.warning("Job %s: CDN ignored Range (HTTP 200), restarting from 0", job_id)
+                        open_mode   = "wb"
+                        downloaded  = 0
+                        resume_from = 0
 
                     # Update total_size from CDN headers - CDN is authoritative.
                     # The GOG manifest `size` field is often slightly off (compressed
@@ -736,10 +769,16 @@ class GogDownloadHandler(DBBaseHandler):
                             async with session.begin():
                                 await _update(session, total_size=total_size)
 
-                    # MD5 hasher - compute incrementally while streaming,
-                    # so no extra I/O pass is needed after download.
-                    # We hash whenever verify is on AND we have (or just fetched) an MD5.
+                    # MD5 hasher - compute incrementally while streaming.
+                    # On resume, first feed the bytes already on disk into the
+                    # hasher, otherwise the final digest would cover only the
+                    # resumed tail and never match the full-file MD5.
                     md5_hasher = hashlib.md5() if (verify_checksum and expected_md5) else None
+                    if md5_hasher and resume_from > 0:
+                        _loop = asyncio.get_running_loop()
+                        await _loop.run_in_executor(
+                            None, _seed_md5_from_file, md5_hasher, dest_path, resume_from
+                        )
 
                     with open(dest_path, open_mode) as fh:
                         async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
