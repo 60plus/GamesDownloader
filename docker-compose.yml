@@ -1,6 +1,6 @@
-# GamesDownloaderV3 - Docker Compose
+# GamesDownloader - Docker Compose
 #
-# All data stored under GD_BASE_DIR (default: /APPS/GamesDownloaderV3)
+# All data stored under GD_BASE_DIR (default: /APPS/GamesDownloader)
 # Set GD_BASE_DIR in .env to change base path.
 
 services:
@@ -10,7 +10,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: gamesdownloaderv3
+    container_name: GamesDownloader
     restart: unless-stopped
     environment:
       - PUID=${PUID:-}
@@ -39,13 +39,13 @@ services:
       - "${TR_PEER_PORT:-51413}:51413"
       - "${TR_PEER_PORT:-51413}:51413/udp"
     volumes:
-      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/roms:/data/roms
-      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/games:/data/games
-      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/downloads:/data/downloads
-      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/resources:/data/resources
-      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/config:/data/config
-      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/plugins:/data/plugins
-      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/clamav:/data/clamav
+      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/roms:/data/roms
+      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/games:/data/games
+      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/downloads:/data/downloads
+      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/resources:/data/resources
+      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/config:/data/config
+      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/plugins:/data/plugins
+      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/clamav:/data/clamav
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -78,7 +78,7 @@ services:
       - MARIADB_USER=${DB_USER:-gd}
       - MARIADB_PASSWORD=${DB_PASSWD:-gd}
     volumes:
-      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/db:/var/lib/mysql
+      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/db:/var/lib/mysql
     healthcheck:
       test: ["CMD-SHELL", "mariadb -u${DB_USER:-gd} -p${DB_PASSWD:-gd} ${DB_NAME:-gamesdownloader} -e 'SELECT 1'"]
       interval: 10s
@@ -93,7 +93,7 @@ services:
     restart: unless-stopped
     command: valkey-server --requirepass ${REDIS_PASSWORD:-gd_redis_2026}
     volumes:
-      - ${GD_BASE_DIR:-/APPS/GamesDownloaderV3}/data/redis:/data
+      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/redis:/data
     healthcheck:
       test: ["CMD", "valkey-cli", "-a", "${REDIS_PASSWORD:-gd_redis_2026}", "ping"]
       interval: 10s
