@@ -56,12 +56,34 @@ class ETagMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         if response.status_code != 200:
             return response
-        if isinstance(response, (StreamingResponse,)):
+
+        # Decide whether to skip from the HEADERS, before touching the body
+        # iterator. Starlette's BaseHTTPMiddleware hands us an internal
+        # _StreamingResponse (NOT a subclass of StreamingResponse), so the
+        # isinstance check below is unreliable on its own; and once we start
+        # draining body_iterator the bytes cannot be put back. Buffering a file
+        # download here used to truncate it at the 1 MiB cap while keeping the
+        # original multi-GB Content-Length header, which broke every large
+        # library download ("Response content shorter than Content-Length").
+        clen = response.headers.get("content-length")
+        if clen is not None:
+            try:
+                if int(clen) > _MAX_ETAG_BODY:
+                    return response
+            except ValueError:
+                return response
+        if "attachment" in response.headers.get("content-disposition", "").lower():
+            return response
+        ctype = (response.headers.get("content-type") or "").lower()
+        if ctype.startswith((
+            "application/octet-stream", "application/zip", "text/event-stream",
+            "video/", "audio/", "image/",
+        )):
+            return response
+        if isinstance(response, StreamingResponse):
             return response
 
-        # Buffer the body. Starlette's BaseHTTPMiddleware always returns a
-        # _StreamingResponse, so we drain its iterator regardless of whether
-        # the original handler returned JSONResponse or PlainTextResponse.
+        # Buffer the body (only small JSON/text bodies reach this point).
         body = b""
         try:
             async for chunk in response.body_iterator:
@@ -69,12 +91,15 @@ class ETagMiddleware(BaseHTTPMiddleware):
                     chunk = chunk.encode("utf-8")
                 body += chunk
                 if len(body) > _MAX_ETAG_BODY:
-                    # Too big to ETag economically - re-emit without ETag and
-                    # without modifying the cache-control header.
+                    # Larger than expected and not caught by the header checks:
+                    # re-emit the buffered bytes WITHOUT a stale Content-Length
+                    # (Response recomputes it) and without an ETag.
+                    h = dict(response.headers)
+                    h.pop("content-length", None)
                     return Response(
                         content=body,
                         status_code=response.status_code,
-                        headers=dict(response.headers),
+                        headers=h,
                         media_type=response.media_type,
                     )
         except Exception:
