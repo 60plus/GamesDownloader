@@ -138,21 +138,21 @@
               <div v-if="rom.igdb_rating != null" class="gd-ext-score">
                 <img src="/icons/igdb.ico" class="gd-ext-ico" width="42" height="42" alt="IGDB" />
                 <div class="gd-ext-info">
-                  <span class="gd-ext-val">{{ Math.round(rom.igdb_rating) }}<span class="gd-ext-max">/100</span></span>
+                  <span class="gd-ext-val">{{ Math.round(ratingVal(rom.igdb_rating)) }}<span class="gd-ext-max">/100</span></span>
                   <span class="gd-ext-lbl">IGDB</span>
                 </div>
               </div>
               <div v-if="rom.lb_rating != null" class="gd-ext-score">
                 <img src="/icons/launchbox.ico" class="gd-ext-ico" width="42" height="42" alt="LaunchBox" />
                 <div class="gd-ext-info">
-                  <span class="gd-ext-val">{{ rom.lb_rating.toFixed(1) }}<span class="gd-ext-max">/10</span></span>
+                  <span class="gd-ext-val">{{ ratingVal(rom.lb_rating).toFixed(1) }}<span class="gd-ext-max">/10</span></span>
                   <span class="gd-ext-lbl">LB</span>
                 </div>
               </div>
               <div v-for="(pr, pid) in (rom.plugin_ratings || {})" :key="pid" class="gd-ext-score">
                 <img :src="pr.logo_url" class="gd-ext-ico" width="42" height="42" :alt="pr.name" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <div class="gd-ext-info">
-                  <span class="gd-ext-val">{{ pr.rating.toFixed(1) }}<span class="gd-ext-max">/10</span></span>
+                  <span class="gd-ext-val">{{ ratingVal(pr.rating).toFixed(1) }}<span class="gd-ext-max">/10</span></span>
                   <span class="gd-ext-lbl">{{ pr.name }}</span>
                 </div>
               </div>
@@ -517,6 +517,7 @@ import EmulationRomMetadataPanel from './EmulationRomMetadataPanel.vue'
 import TranslateButton from '@/components/common/TranslateButton.vue'
 import HeroBackground from '@/components/common/HeroBackground.vue'
 import { getEjsCore } from '@/utils/ejsCores'
+import { ratingVal } from '@/utils/rating'
 
 const { gdConfirm } = useDialog()
 const { t } = useI18n()

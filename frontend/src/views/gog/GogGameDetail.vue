@@ -95,15 +95,15 @@
             </div>
 
             <!-- GOG Rating stars -->
-            <div v-if="game.rating" class="gd-rating-row">
+            <div v-if="ratingVal(game.rating) > 0" class="gd-rating-row">
               <svg v-for="i in 5" :key="i" width="16" height="16" viewBox="0 0 24 24"
-                :fill="i <= Math.round(game.rating) ? '#f59e0b' : 'rgba(255,255,255,.12)'"
-                :stroke="i <= Math.round(game.rating) ? '#f59e0b' : 'rgba(255,255,255,.2)'"
+                :fill="i <= Math.round(ratingVal(game.rating)) ? '#f59e0b' : 'rgba(255,255,255,.12)'"
+                :stroke="i <= Math.round(ratingVal(game.rating)) ? '#f59e0b' : 'rgba(255,255,255,.2)'"
                 stroke-width="1"
               >
                 <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/>
               </svg>
-              <span class="gd-rating-num">{{ game.rating.toFixed(1) }}</span>
+              <span class="gd-rating-num">{{ ratingVal(game.rating).toFixed(1) }}</span>
               <img src="/icons/gog.ico" width="32" height="32" alt="GOG" class="gd-rating-ico" />
             </div>
 
@@ -112,28 +112,28 @@
               <div v-if="externalRatings.rawg" class="gd-ext-score">
                 <img src="/icons/RAWG.ico" class="gd-ext-ico" width="42" height="42" alt="RAWG" />
                 <div class="gd-ext-info">
-                  <span class="gd-ext-val">{{ externalRatings.rawg.toFixed(1) }}<span class="gd-ext-max">/5</span></span>
+                  <span class="gd-ext-val">{{ ratingVal(externalRatings.rawg).toFixed(1) }}<span class="gd-ext-max">/5</span></span>
                   <span class="gd-ext-lbl">RAWG</span>
                 </div>
               </div>
               <div v-if="externalRatings.igdb" class="gd-ext-score">
                 <img src="/icons/igdb.ico" class="gd-ext-ico" width="42" height="42" alt="IGDB" />
                 <div class="gd-ext-info">
-                  <span class="gd-ext-val">{{ Math.round(externalRatings.igdb) }}<span class="gd-ext-max">/100</span></span>
+                  <span class="gd-ext-val">{{ Math.round(ratingVal(externalRatings.igdb)) }}<span class="gd-ext-max">/100</span></span>
                   <span class="gd-ext-lbl">IGDB</span>
                 </div>
               </div>
               <div v-if="externalRatings.steam" class="gd-ext-score">
                 <img src="/icons/metacritic.svg" class="gd-ext-ico" width="42" height="42" alt="Metacritic" />
                 <div class="gd-ext-info">
-                  <span class="gd-ext-val">{{ Math.round(externalRatings.steam * 10) }}<span class="gd-ext-max">/100</span></span>
+                  <span class="gd-ext-val">{{ Math.round(ratingVal(externalRatings.steam) * 10) }}<span class="gd-ext-max">/100</span></span>
                   <span class="gd-ext-lbl">Metacritic</span>
                 </div>
               </div>
               <div v-for="pr in (externalRatings.plugins || [])" :key="pr.id" class="gd-ext-score">
                 <img :src="pr.logo" class="gd-ext-ico" width="42" height="42" :alt="pr.name" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <div class="gd-ext-info">
-                  <span class="gd-ext-val">{{ pr.rating.toFixed(1) }}<span class="gd-ext-max">/10</span></span>
+                  <span class="gd-ext-val">{{ ratingVal(pr.rating).toFixed(1) }}<span class="gd-ext-max">/10</span></span>
                   <span class="gd-ext-lbl">{{ pr.name }}</span>
                 </div>
               </div>
@@ -669,6 +669,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useNotifications } from '@/composables/useNotifications'
 import { useAuthStore } from '@/stores/auth'
 import { sanitizeHtml } from '@/utils/sanitize'
+import { ratingVal } from '@/utils/rating'
 import TranslateButton from '@/components/common/TranslateButton.vue'
 import HeroBackground from '@/components/common/HeroBackground.vue'
 import { useI18n } from '@/i18n'
