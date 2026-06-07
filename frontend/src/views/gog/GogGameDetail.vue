@@ -243,6 +243,22 @@
                   </svg>
                   {{ publishLoading ? t('common.loading') : t('detail.publish_to_library') }}
                 </button>
+                <!-- Bundle downloaded files into one archive per platform -->
+                <button
+                  v-if="game.is_downloaded"
+                  class="gd-btn-publish"
+                  :disabled="packaging"
+                  @click="packageNow"
+                  :title="t('packaging.package_now_hint')"
+                >
+                  <svg v-if="packaging" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                  </svg>
+                  <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M21 8v13H3V8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>
+                  </svg>
+                  {{ packaging ? t('packaging.packaging') : t('packaging.package_now') }}
+                </button>
                 <span v-if="publishMsg" class="gd-publish-msg" :class="{ ok: !publishMsg.includes('fail') && !publishMsg.includes('error') }">
                   {{ publishMsg }}
                 </span>
@@ -695,7 +711,24 @@ const isAdmin        = computed(() => auth.user?.role === 'admin')
 const publishLoading  = ref(false)
 const publishedId     = ref<number | null>(null)   // library_game.id when published
 const publishMsg      = ref('')
+const packaging       = ref(false)
 let   _publishPollTimer: ReturnType<typeof setInterval> | null = null
+
+/** Bundle this game's downloaded files into one archive per platform.
+ *  Runs server-side in the background; archives appear in the library when done. */
+async function packageNow() {
+  if (!game.value || packaging.value) return
+  packaging.value = true
+  publishMsg.value = ''
+  try {
+    const { data } = await client.post(`/gog/games/${game.value.gog_id}/package`)
+    publishMsg.value = data && data.started === false ? t('packaging.nothing') : t('packaging.started')
+  } catch (e: any) {
+    publishMsg.value = e?.response?.data?.detail || t('packaging.failed')
+  } finally {
+    packaging.value = false
+  }
+}
 
 onUnmounted(() => {
   if (_publishPollTimer !== null) { clearInterval(_publishPollTimer); _publishPollTimer = null }

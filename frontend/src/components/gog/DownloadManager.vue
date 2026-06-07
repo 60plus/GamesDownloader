@@ -3,12 +3,12 @@
   <div class="dm-tray" :class="{ 'dm-tray--open': expanded, 'dm-tray--has-active': hasActive, 'dm-tray--inline': inline }">
 
     <!-- ── Header bar (always visible when there are jobs) ───────────────── -->
-    <div v-if="jobs.length > 0" class="dm-header" @click="expanded = !expanded">
+    <div v-if="jobs.length > 0 || packagingList.length > 0" class="dm-header" @click="expanded = !expanded">
       <div class="dm-header-left">
         <!-- Animated icon when downloading -->
         <div class="dm-status-dot" :class="dotClass" />
         <span class="dm-header-title">Downloads</span>
-        <span class="dm-badge">{{ jobs.length }}</span>
+        <span class="dm-badge">{{ jobs.length + packagingList.length }}</span>
       </div>
 
       <!-- Active download quick-info (collapsed view) -->
@@ -26,7 +26,32 @@
 
     <!-- ── Expanded job list ───────────────────────────────────────────────── -->
     <Transition name="dm-slide">
-      <div v-if="expanded && jobs.length > 0" class="dm-body">
+      <div v-if="expanded && (jobs.length > 0 || packagingList.length > 0)" class="dm-body">
+
+        <!-- Packaging items (GOG per-platform zip) -->
+        <div v-for="pk in packagingList" :key="pk.id" class="dm-job" :class="`dm-job--${pkClass(pk.status)}`">
+          <div class="dm-job-head">
+            <div class="dm-job-info">
+              <span class="dm-job-title">{{ pk.game_title }}</span>
+              <span class="dm-job-sep">·</span>
+              <span class="dm-job-file">{{ t('packaging.title') }} · {{ pk.platform }}</span>
+            </div>
+          </div>
+          <div class="dm-progress-track">
+            <div
+              class="dm-progress-fill"
+              :class="`dm-progress-fill--${pkClass(pk.status)}`"
+              :style="{ width: pk.status === 'completed' ? '100%' : (pk.total ? `${pk.progress_pct}%` : '8%') }"
+            />
+          </div>
+          <div class="dm-job-stats">
+            <span class="dm-stat dm-stat--status" :class="`dm-status--${pkClass(pk.status)}`">
+              {{ pk.status === 'completed' ? t('packaging.done') : pk.status === 'failed' ? t('packaging.failed') : t('packaging.packaging') }}
+            </span>
+            <span v-if="pk.status === 'packaging' && pk.total" class="dm-stat">{{ pk.done }} / {{ pk.total }}</span>
+            <span class="dm-stat dm-stat--pct">{{ Math.round(pk.progress_pct) }}%</span>
+          </div>
+        </div>
 
         <div v-for="job in jobs" :key="job.id" class="dm-job" :class="`dm-job--${job.status}`">
 
@@ -141,7 +166,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import client from '@/services/api/client'
 import { useSocketStore } from '@/stores/socket'
 import { useI18n } from '@/i18n'
@@ -179,8 +204,26 @@ interface DownloadJob {
 const jobs     = ref<DownloadJob[]>([])
 const expanded = ref(false)
 
+interface PackagingItem {
+  id: string
+  game_title: string
+  platform: string
+  status: string            // packaging | completed | failed
+  done: number
+  total: number
+  progress_pct: number
+}
+const packagingItems = reactive<Record<string, PackagingItem>>({})
+const packagingList = computed(() => Object.values(packagingItems))
+const pkTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function pkClass(status: string): string {
+  return status === 'failed' ? 'failed' : status === 'completed' ? 'completed' : 'downloading'
+}
+
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let unsubSocket: (() => void) | null = null
+let unsubPackaging: (() => void) | null = null
 
 const POLL_INTERVAL = 30000  // ms - fallback only, WebSocket is primary
 
@@ -190,8 +233,13 @@ const activeJob = computed(() =>
   jobs.value.find(j => j.status === 'downloading')
 )
 
+const hasActivePackaging = computed(() =>
+  packagingList.value.some(p => p.status === 'packaging')
+)
+
 const hasActive = computed(() =>
-  jobs.value.some(j => ['downloading', 'queued', 'paused'].includes(j.status))
+  jobs.value.some(j => ['downloading', 'queued', 'paused'].includes(j.status)) ||
+  hasActivePackaging.value
 )
 
 const hasFinished = computed(() =>
@@ -199,7 +247,7 @@ const hasFinished = computed(() =>
 )
 
 const dotClass = computed(() => {
-  if (jobs.value.some(j => j.status === 'downloading')) return 'dm-status-dot--active'
+  if (jobs.value.some(j => j.status === 'downloading') || hasActivePackaging.value) return 'dm-status-dot--active'
   if (jobs.value.some(j => j.status === 'paused'))      return 'dm-status-dot--paused'
   if (jobs.value.some(j => j.status === 'failed'))      return 'dm-status-dot--error'
   return 'dm-status-dot--idle'
@@ -228,6 +276,30 @@ function handleJobUpdate(data: Record<string, unknown>) {
   }
 }
 
+function handlePackaging(data: Record<string, unknown>) {
+  const id = String(data.id ?? '')
+  if (!id) return
+  packagingItems[id] = {
+    id,
+    game_title:   String(data.game_title ?? ''),
+    platform:     String(data.platform ?? ''),
+    status:       String(data.status ?? 'packaging'),
+    done:         Number(data.done ?? 0),
+    total:        Number(data.total ?? 0),
+    progress_pct: Number(data.progress_pct ?? 0),
+  }
+  // Open the tray so the user sees packaging start.
+  if (packagingItems[id].status === 'packaging') expanded.value = true
+  // Auto-clear finished items after a short delay.
+  const existing = pkTimers.get(id)
+  if (existing) { clearTimeout(existing); pkTimers.delete(id) }
+  if (['completed', 'failed'].includes(packagingItems[id].status)) {
+    const t = setTimeout(() => { delete packagingItems[id]; pkTimers.delete(id) },
+      packagingItems[id].status === 'failed' ? 8000 : 5000)
+    pkTimers.set(id, t)
+  }
+}
+
 function startPolling() {
   stopPolling()
   pollTimer = setInterval(fetchJobs, POLL_INTERVAL)
@@ -243,6 +315,7 @@ onMounted(() => {
   try {
     const socketStore = useSocketStore()
     unsubSocket = socketStore.onDownloadJob(handleJobUpdate)
+    unsubPackaging = socketStore.onPackaging(handlePackaging)
   } catch { /* socket not available */ }
   // Fallback: slow poll every 30s for full sync
   startPolling()
@@ -251,6 +324,8 @@ onMounted(() => {
 onUnmounted(() => {
   stopPolling()
   if (unsubSocket) { unsubSocket(); unsubSocket = null }
+  if (unsubPackaging) { unsubPackaging(); unsubPackaging = null }
+  pkTimers.forEach(t => clearTimeout(t)); pkTimers.clear()
 })
 
 // Auto-expand tray when a new download starts

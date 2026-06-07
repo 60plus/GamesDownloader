@@ -167,36 +167,36 @@ async def _on_file_downloaded(job_id: int) -> None:
                 gog_db_id = gg.id
 
         # Add file to LibraryGame if this game is already published
-        if not dest_path or not os.path.exists(dest_path):
-            return
+        if dest_path and os.path.exists(dest_path):
+            lib = LibraryHandler()
+            lib_game = await lib.get_by_gog_game_id(gog_db_id)
+            if lib_game:
+                rel_path = os.path.relpath(dest_path, BASE_PATH).replace(os.sep, "/")
+                existing_files = await lib.get_files_for_game(lib_game.id)
+                if rel_path not in {f.file_path for f in existing_files}:
+                    try:
+                        file_size = os.path.getsize(dest_path)
+                    except OSError:
+                        file_size = 0
 
-        lib = LibraryHandler()
-        lib_game = await lib.get_by_gog_game_id(gog_db_id)
-        if not lib_game:
-            return
+                    await lib.create_file(LibraryFile(
+                        library_game_id=lib_game.id,
+                        filename=file_name,
+                        display_name=file_name,
+                        file_type=file_type_tag,
+                        os=os_tag,
+                        size_bytes=file_size,
+                        file_path=rel_path,
+                        source="gog",
+                        is_available=True,
+                    ))
+                    logger.info("Auto-synced file to library: %s → LibraryGame id=%s", rel_path, lib_game.id)
 
-        rel_path = os.path.relpath(dest_path, BASE_PATH).replace(os.sep, "/")
-        existing_files = await lib.get_files_for_game(lib_game.id)
-        if rel_path in {f.file_path for f in existing_files}:
-            return  # already registered
-
-        try:
-            file_size = os.path.getsize(dest_path)
-        except OSError:
-            file_size = 0
-
-        await lib.create_file(LibraryFile(
-            library_game_id=lib_game.id,
-            filename=file_name,
-            display_name=file_name,
-            file_type=file_type_tag,
-            os=os_tag,
-            size_bytes=file_size,
-            file_path=rel_path,
-            source="gog",
-            is_available=True,
-        ))
-        logger.info("Auto-synced file to library: %s → LibraryGame id=%s", rel_path, lib_game.id)
+        # Optionally bundle this platform's files into a single archive once
+        # every file for the platform has finished (runs after the library
+        # sync above so it can supersede the loose rows without racing them).
+        from handler.gog.zip_packer import maybe_package_after_job
+        await maybe_package_after_job(job_id)
 
     except Exception:
         logger.exception("_on_file_downloaded failed for job_id=%s", job_id)

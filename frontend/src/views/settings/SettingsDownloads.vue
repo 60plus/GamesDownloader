@@ -257,6 +257,61 @@
       </div><!-- /v-show speed -->
     </div>
 
+    <!-- ── Section: Packaging ────────────────────────────────────────────────── -->
+    <div class="sd-section">
+      <div class="sd-section-title sd-section-title--collapsible" @click="toggleSection('packaging')">
+        <span>{{ t('packaging.title') }}</span>
+        <svg class="sd-chevron" :class="{ 'sd-chevron--open': !collapsed.packaging }"
+          width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+
+      <div v-show="!collapsed.packaging">
+        <div v-if="pkgLoading" class="sd-loading"><span class="spinner" /> {{ t('common.loading') }}</div>
+        <template v-else>
+          <div class="sd-pkg-desc">{{ t('packaging.description') }}</div>
+
+          <!-- Enable: one archive per platform -->
+          <div class="sd-tr-row"
+            @mouseenter="setHint(t('packaging.enable_title'), t('packaging.enable_body'))"
+            @mouseleave="clearHint()">
+            <div>
+              <div class="field-label">{{ t('packaging.enable') }}</div>
+              <div class="field-hint">{{ t('packaging.enable_hint') }}</div>
+            </div>
+            <label class="sd-toggle">
+              <input type="checkbox" v-model="pkg.zip_per_platform" />
+              <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
+            </label>
+          </div>
+
+          <!-- Delete loose files after zipping -->
+          <div v-if="pkg.zip_per_platform" class="sd-tr-row"
+            @mouseenter="setHint(t('packaging.delete_title'), t('packaging.delete_body'))"
+            @mouseleave="clearHint()">
+            <div>
+              <div class="field-label">{{ t('packaging.delete_originals') }}</div>
+              <div class="field-hint">{{ t('packaging.delete_originals_hint') }}</div>
+            </div>
+            <label class="sd-toggle">
+              <input type="checkbox" v-model="pkg.delete_originals" />
+              <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
+            </label>
+          </div>
+
+          <div v-if="pkgError" class="field-server-error">{{ pkgError }}</div>
+          <div v-if="pkgSaved" class="field-ok">{{ t('packaging.saved') }}</div>
+          <div class="sd-actions">
+            <button class="action-btn action-btn--primary" :disabled="pkgSaving" @click="savePackaging">
+              <span v-if="pkgSaving" class="spinner" />
+              {{ t('common.save') }}
+            </button>
+          </div>
+        </template>
+      </div><!-- /v-show packaging -->
+    </div>
+
     <!-- ── Section: Transmission ─────────────────────────────────────────────── -->
     <div class="sd-section">
       <div class="sd-section-title sd-section-title--collapsible" @click="toggleSection('transmission')">
@@ -802,6 +857,43 @@ async function saveTransmission() {
   }
 }
 
+// ── Packaging ─────────────────────────────────────────────────────────────────
+
+const pkg = reactive<{ zip_per_platform: boolean; delete_originals: boolean }>({
+  zip_per_platform: false,
+  delete_originals: false,
+})
+const pkgLoading = ref(true)
+const pkgSaving  = ref(false)
+const pkgSaved   = ref(false)
+const pkgError   = ref('')
+
+async function loadPackaging() {
+  pkgLoading.value = true
+  try {
+    const r = await client.get('/settings/downloads/packaging')
+    pkg.zip_per_platform = !!r.data.zip_per_platform
+    pkg.delete_originals = !!r.data.delete_originals
+  } catch { /* ignore */ } finally {
+    pkgLoading.value = false
+  }
+}
+
+async function savePackaging() {
+  pkgSaving.value = true
+  pkgSaved.value  = false
+  pkgError.value  = ''
+  try {
+    await client.post('/settings/downloads/packaging', { ...pkg })
+    pkgSaved.value = true
+    setTimeout(() => { pkgSaved.value = false }, 3000)
+  } catch (e: any) {
+    pkgError.value = e?.response?.data?.detail || t('packaging.save_failed')
+  } finally {
+    pkgSaving.value = false
+  }
+}
+
 // ── Collapse state ────────────────────────────────────────────────────────────
 
 function _loadCollapsed(): Record<string, boolean> {
@@ -817,7 +909,7 @@ function toggleSection(key: string) {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 onMounted(async () => {
-  await Promise.all([loadTokens(), loadFiles(), loadSpeed(), loadTransmission()])
+  await Promise.all([loadTokens(), loadFiles(), loadSpeed(), loadPackaging(), loadTransmission()])
 })
 </script>
 
@@ -883,6 +975,9 @@ onMounted(async () => {
 .sd-speed-role { font-size: 11px; color: var(--text-muted); min-width: 60px; }
 
 .field-ok { color: #4ade80; font-size: var(--fs-sm, 12px); }
+
+/* ── Packaging ───────────────────────────────────────────────────────────── */
+.sd-pkg-desc { font-size: 12px; color: var(--text-muted); margin: 2px 0 10px; line-height: 1.5; }
 
 /* ── Create panel ────────────────────────────────────────────────────────── */
 .sd-create-panel {

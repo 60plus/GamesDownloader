@@ -27,6 +27,7 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - Direct game downloads with queue management and progress tracking
 - Pause, resume, and retry downloads
 - Checksum verification after download
+- **Per-platform packaging** optionally bundle a downloaded game's files into a single archive per platform (Windows / Linux / macOS), so pulling it from the server is one download instead of dozens of simultaneous browser downloads; no compression (a fast container copy, not a slow archive), with live progress in the download tray, recursive folder support, and an optional "delete loose files after zipping" toggle (Settings → Downloads → Packaging)
 
 ### Metadata & Artwork
 - Automatic metadata scraping from multiple sources: **GOG**, **IGDB**, **RAWG**, **Steam**, **SystemRequirementsLab**

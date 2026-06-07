@@ -11,10 +11,16 @@ export const useSocketStore = defineStore("socket", () => {
   const downloadProgress = ref({ current: 0, total: 0, progress: 0, message: "" });
   const downloadJobUpdate = ref<Record<string, unknown> | null>(null);
   const downloadJobCallbacks: Array<(data: Record<string, unknown>) => void> = [];
+  const packagingCallbacks: Array<(data: Record<string, unknown>) => void> = [];
 
   function onDownloadJob(cb: (data: Record<string, unknown>) => void) {
     downloadJobCallbacks.push(cb);
     return () => { const i = downloadJobCallbacks.indexOf(cb); if (i >= 0) downloadJobCallbacks.splice(i, 1) }
+  }
+
+  function onPackaging(cb: (data: Record<string, unknown>) => void) {
+    packagingCallbacks.push(cb);
+    return () => { const i = packagingCallbacks.indexOf(cb); if (i >= 0) packagingCallbacks.splice(i, 1) }
   }
 
   function connect() {
@@ -51,6 +57,9 @@ export const useSocketStore = defineStore("socket", () => {
       downloadJobUpdate.value = data;
       downloadJobCallbacks.forEach(cb => cb(data));
     });
+    socket.value.on("download:packaging", (data) => {
+      packagingCallbacks.forEach(cb => cb(data));
+    });
   }
 
   function reconnectWithFreshToken() {
@@ -66,5 +75,5 @@ export const useSocketStore = defineStore("socket", () => {
     socket.value = null;
   }
 
-  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, connect, disconnect, reconnectWithFreshToken };
+  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, connect, disconnect, reconnectWithFreshToken };
 });

@@ -76,6 +76,48 @@ async def get_download_options(request: Request, gog_id: int):
     return options
 
 
+# ── 1b. Package a downloaded game into one archive per platform ───────────────
+
+@protected_route(download_router.post, "/games/{gog_id}/package", scopes=[Scope.LIBRARY_ADMIN])
+async def package_game_files(request: Request, gog_id: int):
+    """
+    Bundle an already-downloaded GOG game's loose files into a single archive
+    per platform (windows/mac/linux). Honours the delete-originals setting.
+
+    Runs in the background because large games can take minutes to repackage;
+    the resulting archives appear in the Games Library when done.
+    """
+    from handler.database.session import async_session_factory
+    from handler.gog.zip_packer import package_game, packable_platforms
+    from models.gog_game import GogGame
+    from sqlalchemy import select as _sel
+
+    async with async_session_factory() as session:
+        result = await session.execute(_sel(GogGame).where(GogGame.gog_id == gog_id))
+        gg = result.scalars().first()
+        if not gg:
+            raise HTTPException(status_code=404, detail="Game not found")
+        if not gg.is_downloaded:
+            raise HTTPException(status_code=400, detail="Game has no downloaded files to package")
+        title = gg.title
+
+    # Fast pre-check so the UI can say "nothing to do" instead of a silent no-op
+    # (e.g. the game is already packaged, or each platform has a single file).
+    platforms = packable_platforms(title)
+    if not platforms:
+        return {"started": False, "nothing": True}
+
+    async def _run() -> None:
+        try:
+            summary = await package_game(gog_id, title)
+            logger.info("Manual packaging of gog_id=%s done: %s", gog_id, summary)
+        except Exception:
+            logger.exception("Manual packaging failed for gog_id=%s", gog_id)
+
+    asyncio.create_task(_run())
+    return {"started": True, "platforms": platforms}
+
+
 # ── 2. Start a download ───────────────────────────────────────────────────────
 
 class StartDownloadRequest(BaseModel):
