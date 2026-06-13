@@ -626,6 +626,11 @@ class GogDownloadHandler(DBBaseHandler):
                         "downloaded_size": job.downloaded_size,
                         "total_size": job.total_size,
                         "speed_bps": job.speed_bps,
+                        # Carry verification state so the tray flips "Verifying" to
+                        # "MD5 OK" the moment Step 5 settles, instead of looking stuck
+                        # on "Verifying" until the next full poll.
+                        "verify_checksum": job.verify_checksum,
+                        "checksum_status": job.checksum_status,
                     })
                 except Exception:
                     pass  # don't break download on socket failure
