@@ -31,7 +31,7 @@ import os
 import shutil
 import zipfile
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from config import BASE_PATH, GAMES_PATH
 from handler.config.config_handler import config_handler
@@ -343,7 +343,14 @@ async def pack_platform(
 
 
 async def _platform_has_pending_jobs(gog_id: int, platform: str) -> bool:
-    """True if any download job for this game+platform is still unfinished."""
+    """True if any download job for this game+platform is still unfinished.
+
+    A job counts as unfinished while it is downloading/queued/paused AND while it
+    is downloaded but its checksum has not settled yet. The download stream marks
+    a job "completed" BEFORE MD5 verification runs, so without the second clause a
+    sibling file still being verified would let packaging start before its MD5 is
+    confirmed.
+    """
     from handler.database.session import async_session_factory
 
     async with async_session_factory() as session:
@@ -351,7 +358,14 @@ async def _platform_has_pending_jobs(gog_id: int, platform: str) -> bool:
             select(DownloadJob).where(
                 DownloadJob.gog_id == gog_id,
                 DownloadJob.os_platform == platform,
-                DownloadJob.status.in_(_PENDING_STATES),
+                or_(
+                    DownloadJob.status.in_(_PENDING_STATES),
+                    and_(
+                        DownloadJob.status == "completed",
+                        DownloadJob.verify_checksum == True,   # noqa: E712
+                        DownloadJob.checksum_status.is_(None),
+                    ),
+                ),
             )
         )
         return result.scalars().first() is not None
