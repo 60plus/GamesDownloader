@@ -483,13 +483,81 @@ async def update_library_game(request: Request, game_id: int, body: GameUpdateBo
     return _game_to_dict(updated)
 
 
+def _safe_abs(rel_path: str) -> str | None:
+    """Resolve a library-relative path to an absolute path strictly inside BASE_PATH."""
+    abs_path = os.path.normpath(os.path.join(BASE_PATH, rel_path))
+    base = os.path.normpath(BASE_PATH)
+    if abs_path == base or not abs_path.startswith(base + os.sep):
+        return None
+    return abs_path
+
+
+def _delete_files_on_disk(files) -> int:
+    """Delete the physical files referenced by the given library file records, then
+    prune any directories left empty (bounded to within GAMES_PATH). Returns the
+    number of files removed."""
+    removed = 0
+    parent_dirs: set[str] = set()
+    for f in files:
+        if not getattr(f, "file_path", None):
+            continue
+        abs_path = _safe_abs(f.file_path)
+        if abs_path and os.path.isfile(abs_path):
+            try:
+                os.remove(abs_path)
+                removed += 1
+                parent_dirs.add(os.path.dirname(abs_path))
+            except OSError:
+                logger.warning("Could not delete file on disk: %s", abs_path, exc_info=True)
+    # Prune now-empty directories upward, stopping at GAMES_PATH.
+    games_root = os.path.normpath(GAMES_PATH)
+    for d in sorted(parent_dirs, key=len, reverse=True):
+        cur = os.path.normpath(d)
+        while cur.startswith(games_root + os.sep) and cur != games_root:
+            try:
+                os.rmdir(cur)  # only removes if empty
+            except OSError:
+                break
+            cur = os.path.dirname(cur)
+    return removed
+
+
+async def _clear_gog_owned(gog_game_id: int, *, clear_path: bool) -> None:
+    """Reset the linked GOG game's downloaded flag so the GOG library stops marking
+    it as owned once it is removed from the games library."""
+    from handler.database.session import async_session_factory
+    from models.gog_game import GogGame
+    async with async_session_factory() as session:
+        gg = await session.get(GogGame, gog_game_id)
+        if gg:
+            gg.is_downloaded = False
+            if clear_path:
+                gg.download_path = None
+            await session.commit()
+
+
 @protected_route(library_router.delete, "/games/{game_id}", scopes=[Scope.LIBRARY_ADMIN])
-async def delete_library_game(request: Request, game_id: int) -> dict:
+async def delete_library_game(
+    request: Request, game_id: int, delete_files: bool = Query(False)
+) -> dict:
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+
+    gog_game_id = game.gog_game_id
+
+    removed = 0
+    if delete_files:
+        files = await _lib.get_files_for_game(game_id)
+        removed = _delete_files_on_disk(files)
+
+    # Always clear the GOG "owned" flag for a linked game; only wipe the stored
+    # download path when the files were actually deleted from disk.
+    if gog_game_id:
+        await _clear_gog_owned(gog_game_id, clear_path=delete_files)
+
     await _lib.delete(game)
-    return {"ok": True}
+    return {"ok": True, "files_deleted": removed}
 
 
 # ── Cover / media image search ────────────────────────────────────────────────
