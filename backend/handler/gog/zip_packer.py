@@ -238,22 +238,43 @@ async def _sync_archive_into_library(
     logger.info("Library: %s archive synced for gog_id=%s (%s)", platform, gog_id, rel_path)
 
 
+# In-memory snapshot of packaging jobs currently in progress, keyed by event id.
+# Packaging runs inside this process and does not survive a restart, so a DB
+# table would buy nothing; an in-memory dict lets the download tray rehydrate
+# after a page refresh (the WebSocket event alone is lost on reload).
+_active_packaging: dict[str, dict] = {}
+
+
+def active_packaging() -> list[dict]:
+    """Snapshot of packaging jobs that are still running (for tray rehydration)."""
+    return list(_active_packaging.values())
+
+
 async def _emit_packaging(
     gog_id: int, title: str, platform: str, status: str, done: int, total: int
 ) -> None:
     """Push a packaging-progress event to the download tray (best-effort)."""
+    payload = {
+        "id":           f"pkg-{gog_id}-{platform}",
+        "gog_id":       gog_id,
+        "game_title":   title,
+        "platform":     platform,
+        "status":       status,                 # packaging | completed | failed
+        "done":         done,
+        "total":        total,
+        "progress_pct": round(done / total * 100, 1) if total else 0.0,
+    }
+    # Track only in-progress jobs; drop them once finished so the rehydration
+    # endpoint never resurrects a completed/failed job. All mutations run on the
+    # event loop thread (direct await or via run_coroutine_threadsafe), so no
+    # lock is needed.
+    if status == "packaging":
+        _active_packaging[payload["id"]] = payload
+    else:
+        _active_packaging.pop(payload["id"], None)
     try:
         from handler.socket_handler import emit_event
-        await emit_event("download:packaging", {
-            "id":           f"pkg-{gog_id}-{platform}",
-            "gog_id":       gog_id,
-            "game_title":   title,
-            "platform":     platform,
-            "status":       status,                 # packaging | completed | failed
-            "done":         done,
-            "total":        total,
-            "progress_pct": round(done / total * 100, 1) if total else 0.0,
-        })
+        await emit_event("download:packaging", payload)
     except Exception:
         pass
 

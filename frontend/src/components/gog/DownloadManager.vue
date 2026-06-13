@@ -264,6 +264,17 @@ async function fetchJobs() {
   }
 }
 
+// Rehydrate in-progress packaging after a page refresh: the WebSocket progress
+// events are lost on reload, so pull the current snapshot from the server.
+async function fetchActivePackaging() {
+  try {
+    const { data } = await client.get<Record<string, unknown>[]>('/gog/packaging/active')
+    data.forEach(handlePackaging)
+  } catch {
+    // silent
+  }
+}
+
 function handleJobUpdate(data: Record<string, unknown>) {
   const id = data.id as number
   const idx = jobs.value.findIndex(j => j.id === id)
@@ -302,7 +313,7 @@ function handlePackaging(data: Record<string, unknown>) {
 
 function startPolling() {
   stopPolling()
-  pollTimer = setInterval(fetchJobs, POLL_INTERVAL)
+  pollTimer = setInterval(() => { fetchJobs(); fetchActivePackaging() }, POLL_INTERVAL)
 }
 
 function stopPolling() {
@@ -311,6 +322,7 @@ function stopPolling() {
 
 onMounted(() => {
   fetchJobs()
+  fetchActivePackaging()   // restore packaging progress after a refresh
   // WebSocket: real-time updates per job
   try {
     const socketStore = useSocketStore()

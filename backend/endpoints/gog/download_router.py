@@ -118,6 +118,14 @@ async def package_game_files(request: Request, gog_id: int):
     return {"started": True, "platforms": platforms}
 
 
+@protected_route(download_router.get, "/packaging/active", scopes=[Scope.LIBRARY_READ])
+async def list_active_packaging(request: Request) -> list:
+    """Return packaging jobs still in progress so the download tray can rehydrate
+    after a page refresh (WebSocket progress events are lost on reload)."""
+    from handler.gog.zip_packer import active_packaging
+    return active_packaging()
+
+
 # ── 2. Start a download ───────────────────────────────────────────────────────
 
 class StartDownloadRequest(BaseModel):
