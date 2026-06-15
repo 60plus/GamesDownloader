@@ -379,3 +379,41 @@ export function registerPluginCouchMode(themeId: string, component: Component): 
 export function getPluginCouchMode(themeId: string): Component | undefined {
   return _pluginCouchModes.get(themeId);
 }
+
+// ── Plugin metadata-panel tabs ──────────────────────────────────────────────
+// Lets any plugin (including plain-JS frontend_get_js plugins) add a tab to the
+// game metadata editor (LibraryMetadataPanel). The tab content is mounted as
+// vanilla DOM via the `mount(el, ctx)` callback, so no compiled Vue component
+// is required. Registered through window.__GD__.registerMetadataTab().
+
+export interface MetadataTabContext {
+  /** The game record currently being edited (includes meta_ratings). */
+  game: Record<string, unknown>;
+  /** API base for this panel, e.g. "/library/games" or "/gog/library/games". */
+  apiPrefix: string;
+  /** Close the metadata panel. */
+  close: () => void;
+  /** Notify the host that data changed so the detail view re-fetches. */
+  save: (data?: Record<string, unknown>) => void;
+}
+
+export interface MetadataTab {
+  id: string;
+  label: string;
+  /** Which library's panel to show in: "games" | "gog" | "all" (default "games"). */
+  library?: string;
+  /** Build the tab body into `el`. Return an optional cleanup function. */
+  mount: (el: HTMLElement, ctx: MetadataTabContext) => void | (() => void);
+}
+
+const _metadataTabs: Map<string, MetadataTab> = shallowReactive(new Map());
+
+export function registerMetadataTab(tab: MetadataTab): void {
+  if (tab && tab.id && typeof tab.mount === "function") {
+    _metadataTabs.set(tab.id, tab);
+  }
+}
+
+export function getMetadataTabs(): MetadataTab[] {
+  return Array.from(_metadataTabs.values());
+}

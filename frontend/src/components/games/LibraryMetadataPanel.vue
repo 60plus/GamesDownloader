@@ -769,6 +769,11 @@
 
           </div>
 
+          <!-- Plugin-registered tabs (e.g. Steam Deck Compatibility) -->
+          <div v-if="isPluginTab(activeTab)" class="mep-tab-content">
+            <div ref="pluginTabHost" class="mep-plugin-tab"></div>
+          </div>
+
         </div>
       </div>
 
@@ -792,11 +797,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import client from '@/services/api/client'
 import TranslateButton from '@/components/common/TranslateButton.vue'
 import { useI18n } from '@/i18n'
 import { LANG_MAP, resolveLang } from '@/utils/langMap'
+import { getMetadataTabs, type MetadataTab, type MetadataTabContext } from '@/themes/index'
 
 const { t } = useI18n()
 
@@ -846,6 +852,15 @@ const emit  = defineEmits<{
 // API prefix - /library/games for Games Library, /gog/library/games for GOG Library
 const baseApi = computed(() => props.apiPrefix || '/library/games')
 
+// Plugin-registered tabs that target this panel's library (games / gog / all).
+const libraryKind = computed(() => (baseApi.value.includes('/gog/') ? 'gog' : 'games'))
+const pluginTabs = computed<MetadataTab[]>(() =>
+  getMetadataTabs().filter(tb => !tb.library || tb.library === 'all' || tb.library === libraryKind.value)
+)
+function isPluginTab(id: string): boolean {
+  return pluginTabs.value.some(tb => tb.id === id)
+}
+
 const tabs = computed(() => [
   { id: 'cover',        label: t('meta.tab_cover')        },
   { id: 'background',   label: t('meta.tab_hero')         },
@@ -856,8 +871,35 @@ const tabs = computed(() => [
   { id: 'description',  label: t('meta.tab_description')  },
   { id: 'details',      label: t('meta.tab_details')      },
   { id: 'requirements', label: t('meta.tab_requirements') },
+  ...pluginTabs.value.map(tb => ({ id: tb.id, label: tb.label })),
 ])
 const activeTab = ref('cover')
+
+// ── Plugin tab mounting (vanilla DOM via registerMetadataTab) ────────────────
+const pluginTabHost = ref<HTMLElement | null>(null)
+let _pluginCleanup: (() => void) | null = null
+
+function _mountPluginTab() {
+  if (_pluginCleanup) { try { _pluginCleanup() } catch { /* ignore */ } _pluginCleanup = null }
+  const host = pluginTabHost.value
+  if (!host || !isPluginTab(activeTab.value)) return
+  const tab = pluginTabs.value.find(tb => tb.id === activeTab.value)
+  if (!tab) return
+  host.innerHTML = ''
+  const ctx: MetadataTabContext = {
+    game: props.game as unknown as Record<string, unknown>,
+    apiPrefix: baseApi.value,
+    close: () => emit('close'),
+    save: (d) => emit('saved', d || {}),
+  }
+  try {
+    const ret = tab.mount(host, ctx)
+    if (typeof ret === 'function') _pluginCleanup = ret
+  } catch (e) { console.error('Metadata tab mount failed', e) }
+}
+
+watch([activeTab, pluginTabHost], () => nextTick(_mountPluginTab))
+onUnmounted(() => { if (_pluginCleanup) { try { _pluginCleanup() } catch { /* ignore */ } } })
 
 // ── Cover selection ────────────────────────────────────────────────────────────
 const selectedCover         = ref(props.game.cover_path || props.game.cover_url || '')
