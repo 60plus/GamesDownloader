@@ -35,7 +35,8 @@ from schemas.user import (
 )
 from utils.async_utils import fire_task
 
-from jose import jwt, JWTError
+import jwt
+from jwt import PyJWTError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -77,7 +78,7 @@ def _decode_totp_challenge_token(token: str) -> dict | None:
             return None
         int(payload["sub"])
         return payload
-    except (JWTError, KeyError, ValueError):
+    except (PyJWTError, KeyError, ValueError):
         return None
 
 
@@ -358,7 +359,7 @@ def _decode_reset_token(token: str) -> dict | None:
         # Sanity-check required claims
         int(payload["sub"])
         return payload
-    except (JWTError, KeyError, ValueError):
+    except (PyJWTError, KeyError, ValueError):
         return None
 
 

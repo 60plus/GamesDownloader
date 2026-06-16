@@ -6,7 +6,8 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 
 from config import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
@@ -59,5 +60,5 @@ def create_refresh_token(subject: str, jti: str | None = None, expires_days: int
 def decode_token(token: str) -> dict | None:
     try:
         return jwt.decode(token, AUTH_SECRET_KEY, algorithms=[AUTH_ALGORITHM])
-    except JWTError:
+    except PyJWTError:
         return None
