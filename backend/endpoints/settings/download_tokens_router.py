@@ -123,7 +123,8 @@ async def list_files_for_token(request: Request) -> list[dict]:
     """Return a flat list of all library files (id, filename, game_title) for the token create form.
     Uses a single JOIN query instead of N+1 per-game queries."""
     from sqlalchemy import select as sa_select
-    from models.library import LibraryGame, LibraryFile
+    from models.library_file import LibraryFile
+    from models.library_game import LibraryGame
     from handler.database.session import async_session_factory
 
     async with async_session_factory() as session:
