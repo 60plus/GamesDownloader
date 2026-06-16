@@ -39,7 +39,6 @@ services:
       - "${TR_PEER_PORT:-51413}:51413"
       - "${TR_PEER_PORT:-51413}:51413/udp"
     volumes:
-      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/roms:/data/roms
       - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/games:/data/games
       - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/downloads:/data/downloads
       - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/resources:/data/resources

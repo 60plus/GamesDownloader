@@ -66,7 +66,7 @@ COPY --from=frontend-build /build/dist /app/static
 COPY --from=emulatorjs-stage /emulatorjs /app/static/emulatorjs
 
 # Data directories (clamav = virus definitions volume)
-RUN mkdir -p /data/{config,resources,roms,games,downloads,plugins,redis,clamav} \
+RUN mkdir -p /data/{config,resources,games,downloads,plugins,redis,clamav} \
     && mkdir -p /data/config/transmission \
     && mkdir -p /data/downloads/torrents/.incomplete \
     && mkdir -p /app/static/plugin-layouts
