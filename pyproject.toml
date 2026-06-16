@@ -32,3 +32,13 @@ select = [
 
 # Ignore is empty - everything outside the select list is already off.
 ignore = []
+
+[tool.pytest.ini_options]
+# Tests live under backend/tests. `pythonpath = ["backend"]` puts the backend
+# package root on sys.path so tests import app modules exactly as the app does
+# (from handler..., from middleware..., from config import ...). asyncio_mode
+# "auto" lets the future integration tests (Faza 2) drop the per-function
+# marker; it is harmless for the all-synchronous Faza 1 unit tests.
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+asyncio_mode = "auto"
