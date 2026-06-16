@@ -17,6 +17,18 @@ Adds a minimal set of defensive HTTP headers to every response:
       Legacy IE/Chrome XSS filter - tells old browsers to block rather than
       sanitise a detected reflection attack.  Modern browsers ignore it but
       it costs nothing to send.
+
+  Content-Security-Policy
+      script-src is locked to 'self' (no 'unsafe-inline'/'unsafe-eval') so an
+      injected <script> (from a game title/description, username or scraper
+      metadata) cannot execute.  style-src keeps 'unsafe-inline' on purpose -
+      theme plugins inject inline <style> and the admin installs them knowingly.
+      The /player and /emulatorjs routes are exempted (EmulatorJS needs
+      unrestricted JS + SharedArrayBuffer via COOP/COEP).
+
+  Strict-Transport-Security
+      Sent only when the client connection is HTTPS (X-Forwarded-Proto), so a
+      plain-HTTP self-hosted deployment is never affected.
 """
 from __future__ import annotations
 
@@ -32,6 +44,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         response.headers.setdefault("X-XSS-Protection", "1; mode=block")
+        # HSTS: only when the real client connection is HTTPS. Uvicorn runs
+        # without --proxy-headers, so TLS-terminating proxies are detected via
+        # X-Forwarded-Proto. Plain-HTTP deployments never receive this header.
+        if request.headers.get("x-forwarded-proto", request.url.scheme) == "https":
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000"
+            )
         # Cache: HTML pages (SPA index.html) must never be cached so deploy
         # picks up new JS/CSS chunk hashes immediately.
         content_type = response.headers.get("content-type", "")
@@ -59,7 +78,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; "
+            "script-src 'self' 'wasm-unsafe-eval' blob:; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data: https: http:; "
