@@ -83,7 +83,9 @@ async def get_registration(request: Request):
     # Legacy: enable_registrations (bool) → maps to open/disabled
     mode = await config_handler.get("registration_mode")
     if not mode:
-        legacy = await config_handler.get_bool("enable_registrations", default=True)
+        # Closed by default when nothing was ever configured (matches the gate
+        # in endpoints/auth.py register()).
+        legacy = await config_handler.get_bool("enable_registrations", default=False)
         mode = "open" if legacy else "disabled"
     return {"mode": mode}
 

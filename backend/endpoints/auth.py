@@ -244,7 +244,9 @@ async def register(req: UserCreate, request: Request) -> UserResponse:
     if count > 0:
         from handler.config.config_handler import config_handler
         mode = await config_handler.get("registration_mode") or (
-            "open" if await config_handler.get_bool("enable_registrations", default=True) else "disabled"
+            # Closed by default: an unconfigured instance must NOT accept public
+            # signups. The admin opens registration explicitly via Settings.
+            "open" if await config_handler.get_bool("enable_registrations", default=False) else "disabled"
         )
         if mode == "disabled":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Registrations are disabled")
