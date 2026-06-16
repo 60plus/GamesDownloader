@@ -878,9 +878,17 @@ const activeTab = ref('cover')
 // ── Plugin tab mounting (vanilla DOM via registerMetadataTab) ────────────────
 const pluginTabHost = ref<HTMLElement | null>(null)
 let _pluginCleanup: (() => void) | null = null
+// A plugin tab can flag unsaved changes (enables Save) and register a handler
+// that contributes a partial payload to the panel's Save request.
+const pluginDirty = ref(false)
+let _pluginSaveHandler:
+  | (() => Promise<Record<string, unknown> | void> | Record<string, unknown> | void)
+  | null = null
 
 function _mountPluginTab() {
   if (_pluginCleanup) { try { _pluginCleanup() } catch { /* ignore */ } _pluginCleanup = null }
+  _pluginSaveHandler = null
+  pluginDirty.value = false
   const host = pluginTabHost.value
   if (!host || !isPluginTab(activeTab.value)) return
   const tab = pluginTabs.value.find(tb => tb.id === activeTab.value)
@@ -891,6 +899,8 @@ function _mountPluginTab() {
     apiPrefix: baseApi.value,
     close: () => emit('close'),
     save: (d) => emit('saved', d || {}),
+    markDirty: () => { pluginDirty.value = true },
+    onSave: (handler) => { _pluginSaveHandler = handler },
   }
   try {
     const ret = tab.mount(host, ctx)
@@ -1343,6 +1353,7 @@ const manualMin = ref<Record<ManualKey, string>>({ processor: '', memory: '', gr
 const currentCoverSrc = computed(() => selectedCover.value || props.game.cover_path || props.game.cover_url || '')
 
 const hasChanges = computed(() => {
+  if (pluginDirty.value) return true
   if (pendingRequirements.value !== null) return true
   if (selectedCover.value      !== (props.game.cover_path      || '')) return true
   if (selectedBackground.value !== (props.game.background_path || props.game.background_url || '')) return true
@@ -1882,9 +1893,28 @@ async function save() {
         : []
     if (pendingRequirements.value !== null) payload.requirements = pendingRequirements.value
 
+    // Let a plugin metadata tab contribute to this save (registerMetadataTab onSave).
+    if (_pluginSaveHandler) {
+      const extra = await _pluginSaveHandler()
+      if (extra && typeof extra === 'object') {
+        for (const [k, v] of Object.entries(extra as Record<string, unknown>)) {
+          if (k === 'meta_ratings' && v && typeof v === 'object') {
+            const base = (payload.meta_ratings as Record<string, unknown>)
+              ?? { ...(props.game.meta_ratings || {}) }
+            const merged: Record<string, unknown> = { ...base, ...(v as Record<string, unknown>) }
+            for (const mk of Object.keys(merged)) if (merged[mk] == null) delete merged[mk]
+            payload.meta_ratings = merged
+          } else if (v !== undefined) {
+            payload[k] = v
+          }
+        }
+      }
+    }
+
     if (Object.keys(payload).length) {
       await client.patch(`${baseApi.value}/${props.game.id}`, payload)
     }
+    pluginDirty.value = false
     saveOk.value = true
     emit('saved', payload)
     setTimeout(() => emit('close'), 800)

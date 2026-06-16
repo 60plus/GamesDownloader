@@ -395,6 +395,24 @@ export interface MetadataTabContext {
   close: () => void;
   /** Notify the host that data changed so the detail view re-fetches. */
   save: (data?: Record<string, unknown>) => void;
+  /**
+   * Mark the tab as having unsaved changes. Enables the panel's own Save
+   * button so the user can persist tab edits through the normal Save flow.
+   */
+  markDirty?: () => void;
+  /**
+   * Register a handler invoked when the user clicks the panel's Save button.
+   * Return a partial PATCH payload (e.g. `{ meta_ratings: {...} }`) to be
+   * folded into the panel's single save request; `meta_ratings` is shallow
+   * merged (null/undefined values delete a key), other keys are assigned.
+   * Returning nothing contributes nothing. Replaces any previous handler.
+   */
+  onSave?: (
+    handler: () =>
+      | Promise<Record<string, unknown> | void>
+      | Record<string, unknown>
+      | void,
+  ) => void;
 }
 
 export interface MetadataTab {
