@@ -486,6 +486,8 @@
   "gog.syncing": "Syncing…",
   "gog.sync_now": "Sync Now",
   "gog.sync_complete": "Sync complete - {count} games",
+  "gog.sync_complete_adopted": "Sync complete - {count} games, {adopted} added to library",
+  "gog.adopting": "Adding downloaded games…",
   "gog.sync_failed": "Sync failed: {error}",
   "gog.not_connected": "GOG account not connected",
   "gog.not_connected_desc": "Link your GOG library to sync and download your games.",

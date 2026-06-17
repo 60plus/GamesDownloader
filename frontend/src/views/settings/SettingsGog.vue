@@ -327,9 +327,15 @@ async function triggerSync() {
             syncMsg.value = t('gog.sync_failed', { error: data.error })
           } else {
             syncOk.value  = true
-            syncMsg.value = t('gog.sync_complete', { count: data.synced })
+            const adopted = data.adopted || 0
+            syncMsg.value = adopted > 0
+              ? t('gog.sync_complete_adopted', { count: data.synced, adopted })
+              : t('gog.sync_complete', { count: data.synced })
             status.game_count = data.synced
           }
+        } else if (data.phase === 'adopt') {
+          syncOk.value  = true
+          syncMsg.value = t('gog.adopting')
         }
       } catch {
         clearInterval(_syncPoll!)

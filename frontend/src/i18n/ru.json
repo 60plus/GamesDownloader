@@ -482,6 +482,8 @@
   "gog.syncing": "Синхронизация...",
   "gog.sync_now": "Синхронизировать",
   "gog.sync_complete": "Синхронизация завершена - {count} игр",
+  "gog.sync_complete_adopted": "Синхронизация завершена - {count} игр, добавлено {adopted} в библиотеку",
+  "gog.adopting": "Добавление загруженных игр...",
   "gog.sync_failed": "Ошибка синхронизации: {error}",
   "gog.not_connected": "Аккаунт GOG не подключен",
   "gog.not_connected_desc": "Привяжите библиотеку GOG для синхронизации и скачивания игр.",

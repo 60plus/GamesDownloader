@@ -677,15 +677,20 @@ function startSyncPoller() {
     try {
       const { data } = await client.get('/gog/library/sync/status')
       if (data.running) {
-        syncMsg.value = data.phase === 'scrape'
-          ? 'Fetching metadata…'
-          : `Synced ${data.synced} games…`
+        syncMsg.value = data.phase === 'adopt'
+          ? 'Adding downloaded games…'
+          : data.phase === 'scrape'
+            ? 'Fetching metadata…'
+            : `Synced ${data.synced} games…`
       } else {
         clearInterval(poll)
         syncing.value = false
+        const adopted = data.adopted || 0
         syncMsg.value = data.error
           ? `Error: ${data.error}`
-          : `Done - ${data.synced} games`
+          : adopted > 0
+            ? `Done - ${data.synced} games, ${adopted} added to library`
+            : `Done - ${data.synced} games`
         await loadGames()
         setTimeout(() => { syncMsg.value = '' }, 4000)
       }
@@ -738,7 +743,9 @@ onMounted(async () => {
     const { data } = await client.get('/gog/library/sync/status')
     if (data.running) {
       syncing.value = true
-      syncMsg.value = data.phase === 'scrape' ? 'Fetching metadata…' : `Synced ${data.synced} games…`
+      syncMsg.value = data.phase === 'adopt' ? 'Adding downloaded games…'
+        : data.phase === 'scrape' ? 'Fetching metadata…'
+        : `Synced ${data.synced} games…`
       startSyncPoller()
     }
   } catch { /* ignore - sync status is best-effort */ }

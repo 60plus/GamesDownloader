@@ -482,6 +482,8 @@
   "gog.syncing": "Synchronisation...",
   "gog.sync_now": "Synchroniser maintenant",
   "gog.sync_complete": "Synchronisation terminee - {count} jeux",
+  "gog.sync_complete_adopted": "Synchronisation terminee - {count} jeux, {adopted} ajoutes a la bibliotheque",
+  "gog.adopting": "Ajout des jeux telecharges...",
   "gog.sync_failed": "Echec de la synchronisation : {error}",
   "gog.not_connected": "Compte GOG non connecte",
   "gog.not_connected_desc": "Liez votre bibliotheque GOG pour synchroniser et telecharger vos jeux.",
