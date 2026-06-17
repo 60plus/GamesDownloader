@@ -24,6 +24,7 @@ GamesDownloader is a personal project built on the belief that games you own sho
 
 ### GOG Library
 - Sync your GOG account library automatically
+- **Auto-adopt downloaded games** GOG games already downloaded to `data/games/GOG/` are added to your library automatically on the next sync (links the existing files, no re-download); the sync result reports how many were added. GOG titles enter the library this way rather than through the Custom Games scan, which only covers `data/games/CUSTOM/`
 - Direct game downloads with queue management and progress tracking
 - Pause, resume, and retry downloads
 - Checksum verification after download
@@ -151,10 +152,10 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - **Avatars are upload-only** profile pictures are accepted only via direct file upload, with a path-traversal guard against the avatars directory; the GOG-derived avatar flow stores the locally-downloaded file path, never an external URL, eliminating the open-redirect / SSRF surface that the previous redirect-based handler exposed
 - **Single-use password-reset links** the jti of every consumed reset token is added to a Redis blacklist for the rest of its 1 h validity, so the same email link cannot be replayed after a successful reset
 - **Brute-force protection**Redis-based fixed-window rate limiting per IP with configurable thresholds, ban duration, and whitelist; safe real-IP extraction behind Cloudflare, nginx, or direct access (applied to login, register, and token refresh endpoints)
-- **Security headers**`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `X-XSS-Protection` sent on every response
+- **Security headers**`Content-Security-Policy` (no inline or `eval` scripts), `Strict-Transport-Security` (HSTS, emitted when behind an HTTPS proxy), `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `X-XSS-Protection` sent on every response
 - **IP allowlist** optionally restrict access to specific IPs or CIDR ranges; Cloudflare-aware
 - **Network access control** configurable CORS origins, trusted proxy list, dynamic (no restart needed)
-- **Registration modes** open, disabled, or invite-only (time-limited invite codes with use limits)
+- **Registration modes** open, disabled (default for new installs), or invite-only (time-limited invite codes with use limits)
 - **Session management** all active sessions visible in the admin Users panel; instant per-session or global revoke; Redis JTI blocklist with DB fallback
 - **Email security alerts** configurable email notifications for: failed login attempts, logins from new IP addresses, new user registrations, admin privilege grants, and brute-force IP bans; per-event toggles; Redis deduplication; uses shared Notifications SMTP
 - **Security report** periodic summary email (weekly or monthly) covering login activity, downloads, ClamAV scan results, new users, and most active users; live preview in the UI; manual send button
@@ -230,7 +231,7 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - **Container healthchecks** the app, MariaDB and Redis services all expose Docker healthchecks; the orchestrator marks them `(healthy)` only after `/api/health` returns 200 (with a 120 s `start_period` to absorb the LaunchBox metadata download on first boot), MariaDB answers `SELECT 1`, and Valkey answers `PING`. The app's `depends_on` waits for both data services to be `service_healthy` so startup never races against a still-loading DB or cache.
 
 ### CI
-- **GitHub Actions lint workflow** runs on every push to `main` and every pull request: `ruff` for the Python backend, `vue-tsc --noEmit` for the frontend type-check, and a JSON-syntax pass over all `frontend/src/i18n/*.json` files. Failures show up as red checks on the public repo so contributors see the issue before review; the workflow is GitHub-side only and does not block deployment, which pulls from a separate Gitea remote
+- **GitHub Actions lint workflow** runs on every push to `main` and every pull request: `ruff` for the Python backend, `vue-tsc --noEmit` for the frontend type-check, a JSON-syntax pass over all `frontend/src/i18n/*.json` files, a `pytest` unit-test run (auth tokens, ETag, security headers), and a `pip-audit` CVE scan of the Python dependencies. Failures show up as red checks on the public repo so contributors see the issue before review; the workflow is GitHub-side only and does not block deployment, which pulls from a separate Gitea remote
 
 ### Other
 - 7-step setup wizard for first-run configuration
@@ -304,7 +305,7 @@ DB_PASSWD=your-password
 # Auth (use a long random string, min 32 chars).
 # If left as the placeholder "change-me-in-production", the entrypoint
 # auto-generates a 256-bit key on first start and persists it to
-# /data/.secret_key. Keep that file safe: losing it invalidates every
+# /data/config/.secret_key. Keep that file safe: losing it invalidates every
 # active session and makes secrets in app_config unreadable.
 GD_AUTH_SECRET_KEY=your-very-long-random-secret-key
 
