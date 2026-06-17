@@ -317,6 +317,19 @@ async def sync_library(
                 _sync_status["phase"] = "scrape"
                 await gog_scrape_handler.scrape_all_unscraped(force=force)
 
+            # Auto-adopt: publish GOG games already downloaded to disk but not yet
+            # in the library (toggle gog_auto_publish_downloaded, default on). Only
+            # touches never-published games, so hidden games stay hidden.
+            from handler.config.config_handler import config_handler
+            if await config_handler.get_bool("gog_auto_publish_downloaded", default=True):
+                _sync_status["phase"] = "adopt"
+                try:
+                    from endpoints.library.library_router import adopt_downloaded_gog_games
+                    adopt_res = await adopt_downloaded_gog_games()
+                    _sync_status["adopted"] = adopt_res.get("adopted", 0)
+                except Exception as e:
+                    logger.warning("Auto-adopt after sync failed: %s", e)
+
             _sync_status["running"] = False
         except Exception as e:
             _sync_status["running"] = False

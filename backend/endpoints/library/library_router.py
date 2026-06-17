@@ -1124,45 +1124,57 @@ async def library_get_video_options(
 
 # ── Publish from GOG ──────────────────────────────────────────────────────────
 
-@protected_route(library_router.post, "/games/publish/{gog_game_id}", scopes=[Scope.LIBRARY_ADMIN])
-async def publish_from_gog(request: Request, gog_game_id: int) -> dict:
-    """Publish a GOG game into the GamesDownloader library.
-
-    Creates (or updates) a LibraryGame and scans the GOG download folder
-    for available files.  Existing LibraryFile records are preserved unless
-    the file is no longer on disk.
-    """
-    from handler.database.base_handler import DBBaseHandler
+async def _get_gog_game(gog_game_id: int):
     from models.gog_game import GogGame
     from sqlalchemy import select as sa_select
     from handler.database.session import async_session_factory
-
-    # Fetch GogGame
     async with async_session_factory() as session:
         result = await session.execute(sa_select(GogGame).where(GogGame.id == gog_game_id))
-        gog_game = result.scalar_one_or_none()
+        return result.scalar_one_or_none()
 
-    if not gog_game:
-        raise HTTPException(status_code=404, detail="GOG game not found")
 
-    # Check if already published
-    existing = await _lib.get_by_gog_game_id(gog_game_id)
+async def _publish_gog_core(
+    gog_game,
+    *,
+    published_by: int | None,
+    only_new: bool = False,
+    require_files: bool = False,
+) -> dict | None:
+    """Create/update a LibraryGame (source=gog) for a GogGame and link the files
+    already present on disk under /data/games/GOG/{title}/.
+
+    Shared by the manual publish endpoint and the auto-adopt pass (post-sync /
+    "Adopt now"). No re-download: only files found on disk are linked.
+
+    only_new=True      -> skip games already in the library, so a deliberately
+                          unpublished game is never silently re-activated.
+    require_files=True  -> skip games with no game files on disk, so no empty
+                          library entries are created.
+    Returns the game dict, or None when the game was skipped.
+    """
+    existing = await _lib.get_by_gog_game_id(gog_game.id)
+    if only_new and existing:
+        return None
+
+    # Scan first so require_files can skip before any DB write. game_id is fixed
+    # up after the LibraryGame exists.
+    gog_folder = os.path.join(GAMES_PATH, "GOG", _sanitize(gog_game.title))
+    scanned = _scan_folder_files(gog_folder, 0, "gog")
+    if require_files and not scanned:
+        return None
 
     if existing:
         lib_game = existing
         # Re-activate if previously unpublished; metadata comes from GOG via fallback
-        await _lib.update(lib_game, {
-            "title":     gog_game.title,
-            "is_active": True,
-        })
+        await _lib.update(lib_game, {"title": gog_game.title, "is_active": True})
         lib_game = await _lib.get_by_id(lib_game.id)
     else:
         slug = _slugify(gog_game.title)
         if await _lib.get_by_slug(slug):
-            slug = f"{slug}-{gog_game_id}"
+            slug = f"{slug}-{gog_game.id}"
         # Only store identity + link to GOG; metadata served via fallback from GogGame
         lib_game = LibraryGame(
-            gog_game_id=gog_game_id,
+            gog_game_id=gog_game.id,
             source="gog",
             title=gog_game.title,
             slug=slug,
@@ -1170,25 +1182,21 @@ async def publish_from_gog(request: Request, gog_game_id: int) -> dict:
             os_mac=gog_game.os_mac,
             os_linux=gog_game.os_linux,
             is_active=True,
-            published_by=gog_game.owner_user_id or request.state.user.id,
+            published_by=published_by,
         )
         lib_game = await _lib.create(lib_game)
 
-    # Scan GOG folder for files
-    gog_folder = os.path.join(GAMES_PATH, "GOG", _sanitize(gog_game.title))
-    new_files = _scan_folder_files(gog_folder, lib_game.id, "gog")
-
-    # Get existing file paths to avoid duplicates
     existing_files = await _lib.get_files_for_game(lib_game.id)
     existing_paths = {f.file_path for f in existing_files}
 
     added = 0
-    for f in new_files:
+    for f in scanned:
         if f.file_path not in existing_paths:
+            f.library_game_id = lib_game.id
             await _lib.create_file(f)
             added += 1
 
-    # Mark files no longer on disk as unavailable
+    # Mark previously-linked GOG files that vanished from disk as unavailable
     for ef in existing_files:
         if ef.source == "gog" and not os.path.exists(_abs_path(ef.file_path)):
             await _lib.update_file(ef, {"is_available": False})
@@ -1196,6 +1204,50 @@ async def publish_from_gog(request: Request, gog_game_id: int) -> dict:
     lib_game = await _lib.get_by_id(lib_game.id)
     total_files = len(await _lib.get_files_for_game(lib_game.id))
     return {**_game_to_dict(lib_game), "_scanned": added, "_total": total_files}
+
+
+async def adopt_downloaded_gog_games() -> dict:
+    """Publish every GOG game whose files are already on disk but which is not
+    yet in the library. Safe + idempotent: only_new (never re-activates a
+    deliberately unpublished game) + require_files (never creates empty entries).
+    Used by the post-sync auto-adopt and the "Adopt now" button.
+    """
+    from handler.gog.gog_sync_handler import gog_sync_handler
+    games = await gog_sync_handler.get_all_deduped()
+    adopted = 0
+    for g in games:
+        try:
+            res = await _publish_gog_core(
+                g, published_by=g.owner_user_id, only_new=True, require_files=True,
+            )
+            if res is not None:
+                adopted += 1
+        except Exception:
+            logger.warning("Auto-adopt: failed for GOG game %s", getattr(g, "id", "?"), exc_info=True)
+    logger.info("Auto-adopt: published %d downloaded GOG game(s) of %d checked", adopted, len(games))
+    return {"checked": len(games), "adopted": adopted}
+
+
+@protected_route(library_router.post, "/games/publish/{gog_game_id}", scopes=[Scope.LIBRARY_ADMIN])
+async def publish_from_gog(request: Request, gog_game_id: int) -> dict:
+    """Publish a single GOG game into the library (manual, from the GOG view).
+
+    Creates/updates the LibraryGame and links files found on disk. Re-activates
+    a previously unpublished game.
+    """
+    gog_game = await _get_gog_game(gog_game_id)
+    if not gog_game:
+        raise HTTPException(status_code=404, detail="GOG game not found")
+    return await _publish_gog_core(
+        gog_game,
+        published_by=gog_game.owner_user_id or request.state.user.id,
+    )
+
+
+@protected_route(library_router.post, "/gog/adopt", scopes=[Scope.LIBRARY_ADMIN])
+async def adopt_gog_downloads(request: Request) -> dict:
+    """Adopt all downloaded-but-unpublished GOG games (manual "Adopt now")."""
+    return await adopt_downloaded_gog_games()
 
 
 # ── Unpublish (hide) a game from the library ──────────────────────────────────
