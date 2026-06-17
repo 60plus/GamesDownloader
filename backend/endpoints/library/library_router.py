@@ -408,11 +408,15 @@ async def get_library_game(request: Request, game_id: int) -> dict:
         from sqlalchemy import select as _sel2
         async with _asf2() as _s2:
             owner_name = (await _s2.execute(_sel2(_U2.username).where(_U2.role == _R2.ADMIN).limit(1))).scalar_one_or_none() or "Admin"
-    # Load GOG game for fallback metadata
+    # Load GOG game for fallback metadata. Import the session factory locally:
+    # the _asf above is only bound when game.published_by is set, so a GOG game
+    # with published_by=None (e.g. an admin-library game adopted from disk) would
+    # otherwise hit UnboundLocalError here.
     gog_game = None
     if game.source == 'gog' and game.gog_game_id:
+        from handler.database.session import async_session_factory as _asf3
         from models.gog_game import GogGame as _GG
-        async with _asf() as _s:
+        async with _asf3() as _s:
             gog_game = await _s.get(_GG, game.gog_game_id)
     return _game_to_dict(game, owner_username=owner_name, gog_game=gog_game)
 
