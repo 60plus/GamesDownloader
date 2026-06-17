@@ -41,11 +41,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Plugin compiler: Vite + Vue (cached layer - rarely changes)
+# Plugin compiler: Vite + Vue (cached layer - rarely changes).
+# Versions pinned to the known-good set. npm has a long-standing bug where it
+# silently skips a package's platform-specific optional dependency when the
+# install hits a transient hiccup (npm/cli#4828). For Vite/rolldown that drops
+# the @rolldown/binding-<platform> native .node, which only surfaces at runtime
+# as "Cannot find native binding". Retry until the binding is actually present
+# (arch-agnostic glob), and fail the build loudly if it never installs.
 COPY scripts/compile-theme-plugins.mjs /app/plugin-compiler/compile-theme-plugins.mjs
 RUN cd /app/plugin-compiler \
     && npm init -y >/dev/null 2>&1 \
-    && npm install --no-fund --no-audit vite @vitejs/plugin-vue vue >/dev/null 2>&1
+    && for i in 1 2 3; do \
+         npm install --no-fund --no-audit vite@8.0.16 @vitejs/plugin-vue@6.0.7 vue@3.5.38 >/dev/null 2>&1; \
+         if ls node_modules/@rolldown/binding-*/*.node >/dev/null 2>&1; then break; fi; \
+         echo "plugin-compiler: rolldown native binding missing, retry $i/3"; \
+         rm -rf node_modules package-lock.json; \
+       done \
+    && ls node_modules/@rolldown/binding-*/*.node >/dev/null 2>&1 \
+       || { echo "FATAL: rolldown native binding failed to install"; exit 1; }
 
 # ClamAV configuration
 COPY docker/clamd.conf /etc/clamav/clamd.conf
