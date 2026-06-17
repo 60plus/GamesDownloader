@@ -172,6 +172,8 @@
   "detail.size": "Tamanho",
   "detail.languages": "Idiomas",
   "detail.developer": "Desenvolvedor",
+  "detail.show_details": "Mostrar detalhes",
+  "detail.hide_details": "Ocultar detalhes",
   "detail.publisher": "Editora",
   "detail.owner": "Proprietario",
   "detail.genres": "Generos",

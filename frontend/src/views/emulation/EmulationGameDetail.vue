@@ -351,6 +351,16 @@
                 <span class="gd-dk">{{ t('library.platform_label') }}</span>
                 <span class="gd-dv">{{ rom.platform_name }}</span>
               </template>
+              <template v-for="prow in pluginRows" :key="prow.id">
+                <span v-if="prow.fullWidth" class="gd-dv" style="grid-column:1 / -1">
+                  <PluginDetailValue :row="prow" :game="rom" library="roms" variant="dlist" />
+                </span>
+                <template v-else>
+                  <span class="gd-di"></span>
+                  <span class="gd-dk">{{ prow.label }}</span>
+                  <span class="gd-dv"><PluginDetailValue :row="prow" :game="rom" library="roms" variant="dlist" /></span>
+                </template>
+              </template>
             </div>
           </div>
 
@@ -514,6 +524,8 @@ import client from '@/services/api/client'
 import { useDialog } from '@/composables/useDialog'
 import { useI18n } from '@/i18n'
 import EmulationRomMetadataPanel from './EmulationRomMetadataPanel.vue'
+import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
+import { resolveDetailRows } from '@/themes/index'
 import TranslateButton from '@/components/common/TranslateButton.vue'
 import HeroBackground from '@/components/common/HeroBackground.vue'
 import { getEjsCore } from '@/utils/ejsCores'
@@ -579,6 +591,9 @@ interface RomDetail {
 }
 
 const rom              = ref<RomDetail | null>(null)
+
+// Rows contributed by plugins via window.__GD__.registerDetailRow.
+const pluginRows       = computed(() => rom.value ? resolveDetailRows(rom.value as any, 'roms') : [])
 const loading          = ref(true)
 const coverFailed      = ref(false)
 const backPillLogoFailed = ref(false)

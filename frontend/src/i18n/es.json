@@ -172,6 +172,8 @@
   "detail.size": "Tamano",
   "detail.languages": "Idiomas",
   "detail.developer": "Desarrollador",
+  "detail.show_details": "Mostrar detalles",
+  "detail.hide_details": "Ocultar detalles",
   "detail.publisher": "Editor",
   "detail.owner": "Propietario",
   "detail.genres": "Generos",

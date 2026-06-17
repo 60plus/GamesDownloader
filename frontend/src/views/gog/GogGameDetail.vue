@@ -441,6 +441,15 @@
               </template>
               <span class="gd-dk">GOG ID</span>
               <span class="gd-dv gd-mono">{{ game.gog_id }}</span>
+              <template v-for="prow in pluginRows" :key="prow.id">
+                <span v-if="prow.fullWidth" class="gd-dv" style="grid-column:1 / -1">
+                  <PluginDetailValue :row="prow" :game="game" library="gog" variant="dlist" />
+                </span>
+                <template v-else>
+                  <span class="gd-dk">{{ prow.label }}</span>
+                  <span class="gd-dv"><PluginDetailValue :row="prow" :game="game" library="gog" variant="dlist" /></span>
+                </template>
+              </template>
             </div>
 
             <!-- ── System Requirements ──────────────────────────────────────── -->
@@ -664,6 +673,8 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import client from '@/services/api/client'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
+import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
+import { resolveDetailRows } from '@/themes/index'
 import DownloadDialog from '@/components/gog/DownloadDialog.vue'
 import { useThemeStore } from '@/stores/theme'
 import { useNotifications } from '@/composables/useNotifications'
@@ -813,6 +824,9 @@ async function unpublishFromLibrary() {
 }
 
 const game           = ref<Game | null>(null)
+
+// Rows contributed by plugins via window.__GD__.registerDetailRow.
+const pluginRows     = computed(() => game.value ? resolveDetailRows(game.value as any, 'gog') : [])
 const loading        = ref(true)
 const scraping          = ref(false)
 const clearing          = ref(false)

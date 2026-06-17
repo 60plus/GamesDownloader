@@ -180,6 +180,10 @@
               <span v-for="g in game.genres" :key="g" class="genre-tag">{{ g }}</span>
             </div>
           </template>
+          <div v-for="prow in pluginRows" :key="prow.id" class="icard-row gd-pdr-icard">
+            <span v-if="prow.label" class="icard-label">{{ prow.label }}: </span>
+            <span class="icard-val"><PluginDetailValue :row="prow" :game="game" :library="props.activeLib || 'games'" variant="icard" /></span>
+          </div>
         </div>
 
         <!-- Card 2: for ROMs = ROM Info; for GOG/Games = Languages & OS -->
@@ -552,6 +556,8 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import client from '@/services/api/client'
 import { buildLanguageList } from '@/utils/langMap'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
+import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
+import { resolveDetailRows } from '@/themes/index'
 import EmulationRomMetadataPanel from '@/views/emulation/EmulationRomMetadataPanel.vue'
 import DownloadDialog from '@/components/gog/DownloadDialog.vue'
 import { useThemeStore } from '@/stores/theme'
@@ -602,6 +608,9 @@ interface GameData {
 }
 
 const game        = ref<GameData | null>(null)
+
+// Rows contributed by plugins via window.__GD__.registerDetailRow.
+const pluginRows  = computed(() => game.value ? resolveDetailRows(game.value as any, props.activeLib || 'games') : [])
 const loading     = ref(false)
 const error       = ref('')
 const coverFailed = ref(false)

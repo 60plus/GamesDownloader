@@ -365,6 +365,15 @@
                 <span class="gd-dk">{{ t('detail.source') }}</span>
                 <span class="gd-dv">{{ game.source === 'gog' ? 'GOG' : 'Custom' }}</span>
               </template>
+              <template v-for="prow in pluginRows" :key="prow.id">
+                <span v-if="prow.fullWidth" class="gd-dv" style="grid-column:1 / -1">
+                  <PluginDetailValue :row="prow" :game="game" library="games" variant="dlist" />
+                </span>
+                <template v-else>
+                  <span class="gd-dk">{{ prow.label }}</span>
+                  <span class="gd-dv"><PluginDetailValue :row="prow" :game="game" library="games" variant="dlist" /></span>
+                </template>
+              </template>
             </div>
 
             <!-- Minimum Requirements (Windows) -->
@@ -576,6 +585,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import client from '@/services/api/client'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
+import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
+import { resolveDetailRows } from '@/themes/index'
 import { sanitizeHtml } from '@/utils/sanitize'
 import TranslateButton from '@/components/common/TranslateButton.vue'
 import HeroBackground from '@/components/common/HeroBackground.vue'
@@ -645,6 +656,10 @@ const canEdit    = computed(() => ['admin','uploader','editor'].includes(auth.us
 
 const game       = ref<LibGame | null>(null)
 const loading    = ref(true)
+
+// Rows contributed by plugins via window.__GD__.registerDetailRow (reactive to
+// both the game and plugin registration).
+const pluginRows = computed(() => game.value ? resolveDetailRows(game.value as any, 'games') : [])
 const coverFailed = ref(false)
 const scraping   = ref(false)
 const clearing   = ref(false)

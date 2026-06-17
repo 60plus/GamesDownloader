@@ -435,3 +435,146 @@ export function registerMetadataTab(tab: MetadataTab): void {
 export function getMetadataTabs(): MetadataTab[] {
   return Array.from(_metadataTabs.values());
 }
+
+// ── Plugin detail-page rows ─────────────────────────────────────────────────
+// Lets any plugin add one or more rows to the game detail "info card" without
+// hand-injecting DOM into each theme's bespoke markup. The ACTIVE THEME renders
+// the row natively in its own style (Modern `.gd-dlist`, Classic `.icard`, and
+// any future theme), so plugin rows always match the surrounding card.
+//
+// Two ways to supply the value, mix freely:
+//   1. Declarative `segments` (theme-styled, auto-matches the theme): a list of
+//      typed pieces (text / badge / icon / bar / link / image / sep). Maximum
+//      visual freedom WITHOUT touching the theme - colors, icons, tooltips,
+//      click handlers, custom classes and inline styles are all per-segment.
+//   2. `render(el, ctx)` escape hatch (total control): the theme hands the
+//      plugin the value cell and a context (game, library, variant, t, api);
+//      the plugin draws anything. Guarantees a plugin never needs a core change
+//      to render something new.
+// Registered through window.__GD__.registerDetailRow().
+
+export interface DetailSegment {
+  /** Visual kind. Default "text". */
+  type?: "text" | "badge" | "icon" | "bar" | "link" | "image" | "sep";
+  /** Text content (text / badge / link). */
+  text?: string;
+  /** Foreground / accent color (any CSS color or var()). */
+  color?: string;
+  /** Background color (badge). */
+  bg?: string;
+  /** Mask icon: a data: URI or URL, recolored with `color` (icon / badge / inline). */
+  icon?: string;
+  /** Image source (type "image"). */
+  src?: string;
+  /** Pixel size for icon / image height. */
+  size?: number;
+  /** Bar fill 0..1 (type "bar"). */
+  value?: number;
+  /** Link target (type "link"). Opens in a new tab. */
+  href?: string;
+  bold?: boolean;
+  muted?: boolean;
+  /** Native title/tooltip. */
+  title?: string;
+  /** Extra CSS class (so a plugin's own injected CSS can target it). */
+  class?: string;
+  /** Inline style escape hatch. */
+  style?: Record<string, string>;
+  /** Click handler (makes the segment interactive). */
+  onClick?: (ev: MouseEvent) => void;
+}
+
+export interface DetailRowData {
+  /** Row label shown in the key column. Omit (or set fullWidth) for no label. */
+  label?: string;
+  /** Declarative value content. Ignored when `render` is provided. */
+  segments?: DetailSegment[];
+  /** Optional expandable section revealed by a "Show details" toggle. */
+  details?: {
+    /** Toggle text; defaults to a translated "Show details" / "Hide details". */
+    toggleLabel?: string;
+    /** Each entry is one detail line made of segments. */
+    items: DetailSegment[][];
+  };
+  /** Span the whole card (no label column) - a free canvas for the value. */
+  fullWidth?: boolean;
+  /** Row accent color. */
+  color?: string;
+  /** Row tooltip. */
+  title?: string;
+  /** Extra CSS class on the row element. */
+  class?: string;
+  /**
+   * Escape hatch: draw the value cell yourself. When present, `segments` is
+   * ignored and the theme mounts this into the value element. Return an
+   * optional cleanup function.
+   */
+  render?: (el: HTMLElement, ctx: DetailRowRenderContext) => void | (() => void);
+}
+
+export interface DetailRowRenderContext {
+  /** The game record being shown (includes meta_ratings). */
+  game: Record<string, unknown>;
+  /** Which library: "games" | "gog" | "roms". */
+  library: string;
+  /** The active theme's row style: "dlist" (Modern) | "icard" (Classic) | custom. */
+  variant: string;
+  /** Translate a key with an English fallback. */
+  t: (key: string, fallback?: string) => string;
+  /** Authenticated axios instance (window.__GD__.api). */
+  api: unknown;
+}
+
+export interface DetailRow {
+  id: string;
+  /** Limit to one library, or "all" (default). */
+  library?: "games" | "gog" | "roms" | "all";
+  /** Sort order among injected rows (ascending; default 0). */
+  order?: number;
+  /**
+   * Build the row for a given game. Return the row data, or null to hide the
+   * row for this particular game. Called reactively as the detail view renders.
+   */
+  resolve: (ctx: { game: Record<string, unknown>; library: string }) => DetailRowData | null;
+}
+
+const _detailRows: Map<string, DetailRow> = shallowReactive(new Map());
+
+export function registerDetailRow(row: DetailRow): void {
+  if (row && row.id && typeof row.resolve === "function") {
+    _detailRows.set(row.id, row);
+  }
+}
+
+export function getDetailRows(library?: string): DetailRow[] {
+  return Array.from(_detailRows.values())
+    .filter((r) => !library || !r.library || r.library === "all" || r.library === library)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+/** A row's resolved data for a specific game, with its registration id attached. */
+export interface ResolvedDetailRow extends DetailRowData {
+  id: string;
+}
+
+/**
+ * Resolve every registered row for one game + library. Rows whose `resolve`
+ * returns null (no data for this game) or throws are skipped. Host detail views
+ * iterate this and render each row in their own native row markup, putting a
+ * <PluginDetailValue> in the value cell.
+ */
+export function resolveDetailRows(
+  game: Record<string, unknown>,
+  library: string,
+): ResolvedDetailRow[] {
+  const out: ResolvedDetailRow[] = [];
+  for (const r of getDetailRows(library)) {
+    try {
+      const data = r.resolve({ game, library });
+      if (data) out.push({ id: r.id, ...data });
+    } catch {
+      /* a misbehaving plugin row must not break the detail page */
+    }
+  }
+  return out;
+}

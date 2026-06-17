@@ -172,6 +172,8 @@
   "detail.size": "Размер",
   "detail.languages": "Языки",
   "detail.developer": "Разработчик",
+  "detail.show_details": "Показать подробности",
+  "detail.hide_details": "Скрыть подробности",
   "detail.publisher": "Издатель",
   "detail.owner": "Владелец",
   "detail.genres": "Жанры",

@@ -9,7 +9,7 @@ import "flag-icons/css/flag-icons.min.css";
 import { createAppRouter } from "./plugins/router";
 import { createAppPinia } from "./plugins/pinia";
 import { vuetify } from "./plugins/vuetify";
-import { registerTheme, registerPluginLayout, registerPluginCouchMode, registerMetadataTab } from "./themes/index";
+import { registerTheme, registerPluginLayout, registerPluginCouchMode, registerMetadataTab, registerDetailRow } from "./themes/index";
 import { useCouchNav, navPaused as couchNavPaused } from "./composables/useCouchNav";
 import { useCouchTheme } from "./composables/useCouchTheme";
 import { getEjsCore } from "./utils/ejsCores";
@@ -95,6 +95,7 @@ function createSafeSocketStore() {
   registerPluginLayout,
   registerPluginCouchMode,
   registerMetadataTab,
+  registerDetailRow,
   composables: {
     useCouchNav,
     couchNavPaused,
