@@ -25,6 +25,10 @@ Adds a minimal set of defensive HTTP headers to every response:
       theme plugins inject inline <style> and the admin installs them knowingly.
       The /player and /emulatorjs routes are exempted (EmulatorJS needs
       unrestricted JS + SharedArrayBuffer via COOP/COEP).
+      connect-src is 'self' only: socket.io talks to its own origin, so no
+      wildcard ws:/wss: (which would allow exfiltration to any host) is needed.
+      img-src drops http: (no mixed content) - all scraper media is served
+      locally; https: is kept for plugin themes that reference remote images.
 
   Strict-Transport-Security
       Sent only when the client connection is HTTPS (X-Forwarded-Proto), so a
@@ -81,8 +85,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "script-src 'self' 'wasm-unsafe-eval' blob:; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com; "
-            "img-src 'self' data: https: http:; "
-            "connect-src 'self' ws: wss:; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self'; "
             "media-src 'self' blob:; "
             "worker-src 'self' blob:; "
             "frame-src 'self'"
