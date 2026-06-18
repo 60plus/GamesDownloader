@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
 import client from "@/services/api/client";
+import { useLibrariesStore } from "@/stores/libraries";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -36,6 +37,13 @@ const routes: RouteRecordRaw[] = [
         name: "games-detail",
         component: () => import("@/views/games/GamesGameDetail.vue"),
         meta: { title: "Game", fullBleed: true },
+      },
+      // ── Custom collection (library) view ────────────────────────────────
+      {
+        path: "lib/:slug",
+        name: "collection",
+        component: () => import("@/views/games/GamesLibrary.vue"),
+        meta: { title: "Collection", fullBleed: true },
       },
       // ── Emulation Library ───────────────────────────────────────────────
       {
@@ -168,6 +176,25 @@ export function createAppRouter() {
       } catch {
         next({ name: "games-library" });
         return;
+      }
+    }
+
+    // Library visibility: block routes whose library is disabled in the registry
+    // (emulation library and couch mode). Fail open if the registry is unknown.
+    if (token) {
+      const gatedSlug =
+        to.path.startsWith("/emulation") ? "emulation"
+        : to.path === "/couch" ? "couch"
+        : to.path.startsWith("/lib/") ? ((to.params.slug as string) || "")
+        : null;
+      if (gatedSlug) {
+        const libs = useLibrariesStore();
+        if (!libs.loaded) await libs.fetch();
+        const known = libs.libraries.length > 0;
+        if (known && (!libs.has(gatedSlug) || (gatedSlug === "couch" && !libs.has("emulation")))) {
+          next({ name: "games-library" });
+          return;
+        }
       }
     }
 

@@ -84,6 +84,11 @@ const icons = {
     h('circle', { cx:12, cy:12, r:10 }),
     h('circle', { cx:12, cy:12, r:3, fill:'currentColor', stroke:'none' }),
   ]),
+  libraries: () => h('svg', { width:14, height:14, viewBox:'0 0 24 24', fill:'none', stroke:'currentColor', 'stroke-width':2 }, [
+    h('rect', { x:3, y:4, width:4, height:16, rx:1 }),
+    h('rect', { x:10, y:4, width:4, height:16, rx:1 }),
+    h('path', { d:'M17 5l3.5.9-3 15.1-3.5-.9z' }),
+  ]),
   security: () => h('svg', { width:14, height:14, viewBox:'0 0 24 24', fill:'none', stroke:'currentColor', 'stroke-width':2 }, [
     h('path', { d:'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' }),
   ]),
@@ -121,6 +126,7 @@ const icons = {
 
 const ALL_TABS = [
   { key: 'appearance',    label: 'Appearance',    icon: icons.appearance,    adminOnly: false },
+  { key: 'libraries',     label: 'Libraries',     icon: icons.libraries,     adminOnly: false },
   { key: 'security',      label: 'Security',      icon: icons.security,      adminOnly: true  },
   { key: 'gog',           label: 'GOG',           icon: icons.gog,           adminOnly: true  },
   { key: 'metadata',      label: 'Metadata',      icon: icons.metadata,      adminOnly: true  },
@@ -136,6 +142,7 @@ const TABS = computed(() => ALL_TABS.filter(t => !t.adminOnly || isAdmin.value))
 
 const views: Record<string, ReturnType<typeof defineAsyncComponent>> = {
   appearance:    defineAsyncComponent(() => import('./SettingsAppearance.vue')),
+  libraries:     defineAsyncComponent(() => import('./SettingsLibraries.vue')),
   security:      defineAsyncComponent(() => import('./SettingsSecurity.vue')),
   gog:           defineAsyncComponent(() => import('./SettingsGog.vue')),
   metadata:      defineAsyncComponent(() => import('./SettingsMetadata.vue')),

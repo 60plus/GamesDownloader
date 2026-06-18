@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import client from "@/services/api/client";
 import { useThemeStore } from "@/stores/theme";
+import { useLibrariesStore } from "@/stores/libraries";
 
 const TOKEN_KEY = "gd3_token";
 const REFRESH_KEY = "gd3_refresh";
@@ -69,6 +70,8 @@ export const useAuthStore = defineStore("auth", () => {
         const themeStore = useThemeStore();
         themeStore.loadPreferences(data.preferences as Record<string, unknown>);
       }
+      // Refresh the data-driven library registry now that we're authenticated.
+      useLibrariesStore().fetch();
     } catch (err: any) {
       if (err?.response?.status === 401) {
         // Token is invalid or expired - clear session so user is sent to login

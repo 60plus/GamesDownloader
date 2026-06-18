@@ -11,7 +11,7 @@
       <!-- Library header -->
       <div class="lib-head">
         <img v-if="activeLib === 'roms' && activePlatformFsSlug" :src="`/platforms/icons/${activePlatformFsSlug}.png`" class="lib-head-icon" :alt="activePlatformFsSlug" @error="($event.target as HTMLImageElement).src = '/icons/gamepad.svg'" />
-        <img v-else-if="activeLibObj?.icon.startsWith('/')" :src="activeLibObj.icon" class="lib-head-icon" :alt="activeLibObj?.name" />
+        <LibraryIcon v-else-if="activeLibObj" :icon="activeLibObj.icon" :color="activeLibObj.color" :size="70" class="lib-head-icon" :alt="activeLibObj.name" />
         <span class="lib-head-name">{{ libDisplayName }}</span>
         <span class="game-count">{{ libraries.find(l => l.id === activeLib)?.count ?? 0 }} {{ activeLib === 'roms' ? t('emulation.roms_count') : t('library.games') }}</span>
       </div>
@@ -189,7 +189,7 @@
                 <div class="menu-sep" />
               </template>
               <div class="menu-sep" />
-              <router-link to="/couch" class="menu-item" @click="menuOpen = false">
+              <router-link v-if="couchShown" to="/couch" class="menu-item" @click="menuOpen = false">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="14" rx="3"/><circle cx="8" cy="13" r="1.5" fill="currentColor" stroke="none"/><circle cx="16" cy="13" r="1.5" fill="currentColor" stroke="none"/><path d="M6 10h4M8 8v4M14 11h4" stroke-width="2"/></svg>
                 {{ t('couch.title') }}
               </router-link>
@@ -271,7 +271,7 @@
         </div>
 
         <!-- Library: V1-style game detail -->
-        <ClassicGameDetail v-else :game-id="activeGameId" :active-lib="activeLib" :refresh-tick="detailRefreshTick" />
+        <ClassicGameDetail v-else :game-id="activeGameId" :active-lib="classicDetailLib" :refresh-tick="detailRefreshTick" />
 
       </div>
 
@@ -581,9 +581,11 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useLibrariesStore } from '@/stores/libraries'
 import { useSocketStore } from '@/stores/socket'
 import client from '@/services/api/client'
 import AmbientBackground from '@/components/common/AmbientBackground.vue'
+import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import ClassicGameDetail from './ClassicGameDetail.vue'
 import NotificationSnackbar from '@/components/common/NotificationSnackbar.vue'
 import DownloadManager from '@/components/gog/DownloadManager.vue'
@@ -607,6 +609,9 @@ interface Game {
 interface Library { id: string; name: string; icon: string; color: string; count: number }
 
 const authStore = useAuthStore()
+const libs      = useLibrariesStore()
+// Couch is shown only when both it and the emulation library are enabled.
+const couchShown = computed(() => !libs.loaded || (libs.has('couch') && libs.has('emulation') && !libs.isHidden('couch') && !libs.isHidden('emulation')))
 const router    = useRouter()
 const route     = useRoute()
 
@@ -719,6 +724,15 @@ function pushLog(msg: string) {
 
 const activeLibObj = computed(() => libraries.value.find(l => l.id === activeLib.value))
 
+// User-created libraries (registry kind "collection") are addressed by slug.
+function isCollectionLib(id: string): boolean {
+  const l = libs.bySlug(id)
+  return !!l && l.kind === 'collection'
+}
+// ClassicGameDetail only handles games/gog/roms; a collection's games are library
+// games, so the detail pane treats a collection like the built-in "games" library.
+const classicDetailLib = computed(() => isCollectionLib(activeLib.value) ? 'games' : activeLib.value)
+
 const libDisplayName = computed(() => {
   const map: Record<string, string> = { gog: t('nav.gog_library'), games: t('nav.games_library'), roms: t('nav.emulation') }
   return map[activeLib.value] ?? activeLibObj.value?.name ?? ''
@@ -726,7 +740,7 @@ const libDisplayName = computed(() => {
 
 const isNonLibraryRoute = computed(() =>
   !['library', 'game-detail', 'games-library', 'games-detail',
-    'emulation-home', 'emulation-library', 'emulation-detail'].includes(route.name as string)
+    'emulation-home', 'emulation-library', 'emulation-detail', 'collection'].includes(route.name as string)
 )
 
 const initials = computed(() => {
@@ -804,33 +818,37 @@ async function fetchGames() {
       if (libIdx >= 0) libraries.value[libIdx].count = games.value.length
       return
     }
-    if (activeLib.value === 'games') {
-      const { data } = await client.get('/library/games', { params: { limit: 500 } })
-      games.value = (data.items as any[]).map((g: any) => ({
-        id:           g.id,
-        title:        g.title,
-        downloaded:   (g.files as any[])?.some((f: any) => f.is_available) ?? false,
-        rating:       g.rating,
+    if (activeLib.value === 'gog') {
+      const { data } = await client.get('/gog/library/games')
+      games.value = (data as any[]).map(g => ({
+        id: g.id,
+        title: g.title,
+        downloaded: g.is_downloaded,
+        rating: g.rating,
         release_date: g.release_date,
-        icon:         g.icon_path || g.cover_path || '',
-        cover:        g.cover_path || '',
+        icon: resolveIcon(g),
+        cover: resolveCover(g),
       }))
-      const libIdx = libraries.value.findIndex(l => l.id === 'games')
-      if (libIdx >= 0) libraries.value[libIdx].count = games.value.length
+      const gogIdx = libraries.value.findIndex(l => l.id === 'gog')
+      if (gogIdx >= 0) libraries.value[gogIdx].count = games.value.length
       return
     }
-    const { data } = await client.get('/gog/library/games')
-    games.value = (data as any[]).map(g => ({
-      id: g.id,
-      title: g.title,
-      downloaded: g.is_downloaded,
-      rating: g.rating,
+    // "games" built-in OR a user-created library (collection slug): both are
+    // library games; a collection just adds a ?library=<slug> filter.
+    const params: Record<string, any> = { limit: 500 }
+    if (activeLib.value !== 'games') params.library = activeLib.value
+    const { data } = await client.get('/library/games', { params })
+    games.value = (data.items as any[]).map((g: any) => ({
+      id:           g.id,
+      title:        g.title,
+      downloaded:   (g.files as any[])?.some((f: any) => f.is_available) ?? false,
+      rating:       g.rating,
       release_date: g.release_date,
-      icon: resolveIcon(g),
-      cover: resolveCover(g),
+      icon:         g.icon_path || g.cover_path || '',
+      cover:        g.cover_path || '',
     }))
-    const gogIdx = libraries.value.findIndex(l => l.id === 'gog')
-    if (gogIdx >= 0) libraries.value[gogIdx].count = games.value.length
+    const libIdx = libraries.value.findIndex(l => l.id === activeLib.value)
+    if (libIdx >= 0) libraries.value[libIdx].count = games.value.length
   } catch (e) {
     console.error('Failed to fetch games', e)
   } finally {
@@ -964,7 +982,7 @@ function stepLib(dir: number) {
 function switchLib(id: string) {
   activeLib.value = id
   const routes: Record<string, string> = { gog: '/library', games: '/games', roms: '/emulation' }
-  router.push(routes[id] ?? '/')
+  router.push(routes[id] ?? ('/lib/' + id))   // collections live at /lib/:slug
 }
 
 function selectGame(game: Game) {
@@ -974,7 +992,8 @@ function selectGame(game: Game) {
     router.push({ name: 'emulation-detail', params: { platform: activePlatformSlug.value, id: game.id } })
     return
   }
-  const detailRoute = activeLib.value === 'games' ? 'games-detail' : 'game-detail'
+  // Collection games are library games -> use the library detail route.
+  const detailRoute = activeLib.value === 'gog' ? 'game-detail' : 'games-detail'
   router.push({ name: detailRoute, params: { id: game.id } })
 }
 
@@ -1251,6 +1270,7 @@ watch(() => route.name, name => {
   // List pages → set lib AND reload game list
   if (name === 'library')          { activeLib.value = 'gog';   fetchGames() }
   if (name === 'games-library')    { activeLib.value = 'games'; fetchGames() }
+  if (name === 'collection')       { activeLib.value = (route.params.slug as string) || ''; fetchGames() }
   if (name === 'emulation-home' || name === 'emulation-library') {
     activeLib.value = 'roms'
     if (route.params.platform) activePlatformSlug.value = route.params.platform as string
@@ -1258,19 +1278,44 @@ watch(() => route.name, name => {
   }
   // Detail pages → keep lib in sync without reloading the list
   if (name === 'game-detail')      { activeLib.value = 'gog' }
-  if (name === 'games-detail')     { activeLib.value = 'games' }
+  // Stay on the collection when opening one of its games (a library game).
+  if (name === 'games-detail' && !isCollectionLib(activeLib.value)) { activeLib.value = 'games' }
   if (name === 'emulation-detail') {
     activeLib.value = 'roms'
     if (route.params.platform) activePlatformSlug.value = route.params.platform as string
   }
 }, { immediate: true })
 
-watch(isAdmin, (admin) => {
-  libraries.value = allLibraries.filter(l => l.id !== 'gog' || admin)
-  if (!admin && activeLib.value === 'gog') {
-    activeLib.value = 'games'
-  }
-}, { immediate: true })
+// Sidebar libraries come from the data-driven registry: GOG needs admin, and
+// each built-in (classic id "roms" maps to registry slug "emulation") shows only
+// when enabled. Existing counts are preserved across rebuilds.
+function rebuildLibraries() {
+  const admin = isAdmin.value
+  const prevCounts = Object.fromEntries(libraries.value.map(l => [l.id, l.count]))
+  const builtins = allLibraries
+    .filter(l => {
+      if (l.id === 'gog' && !admin) return false
+      if (!libs.loaded) return true
+      const slug = l.id === 'roms' ? 'emulation' : l.id
+      return libs.has(slug) && !libs.isHidden(slug)
+    })
+    .map(l => ({ ...l, count: prevCounts[l.id] ?? l.count }))
+  // User-created libraries (registry kind "collection") become their own
+  // entries in the Classic sidebar switcher, addressed by slug.
+  const collections = libs.visible
+    .filter(l => l.kind === 'collection')
+    .map(l => ({ id: l.slug, name: l.name, icon: l.icon || '', color: l.color || '#14b8a6', count: prevCounts[l.slug] ?? 0 }))
+  // Order the switcher by the effective per-user order (user's manual order,
+  // else admin sort_order). Classic id "roms" maps to registry slug "emulation".
+  libraries.value = [...builtins, ...collections].sort((a, b) =>
+    libs.orderIndex(a.id === 'roms' ? 'emulation' : a.id) -
+    libs.orderIndex(b.id === 'roms' ? 'emulation' : b.id),
+  )
+  if (!admin && activeLib.value === 'gog') activeLib.value = 'games'
+}
+// Rebuild when admin status, registry load, or the user's visible set changes
+// (the last covers per-user hide toggles, since `visible` recomputes on them).
+watch([isAdmin, () => libs.loaded, () => libs.visible], rebuildLibraries, { immediate: true })
 
 watch(filteredGames, () => calcTitleOverflows())
 
@@ -1278,6 +1323,7 @@ watch(filteredGames, () => calcTitleOverflows())
 
 onMounted(async () => {
   document.addEventListener('click', onClickOutside)
+  libs.fetch()
   // Reconnect to a sync that was already running before this page load/refresh
   try {
     const { data } = await client.get('/gog/library/sync/status')

@@ -24,6 +24,8 @@ const LS_AMBIENT        = "gd3_ambient";
 const LS_GRID           = "gd3_grid";
 const LS_ORB_MOTION     = "gd3_orb_motion";
 const LS_THEME_SETTINGS = "gd3_theme_settings";
+const LS_HIDDEN_LIBS    = "gd3_hidden_libraries";
+const LS_LIBRARY_ORDER  = "gd3_library_order";
 // Card effects
 const LS_CARD_TILT      = "gd3_card_tilt";
 const LS_CARD_SHINE     = "gd3_card_shine";
@@ -77,6 +79,19 @@ export const useThemeStore = defineStore("theme", () => {
   // Per-theme settings: { [themeId]: { [settingKey]: value } }
   const themeSettings = ref<Record<string, Record<string, unknown>>>(
     JSON.parse(localStorage.getItem(LS_THEME_SETTINGS) ?? "{}")
+  );
+
+  // User-hidden libraries (global per-user): slugs the user removed from their
+  // own home/nav view. Independent of the admin "enabled" flag and of the
+  // per-theme recentLibraries selection. Persists via /users/me/preferences.
+  const hiddenLibraries = ref<string[]>(
+    JSON.parse(localStorage.getItem(LS_HIDDEN_LIBS) ?? "[]")
+  );
+
+  // User-defined library order (list of slugs). Overrides the admin sort_order
+  // on this user's home/nav. Empty = follow the admin order. Global per-user.
+  const libraryOrder = ref<string[]>(
+    JSON.parse(localStorage.getItem(LS_LIBRARY_ORDER) ?? "[]")
   );
 
   // ── Getters ────────────────────────────────────────────────────────────
@@ -193,6 +208,40 @@ export const useThemeStore = defineStore("theme", () => {
     applyToDOM();
   }
 
+  // Per-theme "recently added" library selection (list of slugs). Returns null
+  // when unset, which the home page treats as "all libraries".
+  function getRecentLibraries(): string[] | null {
+    const v = themeSettings.value[themeId.value]?.recentLibraries;
+    return Array.isArray(v) ? (v as string[]) : null;
+  }
+  function setRecentLibraries(slugs: string[]) {
+    setThemeSettingValue("recentLibraries", slugs);
+  }
+
+  // Per-user library visibility (global across themes). Hiding a library only
+  // removes it from this user's home page / nav; it does not change access.
+  function getHiddenLibraries(): string[] { return hiddenLibraries.value; }
+  function isLibraryHidden(slug: string): boolean { return hiddenLibraries.value.includes(slug); }
+  function setHiddenLibraries(slugs: string[]) {
+    hiddenLibraries.value = [...new Set(slugs)];
+    localStorage.setItem(LS_HIDDEN_LIBS, JSON.stringify(hiddenLibraries.value));
+    applyToDOM();              // fires gd-theme-updated so themes/plugins re-render
+    schedulePreferencesSave();
+  }
+  function toggleHiddenLibrary(slug: string) {
+    const cur = hiddenLibraries.value;
+    setHiddenLibraries(cur.includes(slug) ? cur.filter(s => s !== slug) : [...cur, slug]);
+  }
+
+  // Per-user library order (global across themes). Empty list = admin order.
+  function getLibraryOrder(): string[] { return libraryOrder.value; }
+  function setLibraryOrder(slugs: string[]) {
+    libraryOrder.value = [...slugs];
+    localStorage.setItem(LS_LIBRARY_ORDER, JSON.stringify(libraryOrder.value));
+    applyToDOM();              // fires gd-theme-updated so themes/plugins re-render
+    schedulePreferencesSave();
+  }
+
   // ── Persist + apply on change ──────────────────────────────────────────
   watch(themeId,    (v) => { localStorage.setItem(LS_THEME,      v);          applyToDOM(); schedulePreferencesSave(); });
   watch(skinId,     (v) => { localStorage.setItem(LS_SKIN,       v);          applyToDOM(); schedulePreferencesSave(); });
@@ -274,6 +323,14 @@ export const useThemeStore = defineStore("theme", () => {
       themeSettings.value = prefs.themeSettings as Record<string, Record<string, unknown>>;
       localStorage.setItem(LS_THEME_SETTINGS, JSON.stringify(prefs.themeSettings));
     }
+    if (Array.isArray(prefs.hiddenLibraries)) {
+      hiddenLibraries.value = prefs.hiddenLibraries as string[];
+      localStorage.setItem(LS_HIDDEN_LIBS, JSON.stringify(prefs.hiddenLibraries));
+    }
+    if (Array.isArray(prefs.libraryOrder)) {
+      libraryOrder.value = prefs.libraryOrder as string[];
+      localStorage.setItem(LS_LIBRARY_ORDER, JSON.stringify(prefs.libraryOrder));
+    }
     applyToDOM();
     _loading = false;
   }
@@ -292,6 +349,8 @@ export const useThemeStore = defineStore("theme", () => {
       heroFadeHeight: heroFadeHeight.value, classicHero: classicHero.value,
       platformPhotoHeader: platformPhotoHeader.value,
       themeSettings: themeSettings.value,
+      hiddenLibraries: hiddenLibraries.value,
+      libraryOrder: libraryOrder.value,
     };
   }
 
@@ -324,6 +383,9 @@ export const useThemeStore = defineStore("theme", () => {
     currentTheme, currentLayout, currentSkins, themes,
     setTheme, setSkin, toggleAnimations, toggleAmbient, toggleGrid, toggleOrbMotion,
     getThemeSettingValue, setThemeSettingValue, resetThemeSettings,
+    getRecentLibraries, setRecentLibraries,
+    getHiddenLibraries, isLibraryHidden, setHiddenLibraries, toggleHiddenLibrary,
+    getLibraryOrder, setLibraryOrder,
     applyToDOM,
     // Card effects
     cardTilt, cardShine, cardZoom, cardGlow, cardLift,

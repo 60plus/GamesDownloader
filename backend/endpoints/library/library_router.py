@@ -325,13 +325,29 @@ async def list_library_games(
     search: str = "",
     limit: int = 100,
     offset: int = 0,
+    library: str = "",
 ) -> dict:
     from models.user import Role
     user = request.state.user
     is_admin = user.role == Role.ADMIN
 
-    games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset)
-    total = await _lib.count_active(search=search or None)
+    from handler.database.library_registry_handler import library_registry_handler
+    # `library` empty / "games" => the built-in library (games flagged
+    # in_default_library); a collection slug => games by membership.
+    _target = await library_registry_handler.get_by_slug(library or "games")
+    # Per-user access control: a restricted library the requester is not on
+    # returns empty (it is also hidden from nav/home). Admins bypass.
+    if _target is not None and not await library_registry_handler.user_can_access(user, _target):
+        return {"items": [], "total": 0, "limit": limit, "offset": offset}
+
+    if library and library != "games":
+        if _target is None:
+            return {"items": [], "total": 0, "limit": limit, "offset": offset}
+        games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset, library_id=_target.id)
+        total = await _lib.count_active(search=search or None, library_id=_target.id)
+    else:
+        games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset, in_default_only=True)
+        total = await _lib.count_active(search=search or None, in_default_only=True)
 
     # For non-admins, filter out per-game denied games and adjust total accordingly
     if not is_admin:

@@ -166,6 +166,12 @@ async def disconnect(request: Request) -> dict:
 @gog_router.get("/library/games")
 async def get_library(request: Request) -> list:
     _require_scope(request, Scope.GOG_READ)
+    # Per-user access control: a restricted GOG library returns empty for users
+    # not on the allowlist (admins bypass).
+    from handler.database.library_registry_handler import library_registry_handler as _reg
+    _gog = await _reg.get_by_slug("gog")
+    if _gog is not None and not await _reg.user_can_access(getattr(request.state, "user", None), _gog):
+        return []
     from handler.gog.gog_sync_handler import gog_sync_handler
     games = await gog_sync_handler.get_all_deduped()
     # Build user_id -> username map for games with owners

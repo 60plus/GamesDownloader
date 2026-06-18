@@ -653,6 +653,26 @@
                 <input v-model="editFields.features" class="mep-input" placeholder="Achievements, Controller Support, Cloud Saves…" />
               </div>
 
+              <template v-if="libraryKind === 'games'">
+                <div class="mep-form-section-label" style="margin-top:4px;">{{ t('meta.libraries') }}</div>
+                <div class="mep-field">
+                  <label class="mep-field-label">{{ t('meta.libraries') }} <span class="mep-field-hint">({{ t('meta.libraries_hint') }})</span></label>
+                  <div style="display:flex;flex-direction:column;gap:9px;margin-top:4px;">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
+                      <input type="checkbox" v-model="inDefaultLibrary" />
+                      <span style="width:10px;height:10px;border-radius:3px;background:var(--pl);flex-shrink:0;"></span>
+                      <span>{{ t('libraries.kind_custom') }}</span>
+                    </label>
+                    <label v-for="c in collectionLibs" :key="c.slug" style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
+                      <input type="checkbox" :value="c.slug" v-model="selectedCollections" />
+                      <span :style="{ width:'10px', height:'10px', borderRadius:'3px', background: c.color || 'var(--pl)', flexShrink: 0 }"></span>
+                      <span>{{ c.name }}</span>
+                    </label>
+                    <span v-if="!collectionLibs.length" class="mep-field-hint">{{ t('meta.no_collections') }}</span>
+                  </div>
+                </div>
+              </template>
+
             </div>
           </div>
 
@@ -798,6 +818,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useLibrariesStore } from '@/stores/libraries'
 import client from '@/services/api/client'
 import TranslateButton from '@/components/common/TranslateButton.vue'
 import { useI18n } from '@/i18n'
@@ -854,6 +875,33 @@ const baseApi = computed(() => props.apiPrefix || '/library/games')
 
 // Plugin-registered tabs that target this panel's library (games / gog / all).
 const libraryKind = computed(() => (baseApi.value.includes('/gog/') ? 'gog' : 'games'))
+
+// ── Library membership (Games library + custom collections) ──────────────────
+const libsStore = useLibrariesStore()
+const collectionLibs = computed(() => libsStore.libraries.filter(l => l.kind === 'collection'))
+const inDefaultLibrary = ref(true)
+const selectedCollections = ref<string[]>([])
+const initialInDefault = ref(true)
+const initialCollections = ref<string[]>([])
+// Membership is a separate save target, so it must count towards "has changes"
+// for the Save button to enable when the user only edits library checkboxes.
+const membershipChanged = computed(() =>
+  inDefaultLibrary.value !== initialInDefault.value ||
+  [...selectedCollections.value].sort().join(',') !== [...initialCollections.value].sort().join(','),
+)
+function _snapshotMembership() {
+  initialInDefault.value = inDefaultLibrary.value
+  initialCollections.value = [...selectedCollections.value]
+}
+async function loadMemberships() {
+  libsStore.fetch()
+  try {
+    const { data } = await client.get(`/libraries/membership/${props.game.id}`)
+    inDefaultLibrary.value = data.in_default_library !== false
+    selectedCollections.value = Array.isArray(data.collections) ? data.collections : []
+  } catch { /* ignore - leave defaults */ }
+  _snapshotMembership()
+}
 const pluginTabs = computed<MetadataTab[]>(() =>
   getMetadataTabs().filter(tb => !tb.library || tb.library === 'all' || tb.library === libraryKind.value)
 )
@@ -1354,6 +1402,7 @@ const currentCoverSrc = computed(() => selectedCover.value || props.game.cover_p
 
 const hasChanges = computed(() => {
   if (pluginDirty.value) return true
+  if (libraryKind.value === 'games' && membershipChanged.value) return true
   if (pendingRequirements.value !== null) return true
   if (selectedCover.value      !== (props.game.cover_path      || '')) return true
   if (selectedBackground.value !== (props.game.background_path || props.game.background_url || '')) return true
@@ -1914,6 +1963,13 @@ async function save() {
     if (Object.keys(payload).length) {
       await client.patch(`${baseApi.value}/${props.game.id}`, payload)
     }
+    if (libraryKind.value === 'games') {
+      await client.put(`/libraries/membership/${props.game.id}`, {
+        in_default_library: inDefaultLibrary.value,
+        collections: selectedCollections.value,
+      })
+      _snapshotMembership()
+    }
     pluginDirty.value = false
     saveOk.value = true
     emit('saved', payload)
@@ -1935,6 +1991,7 @@ function pluginLogoUrl(providerId: string): string {
 }
 
 onMounted(async () => {
+  if (libraryKind.value === 'games') loadMemberships()
   try {
     const { data } = await client.get('/plugins/metadata/providers')
     metadataProviders.value = data || []

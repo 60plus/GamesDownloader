@@ -21,12 +21,15 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
           {{ t('library.libraries') }}
         </button>
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" class="title-ico-svg">
-          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-          <polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
-        </svg>
+        <LibraryIcon
+          :icon="currentLib?.icon"
+          :color="currentLib?.color || '#14b8a6'"
+          :size="48"
+          class="title-ico-svg"
+          :style="currentLib?.color ? { filter: 'drop-shadow(0 0 8px ' + currentLib.color + '88)' } : undefined"
+        />
         <div>
-          <h1 class="title-text">{{ t('nav.games_library') }}</h1>
+          <h1 class="title-text">{{ pageTitle }}</h1>
           <p class="title-sub">{{ displayedGames.length }} {{ t('library.games') }}</p>
         </div>
       </div>
@@ -515,9 +518,11 @@ function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   }) as T
 }
 import { useRouter, useRoute } from 'vue-router'
+import { useLibrariesStore } from '@/stores/libraries'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
+import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import GameRequestDialog from '@/components/GameRequestDialog.vue'
 import { useRequestNotify } from '@/composables/useRequestNotify'
 
@@ -545,6 +550,16 @@ interface LibGame {
 
 const router      = useRouter()
 const route       = useRoute()
+const libsStore   = useLibrariesStore()
+// When viewing a custom collection the route carries its slug (/lib/:slug);
+// empty means the built-in Games library.
+const librarySlug = computed(() => (route.params.slug as string) || '')
+const pageTitle   = computed(() => {
+  if (!librarySlug.value) return t('nav.games_library')
+  return libsStore.bySlug(librarySlug.value)?.name || librarySlug.value
+})
+// The library whose icon/colour heads this page ("" => the default Games lib).
+const currentLib  = computed(() => libsStore.bySlug(librarySlug.value || 'games'))
 const themeStore  = useThemeStore()
 const auth        = useAuthStore()
 const socketStore = useSocketStore()
@@ -589,6 +604,7 @@ async function fetchGames() {
   try {
     const params: Record<string, string> = { limit: '500' }
     if (searchQuery.value.trim()) params.search = searchQuery.value.trim()
+    if (librarySlug.value) params.library = librarySlug.value
     const { data } = await client.get('/library/games', { params })
     games.value = (data.items as any[]).map(g => ({
       id:               g.id,
@@ -617,6 +633,9 @@ async function fetchGames() {
     loading.value = false
   }
 }
+
+// Re-fetch when switching between the games library and a collection.
+watch(librarySlug, () => fetchGames())
 
 // Sync searchQuery ↔ route.query.q (same pattern as GogLibrary)
 watch(() => route.query.q, (q) => {

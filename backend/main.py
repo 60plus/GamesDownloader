@@ -73,6 +73,7 @@ async def _init_db() -> None:
     import models.rom                      # noqa: F401
     import models.rom_save_state           # noqa: F401
     import models.plugin_config            # noqa: F401
+    import models.library                  # noqa: F401
 
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -129,6 +130,10 @@ async def _init_db() -> None:
         ("users",          "totp_secret",         "VARCHAR(64) NULL"),
         ("users",          "totp_enabled",        "TINYINT(1) NOT NULL DEFAULT 0"),
         ("users",          "totp_recovery_codes", "JSON NULL"),
+        # Library collections feature
+        ("library_games",  "in_default_library",  "TINYINT(1) NOT NULL DEFAULT 1"),
+        # Per-user library access control
+        ("libraries",      "visibility",          "VARCHAR(16) NOT NULL DEFAULT 'public'"),
     ]
     async with async_engine.begin() as conn:
         for table, column, col_ddl in _COLUMN_MIGRATIONS:
@@ -282,6 +287,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await _init_db()
     _init_rom_dirs()
 
+    # Seed built-in library registry rows (idempotent)
+    from handler.database.library_registry_handler import library_registry_handler
+    await library_registry_handler.ensure_builtins()
+
     # Load plugins
     plugin_manager.discover_and_load()
     plugin_manager.hook.lifecycle_on_startup()
@@ -414,9 +423,11 @@ app.include_router(download_router)
 # ── Library (GamesDownloader) ─────────────────────────────────────────────────
 from endpoints.library.library_router import library_router
 from endpoints.library.upload_router import upload_router
+from endpoints.library.libraries_router import router as libraries_router
 
 app.include_router(library_router, prefix="/api")
 app.include_router(upload_router,  prefix="/api")
+app.include_router(libraries_router)
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 from endpoints.settings.settings_router import settings_router

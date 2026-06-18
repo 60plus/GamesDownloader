@@ -73,6 +73,9 @@ class LibraryGame(Base):
 
     # ── Visibility ────────────────────────────────────────────────────────────
     is_active:    Mapped[bool]      = mapped_column(Boolean, default=True)
+    # Whether the game appears in the built-in "games" library. Unchecked in
+    # Edit Metadata > Details when an admin wants it only in custom collections.
+    in_default_library: Mapped[bool] = mapped_column(Boolean, default=True)
     published_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
     )

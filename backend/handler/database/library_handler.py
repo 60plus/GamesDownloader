@@ -32,6 +32,20 @@ class LibraryHandler(DBBaseHandler):
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
+    def _active_filters(self, stmt, search, in_default_only, library_id):
+        stmt = stmt.where(LibraryGame.is_active == True)  # noqa: E712
+        if search:
+            stmt = stmt.where(LibraryGame.title.ilike(f"%{search}%"))
+        if in_default_only:
+            stmt = stmt.where(LibraryGame.in_default_library == True)  # noqa: E712
+        if library_id is not None:
+            from models.library import LibraryMembership
+            stmt = stmt.where(LibraryGame.id.in_(
+                select(LibraryMembership.library_game_id)
+                .where(LibraryMembership.library_id == library_id)
+            ))
+        return stmt
+
     @begin_session
     async def get_all_active(
         self,
@@ -39,20 +53,26 @@ class LibraryHandler(DBBaseHandler):
         search: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        in_default_only: bool = False,
+        library_id: int | None = None,
         session: AsyncSession = None,
     ) -> Sequence[LibraryGame]:
-        stmt = select(LibraryGame).where(LibraryGame.is_active == True)  # noqa: E712
-        if search:
-            stmt = stmt.where(LibraryGame.title.ilike(f"%{search}%"))
+        stmt = self._active_filters(select(LibraryGame), search, in_default_only, library_id)
         stmt = stmt.order_by(LibraryGame.title).limit(limit).offset(offset)
         result = await session.execute(stmt)
         return result.scalars().all()
 
     @begin_session
-    async def count_active(self, search: str | None = None, *, session: AsyncSession = None) -> int:
-        stmt = select(func.count()).select_from(LibraryGame).where(LibraryGame.is_active == True)  # noqa: E712
-        if search:
-            stmt = stmt.where(LibraryGame.title.ilike(f"%{search}%"))
+    async def count_active(
+        self,
+        search: str | None = None,
+        *,
+        in_default_only: bool = False,
+        library_id: int | None = None,
+        session: AsyncSession = None,
+    ) -> int:
+        stmt = self._active_filters(select(func.count()).select_from(LibraryGame),
+                                    search, in_default_only, library_id)
         result = await session.execute(stmt)
         return result.scalar_one()
 

@@ -17,7 +17,9 @@ import i18n from "./i18n";
 import { useAuthStore } from "./stores/auth";
 import { useSocketStore } from "./stores/socket";
 import { useThemeStore } from "./stores/theme";
+import { useLibrariesStore } from "./stores/libraries";
 import { useNotificationStore } from "./stores/notifications";
+import { LIBRARY_ICONS, LIBRARY_ICON_NAMES, libraryIconMarkup } from "./lib/libraryIcons";
 import client from "./services/api/client";
 
 import DownloadManager from "./components/gog/DownloadManager.vue";
@@ -89,6 +91,7 @@ function createSafeSocketStore() {
     auth: createSafeAuthStore(),
     socket: createSafeSocketStore(),
     theme: useThemeStore,
+    libraries: useLibrariesStore,
   },
   api: client,
   registerTheme,
@@ -96,12 +99,47 @@ function createSafeSocketStore() {
   registerPluginCouchMode,
   registerMetadataTab,
   registerDetailRow,
+  // Public, theme/plugin-facing API for the per-theme "recently added" home
+  // feed. Themes call recentLibraries.get() to learn which library slugs the
+  // user wants a recently-added row for (already filtered to visible, non-couch
+  // libraries), and re-read it on the `gd-theme-updated` DOM event. This lets a
+  // 3rd-party theme honour the user's choice without reaching into store
+  // internals or requiring any change to GD itself.
+  recentLibraries: {
+    /** Raw stored selection (null = "all libraries"). */
+    getRaw: () => useThemeStore().getRecentLibraries(),
+    /** Resolved slugs to show a recently-added row for (visible, non-couch). */
+    get: () => {
+      const raw = useThemeStore().getRecentLibraries();
+      const vis = useLibrariesStore().visible
+        .filter((l: { kind: string }) => l.kind !== "couch")
+        .map((l: { slug: string }) => l.slug);
+      return raw === null ? vis : vis.filter((s: string) => raw.includes(s));
+    },
+    /** Convenience: should this library show a recently-added row? */
+    isEnabled: (slug: string) => {
+      const lib = useLibrariesStore();
+      if (!lib.has(slug) || lib.isHidden(slug)) return false;
+      const raw = useThemeStore().getRecentLibraries();
+      return raw === null || raw.includes(slug);
+    },
+    /** Persist a new selection (per-user, per-theme). */
+    set: (slugs: string[]) => useThemeStore().setRecentLibraries(slugs),
+  },
   composables: {
     useCouchNav,
     couchNavPaused,
     useCouchTheme,
   },
   getEjsCore,
+  // Built-in library icon set, for themes/plugins that render library glyphs
+  // natively. library(name) returns the inner SVG markup (24x24, currentColor);
+  // wrap it in <svg viewBox="0 0 24 24" ...> and set `color`/`stroke` to tint.
+  icons: {
+    library: (name: string) => libraryIconMarkup(name),
+    libraryNames: () => [...LIBRARY_ICON_NAMES],
+    libraryAll: () => ({ ...LIBRARY_ICONS }),
+  },
   i18n,
   notifications: {
     add: (n: any) => useNotificationStore().add(n),
@@ -112,6 +150,10 @@ function createSafeSocketStore() {
 };
 
 app.mount("#app");
+
+// Load the data-driven library registry (no-op if not authenticated yet;
+// re-fetched after login in the auth store).
+useLibrariesStore().fetch();
 
 // Load plugin translations (i18n.json files from installed plugins)
 client.get("/plugins/frontend/i18n").then((res: any) => {

@@ -1,0 +1,75 @@
+"""Library registry - data-driven library definitions and game membership.
+
+Replaces the hard-coded set of libraries (GOG / Games / Emulation) with rows in
+a `libraries` table so libraries can be enabled/disabled, reordered and (for
+collections) user-created. Built-in libraries are seeded on startup and cannot
+be deleted, only toggled.
+
+- Built-in "system" libraries (kind "gog", "emulation") derive their games
+  implicitly from `library_games.source` / the separate `roms` table; they are
+  not membership-driven.
+- "games" (custom) and user-created "collection" libraries hold LibraryGames via
+  the `library_membership` join table (a game can belong to several).
+"""
+
+from __future__ import annotations
+
+from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column
+
+from models.base import Base
+
+
+class Library(Base):
+    __tablename__ = "libraries"
+
+    slug:       Mapped[str]  = mapped_column(String(64), unique=True, index=True)
+    name:       Mapped[str]  = mapped_column(String(128))
+    # "gog" | "custom" | "emulation" | "collection"
+    kind:       Mapped[str]  = mapped_column(String(16))
+    icon:       Mapped[str | None] = mapped_column(String(512), nullable=True)
+    color:      Mapped[str | None] = mapped_column(String(32), nullable=True)
+    enabled:    Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int]  = mapped_column(Integer, default=0)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Relative folder under GAMES_PATH for folder-backed collections (e.g. "CUSTOM").
+    storage_folder: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    # Per-user access: "public" (everyone who passes the RBAC scope) or
+    # "restricted" (only users on the UserLibraryAccess allowlist, plus admins).
+    # Only meaningful for gog / custom / collection libraries.
+    visibility: Mapped[str] = mapped_column(String(16), default="public")
+
+
+class LibraryMembership(Base):
+    __tablename__ = "library_membership"
+    __table_args__ = (
+        UniqueConstraint("library_id", "library_game_id", name="uq_library_game"),
+    )
+
+    library_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("libraries.id", ondelete="CASCADE"), index=True,
+    )
+    library_game_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("library_games.id", ondelete="CASCADE"), index=True,
+    )
+
+
+class UserLibraryAccess(Base):
+    """Allowlist for "restricted" libraries: a row grants `user_id` access to
+    `library_id`. Admins bypass this entirely. Only used when a library's
+    visibility is "restricted"."""
+
+    __tablename__ = "user_library_access"
+    __table_args__ = (
+        UniqueConstraint("user_id", "library_id", name="uq_user_library"),
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True,
+    )
+    library_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("libraries.id", ondelete="CASCADE"), index=True,
+    )

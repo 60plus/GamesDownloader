@@ -322,7 +322,6 @@
       </div>
     </div>
 
-
   </div>
 </template>
 
@@ -339,7 +338,6 @@ const { gdConfirm } = useDialog()
 
 const themeStore = useThemeStore()
 const { setHint, clearHint } = useSettingsHint()
-
 
 const heroAnimStyles = [
   { id: 'kenburns', label: 'Ken Burns' },

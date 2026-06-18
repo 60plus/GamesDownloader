@@ -112,7 +112,7 @@
       <div class="home-lib-cards">
 
         <!-- GOG Library (admin only) -->
-        <div v-if="isAdmin" class="home-lib-card" @click="router.push('/library')">
+        <div v-if="isAdmin && libShown('gog')" class="home-lib-card" :style="{ order: orderOf('gog') }" @click="router.push('/library')">
           <!-- Left: big cover -->
           <div class="home-lib-card-cover">
             <img v-if="gogLib.firstCover" :src="gogLib.firstCover" class="home-lib-card-cover-img" />
@@ -143,7 +143,7 @@
         </div>
 
         <!-- Games Library -->
-        <div class="home-lib-card" @click="router.push('/games')">
+        <div v-if="libShown('games')" class="home-lib-card" :style="{ order: orderOf('games') }" @click="router.push('/games')">
           <!-- Left: big cover -->
           <div class="home-lib-card-cover">
             <img v-if="customLib.firstCover" :src="customLib.firstCover" class="home-lib-card-cover-img" />
@@ -177,7 +177,7 @@
         </div>
 
         <!-- Emulation Library -->
-        <div class="home-lib-card" @click="router.push('/emulation')">
+        <div v-if="libShown('emulation')" class="home-lib-card" :style="{ order: orderOf('emulation') }" @click="router.push('/emulation')">
           <div class="home-lib-card-cover">
             <img v-if="emulationLib.platformFsSlug" :src="`/platforms/icons/${emulationLib.platformFsSlug}.png`" class="home-lib-card-cover-img home-lib-card-cover-img--icon" />
             <div v-else class="home-lib-card-cover-empty">
@@ -214,7 +214,7 @@
         </div>
 
         <!-- Couch Mode -->
-        <div class="home-lib-card home-lib-card--couch" @click="router.push('/couch')">
+        <div v-if="couchShown" class="home-lib-card home-lib-card--couch" :style="{ order: orderOf('couch') }" @click="router.push('/couch')">
           <div class="home-lib-card-cover home-lib-card-cover--couch">
             <div class="home-couch-bg-stars" />
             <div class="home-couch-cover-content">
@@ -255,12 +255,44 @@
           </div>
         </div>
 
+        <!-- Custom collections (data-driven) -->
+        <div
+          v-for="coll in collections"
+          :key="coll.slug"
+          class="home-lib-card"
+          :style="{ order: orderOf(coll.slug) }"
+          @click="router.push('/lib/' + coll.slug)"
+        >
+          <div class="home-lib-card-cover">
+            <img v-if="collData[coll.slug]?.firstCover" :src="collData[coll.slug].firstCover" class="home-lib-card-cover-img" />
+            <div v-else class="home-lib-card-cover-empty">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="opacity:.25">
+                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+              </svg>
+            </div>
+            <div class="home-lib-card-cover-overlay" />
+            <div class="home-lib-card-info">
+              <div class="home-lib-card-icon" :style="{ borderColor: coll.color || undefined }">
+                <LibraryIcon :icon="coll.icon" :color="coll.color" :size="16" :alt="coll.name" />
+              </div>
+              <span class="home-lib-card-name">{{ coll.name }}</span>
+              <span class="home-lib-card-count">{{ (collData[coll.slug]?.count || 0) === 1 ? t('home.game_count', { count: collData[coll.slug]?.count || 0 }) : t('home.game_count_plural', { count: collData[coll.slug]?.count || 0 }) }}</span>
+            </div>
+          </div>
+          <div class="home-lib-card-hero">
+            <img v-if="collData[coll.slug]?.firstHero" :src="collData[coll.slug].firstHero" :class="['home-lib-hero-bg', heroAnimClass]" :style="heroStyle(0)" />
+            <div v-else class="home-lib-hero-empty" />
+            <div class="home-lib-hero-overlay" />
+            <div class="home-lib-hero-fade" />
+          </div>
+        </div>
+
       </div>
     </section>
 
     <!-- ── Recently Added rows ────────────────────────────────────────────── -->
 
-    <section v-if="!searchActive && isAdmin && gogLib.recent.length" class="home-recent-section">
+    <section v-if="!searchActive && isAdmin && libShown('gog') && recentShown('gog') && gogLib.recent.length" class="home-recent-section" :style="{ order: orderOf('gog') }">
       <div class="home-section-head">
         <button class="home-section-title home-section-link" @click="router.push('/library')">
           {{ t('home.recently_added_gog') }}
@@ -283,7 +315,7 @@
       </div>
     </section>
 
-    <section v-if="!searchActive && customLib.recent.length" class="home-recent-section">
+    <section v-if="!searchActive && libShown('games') && recentShown('games') && customLib.recent.length" class="home-recent-section" :style="{ order: orderOf('games') }">
       <div class="home-section-head">
         <button class="home-section-title home-section-link" @click="router.push('/games')">
           {{ t('home.recently_added_games') }}
@@ -307,7 +339,7 @@
     </section>
 
     <!-- ── Recently Added - Emulation Library ────────────────────────────── -->
-    <section v-if="!searchActive && emuRecent.length" class="home-recent-section">
+    <section v-if="!searchActive && libShown('emulation') && recentShown('emulation') && emuRecent.length" class="home-recent-section" :style="{ order: orderOf('emulation') }">
       <div class="home-section-head">
         <button class="home-section-title home-section-link" @click="router.push('/emulation')">
           {{ t('home.recently_added_emu') }}
@@ -356,6 +388,32 @@
       </div>
     </section>
 
+    <!-- ── Recently Added - Custom collections ───────────────────────────── -->
+    <template v-if="!searchActive">
+      <section v-for="coll in collectionsWithRecent" :key="'r-' + coll.slug" class="home-recent-section" :style="{ order: orderOf(coll.slug) }">
+        <div class="home-section-head">
+          <button class="home-section-title home-section-link" @click="router.push('/lib/' + coll.slug)">
+            {{ coll.name }}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <div class="home-row-nav">
+            <button class="home-nav-btn" @click="scrollRow('c-' + coll.slug, 'left')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <button class="home-nav-btn" @click="scrollRow('c-' + coll.slug, 'right')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>
+          </div>
+        </div>
+        <div class="home-recent-scroll" :ref="(el: any) => { if (el) rowRefs['c-' + coll.slug] = el }">
+          <div v-for="game in collData[coll.slug].recent" :key="game.id" class="home-recent-cover" @click="openGame(game)">
+            <div class="home-recent-img-wrap">
+              <img v-if="game.cover_path" :src="game.cover_path" :alt="game.title" class="home-recent-img" loading="lazy" />
+              <div v-else class="home-recent-fallback" />
+              <div class="home-recent-overlay"><span class="home-recent-overlay-title">{{ game.title }}</span></div>
+            </div>
+            <div class="home-recent-title">{{ game.title }}</div>
+          </div>
+        </div>
+      </section>
+    </template>
+
   </div>
 </template>
 
@@ -363,8 +421,10 @@
 import { ref, computed, onMounted, watch, type CSSProperties } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useLibrariesStore } from '@/stores/libraries'
 import { useThemeStore } from '@/stores/theme'
 import client from '@/services/api/client'
+import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
@@ -416,6 +476,38 @@ const gogGames  = ref<GogGame[]>([])   // /gog/library/games
 const emuRecent = ref<EmuRom[]>([])    // /roms/recent
 
 const isAdmin    = computed(() => auth.user?.role === 'admin')
+
+// Data-driven library visibility. While the registry is still loading we show
+// built-ins (avoids hiding enabled libraries on first paint); once loaded only
+// enabled+visible libraries remain.
+const libs       = useLibrariesStore()
+// Shown = registry-enabled AND not hidden by this user (personal home filter).
+function libShown(slug: string): boolean {
+  if (!libs.loaded) return true
+  return libs.has(slug) && !libs.isHidden(slug)
+}
+const couchShown = computed(() => libShown('couch') && libShown('emulation'))
+
+// Display order for home cards / recently-added rows = the effective per-user
+// order (user's manual order, else the admin sort_order). Applied via flexbox
+// `order` so the visual order follows reordering without changing DOM structure.
+function orderOf(slug: string): number {
+  return libs.orderIndex(slug)
+}
+
+// Custom collections (data-driven from the registry) shown as their own cards.
+// `visible` already drops user-hidden libraries.
+const collections = computed(() => libs.visible.filter(l => l.kind === 'collection'))
+const collData = ref<Record<string, any>>({})
+
+// Per-theme "recently added" library selection (null => all libraries).
+function recentShown(slug: string): boolean {
+  const sel = themeStore.getRecentLibraries()
+  return !sel || sel.includes(slug)
+}
+const collectionsWithRecent = computed(() =>
+  collections.value.filter(c => recentShown(c.slug) && collData.value[c.slug]?.recent?.length),
+)
 const totalGames = computed(() => libGames.value.length + gogGames.value.length)
 
 // ── Build lib data ────────────────────────────────────────────────────────────
@@ -606,7 +698,22 @@ watch(searchQuery, (q) => {
   searchTimer = setTimeout(() => runSearch(trimmed), 280)
 }, { immediate: true })
 
-onMounted(fetchAll)
+async function fetchCollections() {
+  await Promise.all(collections.value.map(async (c) => {
+    try {
+      const { data } = await client.get('/library/games', { params: { library: c.slug, limit: '24' } })
+      collData.value = { ...collData.value, [c.slug]: { ...buildLib(data.items || []), count: data.total || 0 } }
+    } catch {
+      collData.value = { ...collData.value, [c.slug]: { count: 0, firstCover: null, firstHero: null, recent: [] } }
+    }
+  }))
+}
+
+onMounted(async () => {
+  await libs.fetch()
+  fetchAll()
+  fetchCollections()
+})
 </script>
 
 <style scoped>
