@@ -48,6 +48,15 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - **Download speed limits** global server-wide cap and per-user overrides (configured in Settings → Downloads)
 - **Download tokens** generate shareable one-time links per file; optional password protection, expiry time, and max-download limit; no account required for the recipient
 
+### Libraries
+- **Data-driven library registry** GOG, Games and Emulation are no longer hard-coded; libraries are managed from Settings → Libraries (enable, disable, reorder, restyle)
+- **Custom libraries** create your own libraries (e.g. "Kids", "Co-op Night") with an optional dedicated folder under `data/games/`; assign games to them in Edit Metadata → Details (a game can stay in the main Games library or live only in a custom one)
+- **Per-user visibility and order** each user chooses which of the available libraries appear on their home page and navigation, and in what order, without affecting anyone else
+- **Per-user access control** restrict a library to selected users (admins always have access); restricted libraries are hidden from everyone else and their pages are blocked
+- **Library icons** pick from a set of built-in icons tinted with the library colour, or upload a custom icon/logo; editable after creation
+- **Recently added per theme** choose which libraries show a "recently added" row on the home page, per theme
+- **Theme API** themes render the whole library set data-driven via `window.__GD__.stores.libraries` (visibility, order, routes, labels, icons) and `recentLibraries`, so a new theme needs no changes to the app (Modern, Classic and Neon Horizon all use it)
+
 ### ROM Library
 - Scan local ROM directories and build a full library per platform (SNES, Genesis, Game Boy, PS1, N64, and more)
 - Automatic metadata scraping from **ScreenScraper**, **IGDB**, **LaunchBox**, **HowLongToBeat**, and **metadata plugins** in one pass
