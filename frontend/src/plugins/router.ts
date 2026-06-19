@@ -38,11 +38,24 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/views/games/GamesGameDetail.vue"),
         meta: { title: "Game", fullBleed: true },
       },
-      // ── Custom collection (library) view ────────────────────────────────
+      // ── Custom user library view ────────────────────────────────────────
       {
         path: "lib/:slug",
         name: "collection",
         component: () => import("@/views/games/GamesLibrary.vue"),
+        meta: { title: "Library", fullBleed: true },
+      },
+      // ── Collections (game groupings, grouped under container libraries) ──
+      {
+        path: "collections/:lib",
+        name: "collections-lib",
+        component: () => import("@/views/collections/CollectionsView.vue"),
+        meta: { title: "Collections", fullBleed: true },
+      },
+      {
+        path: "collections/:lib/:slug",
+        name: "collection-detail",
+        component: () => import("@/views/collections/CollectionsView.vue"),
         meta: { title: "Collection", fullBleed: true },
       },
       // ── Emulation Library ───────────────────────────────────────────────

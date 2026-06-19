@@ -139,9 +139,14 @@
       <div class="ls-ed-label">{{ t('libraries.icon') }}</div>
       <LibraryIconPicker v-model="newIcon" :color="newColor" @hover="onIconHover" />
 
-      <label class="ls-folder">
+      <!-- A collections container holds no game files, so it has no scan folder. -->
+      <label v-if="!newIsCollection" class="ls-folder">
         <input type="checkbox" v-model="newFolder" />
         <span>{{ t('libraries.new_folder') }}</span>
+      </label>
+      <label class="ls-folder" @mouseenter="setHint(t('libraries.new_is_collection'), t('libraries.new_is_collection_hint'))" @mouseleave="clearHint()">
+        <input type="checkbox" v-model="newIsCollection" @change="onNewCollectionToggle" />
+        <span>{{ t('libraries.new_is_collection') }}</span>
       </label>
       <label class="ls-upload-btn ls-upload-btn--inline" @mouseenter="setHint(t('libraries.icon_upload'), t('libraries.icon_upload_hint'))" @mouseleave="clearHint()">
         <input type="file" accept="image/png,image/jpeg,image/webp" hidden @change="onNewFile($event)" />
@@ -267,6 +272,7 @@ const loading = ref(true)
 const newName = ref('')
 const newColor = ref('#7c3aed')
 const newFolder = ref(false)
+const newIsCollection = ref(false)
 const newIcon = ref('builtin:folder')
 const newIconFile = ref<File | null>(null)
 const newFileName = ref('')
@@ -281,8 +287,8 @@ const editFileName = ref('')
 const editError = ref('')
 const editSaving = ref(false)
 
-// Per-user access (only collections / custom / GOG can be restricted).
-const ACL_KINDS = ['gog', 'custom', 'collection']
+// Per-user access (only user libraries / custom / GOG can be restricted).
+const ACL_KINDS = ['gog', 'custom', 'custom_lib']
 const users = ref<{ id: number; username: string; role: string }[]>([])
 const editAccess = ref<{ visibility: string; userIds: number[] }>({ visibility: 'public', userIds: [] })
 
@@ -403,18 +409,36 @@ async function move(i: number, dir: number) {
   } catch { /* best-effort */ }
 }
 
+function onNewCollectionToggle() {
+  // Default a collections container to the layers icon, a regular library to the
+  // folder icon (only while the icon is still one of those defaults - keep a pick).
+  if (newIcon.value === 'builtin:folder' || newIcon.value === 'builtin:layers') {
+    newIcon.value = newIsCollection.value ? 'builtin:layers' : 'builtin:folder'
+  }
+}
+
 async function create() {
   const name = newName.value.trim()
   if (!name || creating.value) return
   creating.value = true
   createError.value = ''
   try {
-    const { data } = await client.post('/libraries', {
-      name, color: newColor.value, icon: newIcon.value, create_folder: newFolder.value,
-    })
-    if (newIconFile.value && data?.slug) await uploadIcon(data.slug, newIconFile.value)
+    if (newIsCollection.value) {
+      // A Collections container is a library (kind 'collections') that holds
+      // collections of games - no scan folder, but it still gets a chosen icon.
+      const { data } = await client.post('/libraries', {
+        name, color: newColor.value, icon: newIcon.value, is_collection: true,
+      })
+      if (newIconFile.value && data?.slug) await uploadIcon(data.slug, newIconFile.value)
+    } else {
+      const { data } = await client.post('/libraries', {
+        name, color: newColor.value, icon: newIcon.value, create_folder: newFolder.value,
+      })
+      if (newIconFile.value && data?.slug) await uploadIcon(data.slug, newIconFile.value)
+    }
     newName.value = ''
     newFolder.value = false
+    newIsCollection.value = false
     newIcon.value = 'builtin:folder'
     newIconFile.value = null
     newFileName.value = ''

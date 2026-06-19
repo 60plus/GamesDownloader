@@ -180,6 +180,15 @@
               <span v-for="g in game.genres" :key="g" class="genre-tag">{{ g }}</span>
             </div>
           </template>
+          <template v-if="activeLib === 'games' && gameCollections.length">
+            <div class="icard-head" style="margin-top:10px">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+              <span>{{ t('detail.collections') }}</span>
+            </div>
+            <div class="genre-tags">
+              <router-link v-for="c in gameCollections" :key="c.slug" :to="`/collections/${c.library}/${c.slug}`" class="genre-tag genre-tag--link">{{ c.name }}</router-link>
+            </div>
+          </template>
           <div v-for="prow in pluginRows" :key="prow.id" class="icard-row gd-pdr-icard">
             <span v-if="prow.label" class="icard-label">{{ prow.label }}: </span>
             <span class="icard-val"><PluginDetailValue :row="prow" :game="game" :library="props.activeLib || 'games'" variant="icard" /></span>
@@ -561,6 +570,7 @@ import { resolveDetailRows } from '@/themes/index'
 import EmulationRomMetadataPanel from '@/views/emulation/EmulationRomMetadataPanel.vue'
 import DownloadDialog from '@/components/gog/DownloadDialog.vue'
 import { useThemeStore } from '@/stores/theme'
+import { useCollectionsStore } from '@/stores/collections'
 import { useNotifications } from '@/composables/useNotifications'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
@@ -611,6 +621,20 @@ const game        = ref<GameData | null>(null)
 
 // Rows contributed by plugins via window.__GD__.registerDetailRow.
 const pluginRows  = computed(() => game.value ? resolveDetailRows(game.value as any, props.activeLib || 'games') : [])
+
+// Collections this game belongs to (Games / GOG only - ROMs are a different
+// model). Membership keys on the LibraryGame id; names come from the store.
+const collectionsStore = useCollectionsStore()
+const gameCollectionSlugs = ref<string[]>([])
+const gameCollections = computed(() =>
+  gameCollectionSlugs.value
+    .map(s => { const c = collectionsStore.bySlug(s); return { slug: s, name: c?.name || s, library: c?.library || null } })
+    .filter(c => c.library),
+)
+async function loadGameCollections(id: number | string) {
+  if (!collectionsStore.loaded) collectionsStore.fetch()
+  gameCollectionSlugs.value = await collectionsStore.forGame(id)
+}
 const loading     = ref(false)
 const error       = ref('')
 const coverFailed = ref(false)
@@ -1057,6 +1081,9 @@ async function loadGame(id: string | number) {
       } as GameData
     } else {
       game.value = data as GameData
+      gameCollectionSlugs.value = []
+      // Collections apply to local Games-library games only (not the GOG catalog).
+      if (props.activeLib === 'games') loadGameCollections(data.id)
     }
   } catch (e: any) {
     error.value = e?.response?.data?.detail || 'Failed to load game'
@@ -1555,6 +1582,14 @@ onUnmounted(() => window.removeEventListener('message', onPlayerMessage))
   background: var(--pl-dim); border: 1px solid var(--glass-border);
   color: var(--muted); white-space: nowrap;
 }
+/* Collection chips - clickable, tinted with the theme accent. */
+.genre-tag--link {
+  text-decoration: none; cursor: pointer;
+  background: color-mix(in srgb, var(--pl) 16%, transparent);
+  border-color: color-mix(in srgb, var(--pl) 35%, transparent);
+  color: var(--pl-light, #a78bfa); transition: all .15s ease;
+}
+.genre-tag--link:hover { border-color: var(--pl); color: var(--text, #fff); }
 
 /* Language flags - flag-icons sprite, name on :title tooltip.
    The wrapper carries the size + hover transform; the inner `<span class="fi fi-XX">`

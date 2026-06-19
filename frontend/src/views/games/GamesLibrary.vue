@@ -211,123 +211,7 @@
 
         <!-- ── LIST VIEW ────────────────────────────────────────────────── -->
         <div v-else class="list-view">
-          <div
-            v-for="(game, idx) in displayedGames"
-            :key="game.id"
-            class="list-row"
-            @click="openGame(game)"
-          >
-            <!-- Cover -->
-            <div
-              class="list-cover-wrap"
-              @mousemove="onCardMove($event)"
-              @mouseleave="onCardLeave($event)"
-              @mouseenter="onCardEnter($event)"
-            >
-              <div class="cover-img-wrap">
-                <img v-if="game.cover_path" :src="game.cover_path" class="list-cover-img" loading="lazy" />
-                <div v-else class="list-cover-fallback" />
-                <div class="cover-sheen" />
-                <div class="cover-overlay" />
-              </div>
-            </div>
-
-            <!-- Info -->
-            <div class="list-info">
-              <div class="list-title">
-                <span>{{ game.title }}</span>
-              </div>
-              <div class="list-meta">
-                <span v-if="game.developer">{{ game.developer }}</span>
-                <span v-if="game.developer && game.release_date" class="meta-sep" />
-                <span v-if="game.release_date">{{ releaseYear(game.release_date) }}</span>
-              </div>
-            </div>
-
-            <!-- Hero art + description overlay -->
-            <div class="list-hero">
-              <img
-                v-if="game.background_path || game.cover_path"
-                :src="game.background_path || game.cover_path || ''"
-                :alt="game.title"
-                :class="['list-hero-img', listHeroAnimClass]"
-                :style="{ animationDelay: (idx * -7) + 's' }"
-                loading="lazy"
-              />
-              <div class="list-hero-overlay" />
-              <div v-if="game.description_short || game.description" class="list-hero-desc">
-                <p class="list-hero-desc-text">{{ listDescText(game) }}</p>
-              </div>
-            </div>
-
-            <!-- Quickfacts -->
-            <div class="list-qf-col">
-              <div class="list-qf">
-                <div v-if="game.developer" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.developer') }}</span>
-                  <span class="list-qf-val">{{ game.developer }}</span>
-                </div>
-                <div v-if="game.publisher && game.publisher !== game.developer" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.publisher') }}</span>
-                  <span class="list-qf-val">{{ game.publisher }}</span>
-                </div>
-                <div v-if="(game.genres || []).length" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('library.genre') }}</span>
-                  <span class="list-qf-val">
-                    <span v-for="g in (game.genres || []).slice(0, 3)" :key="g" class="genre-chip">{{ g }}</span>
-                  </span>
-                </div>
-                <div v-if="game.release_date" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.released') }}</span>
-                  <span class="list-qf-val">{{ releaseYear(game.release_date) }}</span>
-                </div>
-                <div v-if="game.os_windows || game.os_mac || game.os_linux" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('library.platform_label') }}</span>
-                  <span class="list-qf-val list-qf-os">
-                    <span v-if="game.os_windows" class="list-os-chip list-os-chip--win" title="Windows">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3,12V6.75L9,5.43V11.91L3,12M20,3V11.76L11,12.97V5.38L20,3M3,13L9,13.18V19.83L3,18.35V13M20,13.21V21.72L11,20.5V13.12L20,13.21Z"/></svg>
-                    </span>
-                    <span v-if="game.os_mac" class="list-os-chip list-os-chip--mac" title="macOS">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-                    </span>
-                    <span v-if="game.os_linux" class="list-os-chip list-os-chip--linux" title="Linux">
-                      <img src="/icons/os-linux.svg" width="14" height="14" alt="Linux" />
-                    </span>
-                  </span>
-                </div>
-                <div v-if="game.file_count !== undefined" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('library.files') }}</span>
-                  <span class="list-qf-val">{{ t('library.files_available', { count: game.file_count }) }}</span>
-                </div>
-                <div v-if="game.source" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.source') }}</span>
-                  <span class="list-qf-val" :class="game.source === 'gog' ? 'src-gog' : 'src-custom'">{{ game.source.toUpperCase() }}</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Right column: ratings -->
-            <div class="list-right">
-              <div v-if="game.rating || game.meta_ratings?.rawg || game.meta_ratings?.igdb || game.meta_ratings?.steam" class="list-scores">
-                <div v-if="game.rating" class="list-score" title="Rating">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg>
-                  {{ game.rating.toFixed(1) }}
-                </div>
-                <div v-if="game.meta_ratings?.rawg" class="list-score" title="RAWG">
-                  <img src="/icons/RAWG.ico" width="20" height="20" alt="RAWG" class="score-ico" />
-                  {{ (game.meta_ratings.rawg).toFixed(1) }}
-                </div>
-                <div v-if="game.meta_ratings?.igdb" class="list-score" title="IGDB">
-                  <img src="/icons/igdb.ico" width="20" height="20" alt="IGDB" class="score-ico" />
-                  {{ Math.round(game.meta_ratings.igdb) }}
-                </div>
-                <div v-if="game.meta_ratings?.steam" class="list-score" title="Metacritic">
-                  <img src="/icons/metacritic.svg" width="20" height="20" alt="Metacritic" class="score-ico" />
-                  {{ Math.round(game.meta_ratings.steam * 10) }}
-                </div>
-              </div>
-            </div>
-          </div>
+          <GameListRow v-for="(game, idx) in displayedGames" :key="game.id" :game="game" :idx="idx" />
         </div>
 
       </div><!-- /grid-scroll -->
@@ -524,6 +408,7 @@ import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import GameRequestDialog from '@/components/GameRequestDialog.vue'
+import GameListRow from '@/components/games/GameListRow.vue'
 import { useRequestNotify } from '@/composables/useRequestNotify'
 
 interface LibGame {

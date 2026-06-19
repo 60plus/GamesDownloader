@@ -3,6 +3,7 @@ import { ref, computed } from "vue";
 import client from "@/services/api/client";
 import { useThemeStore } from "@/stores/theme";
 import { useLibrariesStore } from "@/stores/libraries";
+import { useCollectionsStore } from "@/stores/collections";
 
 const TOKEN_KEY = "gd3_token";
 const REFRESH_KEY = "gd3_refresh";
@@ -72,6 +73,7 @@ export const useAuthStore = defineStore("auth", () => {
       }
       // Refresh the data-driven library registry now that we're authenticated.
       useLibrariesStore().fetch();
+      useCollectionsStore().fetch();
     } catch (err: any) {
       if (err?.response?.status === 401) {
         // Token is invalid or expired - clear session so user is sent to login

@@ -673,6 +673,24 @@
                 </div>
               </template>
 
+              <!-- Collections - admin-curated groupings. Games library only:
+                   GOG catalog games live on GOG's servers, not locally, so they
+                   are not collectable (only games in the local library are). -->
+              <template v-if="libraryKind === 'games'">
+                <div class="mep-form-section-label" style="margin-top:4px;">{{ t('meta.collections') }}</div>
+                <div class="mep-field">
+                  <label class="mep-field-label">{{ t('meta.collections') }} <span class="mep-field-hint">({{ t('meta.collections_hint') }})</span></label>
+                  <div style="display:flex;flex-direction:column;gap:9px;margin-top:4px;">
+                    <label v-for="c in allCollections" :key="c.slug" style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
+                      <input type="checkbox" :value="c.slug" v-model="gameCollections" />
+                      <span style="width:10px;height:10px;border-radius:3px;background:var(--pl);flex-shrink:0;"></span>
+                      <span>{{ c.name }}<span v-if="c.library" class="mep-field-hint"> · {{ collectionLibLabel(c.library) }}</span></span>
+                    </label>
+                    <span v-if="!allCollections.length" class="mep-field-hint">{{ t('meta.no_collections_yet') }}</span>
+                  </div>
+                </div>
+              </template>
+
             </div>
           </div>
 
@@ -819,6 +837,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useLibrariesStore } from '@/stores/libraries'
+import { useCollectionsStore } from '@/stores/collections'
 import client from '@/services/api/client'
 import TranslateButton from '@/components/common/TranslateButton.vue'
 import { useI18n } from '@/i18n'
@@ -876,9 +895,9 @@ const baseApi = computed(() => props.apiPrefix || '/library/games')
 // Plugin-registered tabs that target this panel's library (games / gog / all).
 const libraryKind = computed(() => (baseApi.value.includes('/gog/') ? 'gog' : 'games'))
 
-// ── Library membership (Games library + custom collections) ──────────────────
+// ── Library membership (Games library + user-created libraries) ───────────────
 const libsStore = useLibrariesStore()
-const collectionLibs = computed(() => libsStore.libraries.filter(l => l.kind === 'collection'))
+const collectionLibs = computed(() => libsStore.libraries.filter(l => l.kind === 'custom_lib'))
 const inDefaultLibrary = ref(true)
 const selectedCollections = ref<string[]>([])
 const initialInDefault = ref(true)
@@ -901,6 +920,33 @@ async function loadMemberships() {
     selectedCollections.value = Array.isArray(data.collections) ? data.collections : []
   } catch { /* ignore - leave defaults */ }
   _snapshotMembership()
+}
+
+// ── Collection membership (admin-curated game groupings) ─────────────────────
+// Independent of library membership above: a game keeps its home library and
+// can additionally belong to any number of collections. Applies to both the
+// Games and GOG libraries (any LibraryGame row), unlike user-library membership
+// which is Games-only.
+const collectionsStore = useCollectionsStore()
+const allCollections = computed(() => collectionsStore.list)
+// Container library name shown next to each collection (collections can live in
+// several containers, so the name alone may be ambiguous).
+function collectionLibLabel(slug: string | null): string { return slug ? libsStore.label(slug) : '' }
+const gameCollections = ref<string[]>([])          // collection slugs this game is in
+const initialGameCollections = ref<string[]>([])
+const gameCollectionsChanged = computed(() =>
+  [...gameCollections.value].sort().join(',') !== [...initialGameCollections.value].sort().join(','),
+)
+function _snapshotGameCollections() {
+  initialGameCollections.value = [...gameCollections.value]
+}
+async function loadGameCollections() {
+  if (!collectionsStore.loaded) collectionsStore.fetch()
+  try {
+    const { data } = await client.get(`/collections/membership/${props.game.id}`)
+    gameCollections.value = Array.isArray(data.collections) ? data.collections : []
+  } catch { /* ignore - leave empty */ }
+  _snapshotGameCollections()
 }
 const pluginTabs = computed<MetadataTab[]>(() =>
   getMetadataTabs().filter(tb => !tb.library || tb.library === 'all' || tb.library === libraryKind.value)
@@ -1403,6 +1449,7 @@ const currentCoverSrc = computed(() => selectedCover.value || props.game.cover_p
 const hasChanges = computed(() => {
   if (pluginDirty.value) return true
   if (libraryKind.value === 'games' && membershipChanged.value) return true
+  if (libraryKind.value === 'games' && gameCollectionsChanged.value) return true
   if (pendingRequirements.value !== null) return true
   if (selectedCover.value      !== (props.game.cover_path      || '')) return true
   if (selectedBackground.value !== (props.game.background_path || props.game.background_url || '')) return true
@@ -1970,6 +2017,12 @@ async function save() {
       })
       _snapshotMembership()
     }
+    if (libraryKind.value === 'games' && gameCollectionsChanged.value) {
+      await client.put(`/collections/membership/${props.game.id}`, {
+        collections: gameCollections.value,
+      })
+      _snapshotGameCollections()
+    }
     pluginDirty.value = false
     saveOk.value = true
     emit('saved', payload)
@@ -1991,7 +2044,7 @@ function pluginLogoUrl(providerId: string): string {
 }
 
 onMounted(async () => {
-  if (libraryKind.value === 'games') loadMemberships()
+  if (libraryKind.value === 'games') { loadMemberships(); loadGameCollections() }
   try {
     const { data } = await client.get('/plugins/metadata/providers')
     metadataProviders.value = data || []

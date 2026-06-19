@@ -1962,6 +1962,18 @@ async function clearMetadata() {
   background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
   color: rgba(255,255,255,.58);
 }
+/* Collection chips - clickable, tinted with the theme accent. */
+.gd-itag--link {
+  text-decoration: none; cursor: pointer;
+  background: color-mix(in srgb, var(--pl) 14%, transparent);
+  border-color: color-mix(in srgb, var(--pl) 35%, transparent);
+  color: var(--pl-light, #a78bfa);
+  transition: all var(--transition, .15s ease);
+}
+.gd-itag--link:hover {
+  background: color-mix(in srgb, var(--pl) 26%, transparent);
+  border-color: var(--pl); color: #fff;
+}
 
 /* Language flags - render flag-icons sprite via the inner `<span class="fi fi-XX">` */
 .gd-lang-flags { display: flex; flex-wrap: wrap; gap: var(--space-1, 4px); align-items: center; }

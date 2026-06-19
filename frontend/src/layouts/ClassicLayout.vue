@@ -21,9 +21,13 @@
         <button class="lib-sw-btn" @click="stepLib(-1)" :disabled="libraries.length <= 1">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <div class="lib-sw-center">
-          <span class="lib-sw-label">{{ activeLibObj?.name }}</span>
+        <div class="lib-sw-center" ref="libDropRef">
+          <button class="lib-sw-name" @click="libDropdownOpen = !libDropdownOpen" :title="t('library.libraries')">
+            <span class="lib-sw-label">{{ activeLibObj?.name }}</span>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" :style="libDropdownOpen ? 'transform:rotate(180deg)' : ''"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
           <button
+            v-if="!activeLibIsCollections"
             class="lib-sw-sync"
             :class="{ 'lib-sw-sync--spinning': syncing.has(activeLib) }"
             @click="openSyncDialog()"
@@ -35,6 +39,20 @@
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
           </button>
+          <!-- Quick library jump (handy with many libraries + collection containers) -->
+          <div v-if="libDropdownOpen" class="lib-drop">
+            <button
+              v-for="l in libraries"
+              :key="l.id"
+              class="lib-drop-item"
+              :class="{ active: l.id === activeLib }"
+              @click="switchLib(l.id)"
+            >
+              <LibraryIcon :icon="l.icon" :color="l.color" :size="20" class="lib-drop-ico" />
+              <span class="lib-drop-name">{{ l.name }}</span>
+              <span class="lib-drop-count">{{ l.count }}</span>
+            </button>
+          </div>
         </div>
         <button class="lib-sw-btn" @click="stepLib(1)" :disabled="libraries.length <= 1">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 18 15 12 9 6"/></svg>
@@ -140,6 +158,13 @@
             <circle cx="7.5" cy="12" r="1.5"/><circle cx="16.5" cy="12" r="1.5"/>
           </svg>
           {{ searchQuery ? t('classic.no_results') : t('classic.library_empty') }}
+        </div>
+
+        <!-- Quick-add a collection (admin, collections container only) -->
+        <div v-if="activeLibIsCollections && isAdmin" class="coll-add-row">
+          <button class="coll-add-fab" @click="openCreateCollection" :title="t('collections.create')">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
         </div>
       </div>
 
@@ -258,6 +283,25 @@
           <router-view />
         </template>
 
+        <!-- Collections container: a collection detail, or a "pick one" prompt -->
+        <template v-else-if="activeLibIsCollections">
+          <ClassicCollectionDetail
+            v-if="activeCollectionSlug"
+            :slug="activeCollectionSlug"
+            :lib="activeLib"
+            :refresh-tick="detailRefreshTick"
+            @open-game="onOpenMemberGame"
+            @changed="onCollectionChanged"
+          />
+          <div v-else class="empty-state">
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width=".7">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            </svg>
+            <div class="empty-text">{{ activeLibObj?.name }}</div>
+            <div class="empty-sub">{{ filteredGames.length }} {{ t('nav.collections') }}</div>
+          </div>
+        </template>
+
         <!-- Library: empty state -->
         <div v-else-if="!activeGameId" class="empty-state">
           <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width=".7">
@@ -281,6 +325,31 @@
 
   <!-- Global notifications (same component as Modern theme) -->
   <notification-snackbar />
+
+  <!-- ── CREATE COLLECTION DIALOG ────────────────────────────────────────── -->
+  <teleport to="body">
+    <div v-if="createCollOpen" class="cl-sync-overlay" @click.self="createCollOpen = false">
+      <div class="cl-create-dialog">
+        <div class="cl-sync-header">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+          {{ t('collections.create') }}
+        </div>
+        <div class="cl-create-body">
+          <input
+            v-model="createCollName"
+            class="cl-create-input"
+            :placeholder="t('collections.field_name')"
+            @keydown.enter="submitCreateCollection"
+          />
+          <div v-if="createCollError" class="cl-create-err">{{ createCollError }}</div>
+        </div>
+        <div class="cl-create-actions">
+          <button class="cl-btn cl-btn--ghost" @click="createCollOpen = false">{{ t('common.cancel') }}</button>
+          <button class="cl-btn cl-btn--primary" :disabled="creatingColl || !createCollName.trim()" @click="submitCreateCollection">{{ t('collections.create_btn') }}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
 
   <!-- ── SYNC DIALOG ─────────────────────────────────────────────────────── -->
   <teleport to="body">
@@ -587,6 +656,8 @@ import client from '@/services/api/client'
 import AmbientBackground from '@/components/common/AmbientBackground.vue'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import ClassicGameDetail from './ClassicGameDetail.vue'
+import ClassicCollectionDetail from './ClassicCollectionDetail.vue'
+import { useCollectionsStore } from '@/stores/collections'
 import NotificationSnackbar from '@/components/common/NotificationSnackbar.vue'
 import DownloadManager from '@/components/gog/DownloadManager.vue'
 import { useNotifications } from '@/composables/useNotifications'
@@ -610,6 +681,7 @@ interface Library { id: string; name: string; icon: string; color: string; count
 
 const authStore = useAuthStore()
 const libs      = useLibrariesStore()
+const collectionsStore = useCollectionsStore()
 // Couch is shown only when both it and the emulation library are enabled.
 const couchShown = computed(() => !libs.loaded || (libs.has('couch') && libs.has('emulation') && !libs.isHidden('couch') && !libs.isHidden('emulation')))
 const router    = useRouter()
@@ -623,6 +695,7 @@ const sortBy       = ref('title')
 const filterOwned  = ref(false)
 const activeLib    = ref('games')
 const activeGameId      = ref('')
+const activeCollectionSlug = ref('')   // selected collection (collections container detail)
 const detailRefreshTick = ref(0)
 const userAreaRef  = ref<HTMLElement>()
 const logRef       = ref<HTMLElement>()
@@ -631,6 +704,15 @@ const isSyncing    = ref(false)
 const syncing      = ref<Set<string>>(new Set())
 const logLines     = ref<string[]>([])
 const gameListRef  = ref<HTMLElement>()
+
+// Collections: containers live in the lib-switcher; the list shows their collections.
+const libDropdownOpen = ref(false)
+const libDropRef      = ref<HTMLElement>()
+const createCollOpen  = ref(false)
+const createCollName  = ref('')
+const creatingColl    = ref(false)
+const createCollError = ref('')
+const collectionsLoadedFor = ref('')   // which container's collections are in the list
 
 // Sync dialog
 const showSyncDialog    = ref(false)
@@ -723,15 +805,18 @@ function pushLog(msg: string) {
 // ── Computed ───────────────────────────────────────────────────────────────────
 
 const activeLibObj = computed(() => libraries.value.find(l => l.id === activeLib.value))
+// A collections container (kind 'collections'): its list shows the collections
+// inside it, and the detail pane shows a collection instead of a game.
+const activeLibIsCollections = computed(() => libs.bySlug(activeLib.value)?.kind === 'collections')
 
-// User-created libraries (registry kind "collection") are addressed by slug.
-function isCollectionLib(id: string): boolean {
+// User-created libraries (registry kind "custom_lib") are addressed by slug.
+function isUserLib(id: string): boolean {
   const l = libs.bySlug(id)
-  return !!l && l.kind === 'collection'
+  return !!l && l.kind === 'custom_lib'
 }
-// ClassicGameDetail only handles games/gog/roms; a collection's games are library
-// games, so the detail pane treats a collection like the built-in "games" library.
-const classicDetailLib = computed(() => isCollectionLib(activeLib.value) ? 'games' : activeLib.value)
+// ClassicGameDetail only handles games/gog/roms; a user library's games are
+// library games, so the detail pane treats it like the built-in "games" library.
+const classicDetailLib = computed(() => isUserLib(activeLib.value) ? 'games' : activeLib.value)
 
 const libDisplayName = computed(() => {
   const map: Record<string, string> = { gog: t('nav.gog_library'), games: t('nav.games_library'), roms: t('nav.emulation') }
@@ -740,7 +825,8 @@ const libDisplayName = computed(() => {
 
 const isNonLibraryRoute = computed(() =>
   !['library', 'game-detail', 'games-library', 'games-detail',
-    'emulation-home', 'emulation-library', 'emulation-detail', 'collection'].includes(route.name as string)
+    'emulation-home', 'emulation-library', 'emulation-detail', 'collection',
+    'collections-lib', 'collection-detail'].includes(route.name as string)
 )
 
 const initials = computed(() => {
@@ -799,11 +885,13 @@ async function fetchKnownPlatforms() {
 }
 
 async function fetchGames() {
+  if (activeLibIsCollections.value) { await fetchCollectionsList(); return }
+  collectionsLoadedFor.value = ''   // leaving collections - the list now holds games
   loading.value = true
   try {
     if (activeLib.value === 'roms') {
       if (!romPlatforms.value.length) await fetchRomPlatforms()
-      if (!activePlatformSlug.value) { loading.value = false; return }
+      if (!activePlatformSlug.value) { games.value = []; loading.value = false; return }
       const { data } = await client.get('/roms', { params: { platform_slug: activePlatformSlug.value, limit: 999 } })
       games.value = (data.items as any[]).map((g: any) => ({
         id:           g.id,
@@ -853,7 +941,62 @@ async function fetchGames() {
     console.error('Failed to fetch games', e)
   } finally {
     loading.value = false
+    // In finally so it also runs after the gog/roms early-returns inside the try.
+    maybeAutoSelectFirst()
   }
+}
+
+// Collections container: list the collections inside it. They reuse the same
+// .game-item list; each item's id is the collection slug.
+async function fetchCollectionsList() {
+  loading.value = true
+  try {
+    await collectionsStore.fetch()
+    const items = collectionsStore.list.filter((c: any) => c.library === activeLib.value)
+    games.value = items.map((c: any) => ({
+      id:           c.slug,
+      title:        c.name,
+      downloaded:   false,
+      rating:       c.rating ?? undefined,
+      release_date: c.start_year ? String(c.start_year) : '',
+      icon:         c.cover_path || (c.member_covers && c.member_covers[0]) || '',
+      cover:        c.cover_path || (c.member_covers && c.member_covers[0]) || '',
+    }))
+    const libIdx = libraries.value.findIndex(l => l.id === activeLib.value)
+    if (libIdx >= 0) libraries.value[libIdx].count = games.value.length
+    collectionsLoadedFor.value = activeLib.value
+  } catch (e) {
+    console.error('Failed to fetch collections', e)
+  } finally {
+    loading.value = false
+  }
+  maybeAutoSelectFirst()
+}
+
+// Populate switcher counts for ALL libraries (cheap): collections from the store,
+// GOG via its count endpoint, ROMs by summing platforms, games/custom via the
+// games-list `total`. Runs on boot and when collections change.
+async function refreshLibraryCounts() {
+  await Promise.all(libraries.value.map(async (l) => {
+    try {
+      const libObj = libs.bySlug(l.id)
+      let c = l.count
+      if (libObj?.kind === 'collections') {
+        c = collectionsStore.list.filter((x: any) => x.library === l.id).length
+      } else if (l.id === 'gog') {
+        const { data } = await client.get('/gog/library/count'); c = data?.count ?? c
+      } else if (l.id === 'roms') {
+        const { data } = await client.get('/roms/platforms')
+        c = Array.isArray(data) ? data.reduce((s: number, p: any) => s + (p.rom_count || 0), 0) : c
+      } else {
+        const params: Record<string, any> = { limit: 1 }
+        if (l.id !== 'games') params.library = l.id
+        const { data } = await client.get('/library/games', { params }); c = data?.total ?? c
+      }
+      const idx = libraries.value.findIndex(x => x.id === l.id)
+      if (idx >= 0) libraries.value[idx].count = c
+    } catch { /* keep existing count */ }
+  }))
 }
 
 function openSyncDialog() {
@@ -981,13 +1124,29 @@ function stepLib(dir: number) {
 
 function switchLib(id: string) {
   activeLib.value = id
+  activeCollectionSlug.value = ''
+  libDropdownOpen.value = false
   const routes: Record<string, string> = { gog: '/library', games: '/games', roms: '/emulation' }
-  router.push(routes[id] ?? ('/lib/' + id))   // collections live at /lib/:slug
+  if (routes[id]) { router.push(routes[id]); return }
+  // A collections container has its own route; user libraries live at /lib/:slug.
+  if (libs.bySlug(id)?.kind === 'collections') {
+    router.push('/collections/' + id)
+    fetchGames()   // load now (activeLib already = id), like the built-in libs do
+                   // via their route-name watcher
+    return
+  }
+  router.push('/lib/' + id)
 }
 
 function selectGame(game: Game) {
-  activeGameId.value = String(game.id)
   sidebarOpen.value = false  // close drawer on mobile after selection
+  // Collections container: the list holds collections, not games.
+  if (activeLibIsCollections.value) {
+    activeCollectionSlug.value = String(game.id)
+    router.push({ name: 'collection-detail', params: { lib: activeLib.value, slug: String(game.id) } })
+    return
+  }
+  activeGameId.value = String(game.id)
   if (activeLib.value === 'roms') {
     router.push({ name: 'emulation-detail', params: { platform: activePlatformSlug.value, id: game.id } })
     return
@@ -995,6 +1154,75 @@ function selectGame(game: Game) {
   // Collection games are library games -> use the library detail route.
   const detailRoute = activeLib.value === 'gog' ? 'game-detail' : 'games-detail'
   router.push({ name: detailRoute, params: { id: game.id } })
+}
+
+// After a fetch lands on a list with nothing chosen yet, open the first item -
+// unless the list is empty. Only on list routes, never on a detail route.
+function maybeAutoSelectFirst() {
+  const listRoutes = ['games-library', 'library', 'collection', 'collections-lib']
+  if (!listRoutes.includes(route.name as string)) return
+  if (activeGameId.value || activeCollectionSlug.value) return
+  const first = filteredGames.value[0]
+  if (first) selectGame(first)
+}
+
+// ── Collections ───────────────────────────────────────────────────────────────
+function onOpenMemberGame(game: any) {
+  // Opening a member leaves the collection for the game's own library (so the
+  // sidebar shows its siblings), like clicking a member in the Modern theme.
+  // GOG members resolve their detail by gog_game_id (separate id space); others
+  // are library games addressed by LibraryGame id.
+  if (game?.source === 'gog' && game?.gog_game_id) {
+    activeLib.value = 'gog'
+    fetchGames()
+    router.push({ name: 'game-detail', params: { id: game.gog_game_id } })
+  } else {
+    activeLib.value = 'games'
+    fetchGames()
+    router.push({ name: 'games-detail', params: { id: game.id } })
+  }
+}
+
+async function onCollectionChanged() {
+  await collectionsStore.fetch()
+  libs.fetch()
+  refreshLibraryCounts()
+  await fetchCollectionsList()
+  // If the active collection was deleted, fall back to the container grid.
+  if (activeCollectionSlug.value && !collectionsStore.bySlug(activeCollectionSlug.value)) {
+    activeCollectionSlug.value = ''
+    router.push({ name: 'collections-lib', params: { lib: activeLib.value } })
+  } else {
+    detailRefreshTick.value++
+  }
+}
+
+function openCreateCollection() {
+  createCollName.value = ''
+  createCollError.value = ''
+  createCollOpen.value = true
+}
+async function submitCreateCollection() {
+  const name = createCollName.value.trim()
+  if (!name || creatingColl.value) return
+  creatingColl.value = true
+  createCollError.value = ''
+  try {
+    const { data } = await client.post('/collections', { name, library: activeLib.value })
+    createCollOpen.value = false
+    await collectionsStore.fetch()
+    refreshLibraryCounts()
+    await fetchCollectionsList()
+    const slug = data && data.slug
+    if (slug) {
+      activeCollectionSlug.value = slug
+      router.push({ name: 'collection-detail', params: { lib: activeLib.value, slug } })
+    }
+  } catch (e: any) {
+    createCollError.value = e?.response?.data?.detail || 'Failed to create collection'
+  } finally {
+    creatingColl.value = false
+  }
 }
 
 // ── Platform switcher (Emulation) ─────────────────────────────────────────────
@@ -1242,6 +1470,7 @@ async function submitTorrent() {
 
 function onClickOutside(e: MouseEvent) {
   if (userAreaRef.value && !userAreaRef.value.contains(e.target as Node)) menuOpen.value = false
+  if (libDropRef.value && !libDropRef.value.contains(e.target as Node)) libDropdownOpen.value = false
   onPlatDropOutside(e)
 }
 
@@ -1278,12 +1507,27 @@ watch(() => route.name, name => {
   }
   // Detail pages → keep lib in sync without reloading the list
   if (name === 'game-detail')      { activeLib.value = 'gog' }
-  // Stay on the collection when opening one of its games (a library game).
-  if (name === 'games-detail' && !isCollectionLib(activeLib.value)) { activeLib.value = 'games' }
+  // Stay on the user library when opening one of its games (a library game).
+  if (name === 'games-detail' && !isUserLib(activeLib.value)) { activeLib.value = 'games' }
   if (name === 'emulation-detail') {
     activeLib.value = 'roms'
     if (route.params.platform) activePlatformSlug.value = route.params.platform as string
   }
+}, { immediate: true })
+
+// Collections container grid + collection detail. Separate watcher because moving
+// between two collections keeps the route name 'collection-detail' (only :slug
+// changes), which the name watcher above would miss.
+watch(() => [route.name, route.params.lib, route.params.slug], () => {
+  const n = route.name as string
+  if (n !== 'collections-lib' && n !== 'collection-detail') return
+  const lib = (route.params.lib as string) || ''
+  if (activeLib.value !== lib) activeLib.value = lib
+  // Load this container's collections if not already (independent of games.value /
+  // activeLib timing, since switchLib pre-sets activeLib before the route change).
+  if (collectionsLoadedFor.value !== lib) fetchGames()
+  activeCollectionSlug.value = (route.params.slug as string) || ''
+  activeGameId.value = ''
 }, { immediate: true })
 
 // Sidebar libraries come from the data-driven registry: GOG needs admin, and
@@ -1300,14 +1544,20 @@ function rebuildLibraries() {
       return libs.has(slug) && !libs.isHidden(slug)
     })
     .map(l => ({ ...l, count: prevCounts[l.id] ?? l.count }))
-  // User-created libraries (registry kind "collection") become their own
+  // User-created libraries (registry kind "custom_lib") become their own
   // entries in the Classic sidebar switcher, addressed by slug.
-  const collections = libs.visible
-    .filter(l => l.kind === 'collection')
+  const userLibs = libs.visible
+    .filter(l => l.kind === 'custom_lib')
     .map(l => ({ id: l.slug, name: l.name, icon: l.icon || '', color: l.color || '#14b8a6', count: prevCounts[l.slug] ?? 0 }))
+  // Collection containers (kind 'collections') also become switcher entries; their
+  // list shows the collections inside, not games.
+  const collLibs = libs.visible
+    .filter(l => l.kind === 'collections')
+    .map(l => ({ id: l.slug, name: l.name, icon: l.icon || 'builtin:layers', color: l.color || '#8b5cf6',
+      count: collectionsStore.list.filter((c: any) => c.library === l.slug).length || prevCounts[l.slug] || 0 }))
   // Order the switcher by the effective per-user order (user's manual order,
   // else admin sort_order). Classic id "roms" maps to registry slug "emulation".
-  libraries.value = [...builtins, ...collections].sort((a, b) =>
+  libraries.value = [...builtins, ...userLibs, ...collLibs].sort((a, b) =>
     libs.orderIndex(a.id === 'roms' ? 'emulation' : a.id) -
     libs.orderIndex(b.id === 'roms' ? 'emulation' : b.id),
   )
@@ -1323,7 +1573,9 @@ watch(filteredGames, () => calcTitleOverflows())
 
 onMounted(async () => {
   document.addEventListener('click', onClickOutside)
-  libs.fetch()
+  await libs.fetch()
+  await collectionsStore.fetch()
+  refreshLibraryCounts()
   // Reconnect to a sync that was already running before this page load/refresh
   try {
     const { data } = await client.get('/gog/library/sync/status')
@@ -1440,6 +1692,7 @@ onUnmounted(() => {
   gap: 6px;
   flex: 1;
   justify-content: center;
+  position: relative;
 }
 .lib-sw-label {
   font-family: 'Rajdhani', var(--font);
@@ -1535,6 +1788,8 @@ onUnmounted(() => {
   overflow-y: auto;
   overflow-x: visible;
   padding: 4px 0;
+  display: flex;
+  flex-direction: column;
 }
 .spin-icon { animation: sync-spin 1s linear infinite; display: block; margin: 20px auto; }
 .no-games {
@@ -1950,6 +2205,77 @@ onUnmounted(() => {
 .plat-drop-logo { height: 14px; max-width: 100px; width: auto; object-fit: contain; filter: brightness(1.1); }
 .plat-drop-name { font-size: 11px; color: var(--text); flex: 1; text-align: left; }
 .plat-drop-count { font-size: var(--fs-xs, 10px); color: var(--muted); margin-left: auto; flex-shrink: 0; }
+
+/* ── Library quick-jump dropdown (mirrors the platform dropdown) ─────────────── */
+.lib-sw-name {
+  display: flex; align-items: center; gap: 5px;
+  background: none; border: none; cursor: pointer; color: var(--muted);
+  padding: 3px 8px; border-radius: var(--radius-sm);
+  transition: background var(--transition); max-width: 100%;
+}
+.lib-sw-name:hover { background: rgba(255,255,255,.06); }
+.lib-drop {
+  position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  width: calc(var(--sidebar-w, 280px) - 36px); max-height: 320px; overflow-y: auto;
+  background: var(--bg-card, #12101a); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm); box-shadow: 0 8px 32px rgba(0,0,0,.5); z-index: 500;
+}
+.lib-drop-item {
+  display: flex; align-items: center; gap: var(--space-2, 8px); width: 100%;
+  padding: 7px 10px; background: transparent; border: none; cursor: pointer;
+  border-bottom: 1px solid var(--glass-border); transition: background var(--transition);
+}
+.lib-drop-item:last-child { border-bottom: none; }
+.lib-drop-item:hover, .lib-drop-item.active { background: rgba(255,255,255,.06); }
+.lib-drop-ico { flex-shrink: 0; }
+.lib-drop-name { font-size: 12px; color: var(--text); flex: 1; text-align: left; font-weight: 600; }
+.lib-drop-count { font-size: var(--fs-xs, 10px); color: var(--muted); margin-left: auto; flex-shrink: 0; }
+
+/* ── Add-collection FAB (sticky bottom-right of the list) ────────────────────── */
+.coll-add-row {
+  margin-top: auto;        /* push to the bottom of the list */
+  position: sticky; bottom: 0; left: 0; right: 0;
+  display: flex; justify-content: flex-end; padding: 8px 12px;
+  pointer-events: none;
+}
+.coll-add-fab {
+  pointer-events: auto;
+  width: 42px; height: 42px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--pl) 24%, var(--bg-card, #12101a));
+  color: var(--pl-light); border: 1px solid color-mix(in srgb, var(--pl) 40%, transparent);
+  cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  transition: all .15s;
+}
+.coll-add-fab:hover { background: color-mix(in srgb, var(--pl) 40%, var(--bg-card, #12101a)); transform: translateY(-1px); }
+
+/* ── Create-collection dialog ───────────────────────────────────────────────── */
+.cl-create-dialog {
+  width: 360px; max-width: 94vw;
+  background: var(--bg-card, #12101a); border: 1px solid var(--glass-border);
+  border-radius: var(--radius); box-shadow: 0 20px 60px rgba(0,0,0,.6); overflow: hidden;
+}
+.cl-create-body { padding: 16px; }
+.cl-create-input {
+  width: 100%; box-sizing: border-box; padding: 9px 12px;
+  background: rgba(255,255,255,.05); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm); color: var(--text); font-size: 13px; outline: none;
+}
+.cl-create-input:focus { border-color: var(--pl); }
+.cl-create-err { color: #f87171; font-size: 12px; margin-top: 8px; }
+.cl-create-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 16px; border-top: 1px solid var(--glass-border);
+}
+.cl-btn {
+  padding: 7px 16px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--glass-border); transition: all .15s;
+}
+.cl-btn--ghost { background: transparent; color: var(--muted); }
+.cl-btn--ghost:hover { color: var(--text); background: rgba(255,255,255,.05); }
+.cl-btn--primary { background: color-mix(in srgb, var(--pl) 22%, transparent); color: var(--pl-light); border-color: color-mix(in srgb, var(--pl) 45%, transparent); }
+.cl-btn--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--pl) 35%, transparent); }
+.cl-btn--primary:disabled { opacity: .4; cursor: default; }
 
 /* ── Add ROMs modal extras ───────────────────────────────────────────────── */
 .cl-modal--roms { width: 480px; max-width: 96vw; }

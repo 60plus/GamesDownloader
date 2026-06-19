@@ -255,7 +255,36 @@
           </div>
         </div>
 
-        <!-- Custom collections (data-driven) -->
+        <!-- Collection containers (game groupings) - one card per container -->
+        <div
+          v-for="cont in collectionContainers"
+          :key="cont.slug"
+          class="home-lib-card"
+          :style="{ order: orderOf(cont.slug) }"
+          @click="router.push(libs.route(cont))"
+        >
+          <div class="home-lib-card-cover">
+            <div class="home-coll-cover-fan">
+              <CollectionCover :cover="collSummary[cont.slug]?.cover || null" :covers="collSummary[cont.slug]?.covers || []" :name="libs.label(cont)" :color="cont.color || '#8b5cf6'" />
+            </div>
+            <div class="home-lib-card-cover-overlay" />
+            <div class="home-lib-card-info">
+              <div class="home-lib-card-icon" :style="{ borderColor: cont.color || '#8b5cf6' }">
+                <LibraryIcon :icon="cont.icon || 'builtin:layers'" :color="cont.color || '#8b5cf6'" :size="16" alt="Collections" />
+              </div>
+              <span class="home-lib-card-name">{{ libs.label(cont) }}</span>
+              <span class="home-lib-card-count">{{ (collSummary[cont.slug]?.count || 0) === 1 ? t('collections.count', { count: collSummary[cont.slug]?.count || 0 }) : t('collections.count_plural', { count: collSummary[cont.slug]?.count || 0 }) }}</span>
+            </div>
+          </div>
+          <div class="home-lib-card-hero">
+            <img v-if="collSummary[cont.slug]?.hero" :src="collSummary[cont.slug]?.hero || ''" :class="['home-lib-hero-bg', heroAnimClass]" :style="heroStyle(0)" />
+            <div v-else class="home-lib-hero-empty" />
+            <div class="home-lib-hero-overlay" />
+            <div class="home-lib-hero-fade" />
+          </div>
+        </div>
+
+        <!-- Custom user libraries (data-driven) -->
         <div
           v-for="coll in collections"
           :key="coll.slug"
@@ -425,6 +454,7 @@ import { useLibrariesStore } from '@/stores/libraries'
 import { useThemeStore } from '@/stores/theme'
 import client from '@/services/api/client'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
+import CollectionCover from '@/components/collections/CollectionCover.vue'
 import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
@@ -495,10 +525,31 @@ function orderOf(slug: string): number {
   return libs.orderIndex(slug)
 }
 
-// Custom collections (data-driven from the registry) shown as their own cards.
+// User-created libraries (registry kind "custom_lib") shown as their own cards.
 // `visible` already drops user-hidden libraries.
-const collections = computed(() => libs.visible.filter(l => l.kind === 'collection'))
+const collections = computed(() => libs.visible.filter(l => l.kind === 'custom_lib'))
 const collData = ref<Record<string, any>>({})
+
+// One home card per collection container (kind 'collections'). `visible` already
+// drops disabled / user-hidden libraries.
+const collectionContainers = computed(() => libs.visible.filter(l => l.kind === 'collections'))
+const collSummary = ref<Record<string, { count: number; cover: string | null; covers: string[]; hero: string | null }>>({})
+async function fetchCollectionsSummary() {
+  const out: Record<string, { count: number; cover: string | null; covers: string[]; hero: string | null }> = {}
+  await Promise.all(collectionContainers.value.map(async (cont) => {
+    try {
+      const { data } = await client.get('/collections', { params: { library: cont.slug } })
+      const list = Array.isArray(data) ? data : []
+      // Pick a random collection (like the game cards pick a random game); the
+      // hero comes from the SAME collection that the fan is showing.
+      const pick = list.length ? list[Math.floor(Math.random() * list.length)] : null
+      const heroes: string[] = pick?.member_heroes || []
+      const hero = heroes.length ? heroes[Math.floor(Math.random() * heroes.length)] : (pick?.member_covers?.[0] || null)
+      out[cont.slug] = { count: list.length, cover: pick?.cover_path || null, covers: pick?.member_covers || [], hero }
+    } catch { out[cont.slug] = { count: 0, cover: null, covers: [], hero: null } }
+  }))
+  collSummary.value = out
+}
 
 // Per-theme "recently added" library selection (null => all libraries).
 function recentShown(slug: string): boolean {
@@ -713,6 +764,7 @@ onMounted(async () => {
   await libs.fetch()
   fetchAll()
   fetchCollections()
+  fetchCollectionsSummary()
 })
 </script>
 
@@ -783,6 +835,12 @@ onMounted(async () => {
   width: 100%; height: 100%;
   display: flex; align-items: center; justify-content: center;
   background: color-mix(in srgb, var(--pl) 6%, transparent);
+}
+/* Collections card: the fanned cover fills the left panel, vertically centred. */
+.home-coll-cover-fan {
+  position: absolute; left: 0; right: 0; top: 50%;
+  transform: translateY(-50%);
+  aspect-ratio: 1 / 1;
 }
 
 /* Dark gradient overlay at bottom of cover */

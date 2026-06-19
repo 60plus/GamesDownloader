@@ -13,11 +13,14 @@ import { registerTheme, registerPluginLayout, registerPluginCouchMode, registerM
 import { useCouchNav, navPaused as couchNavPaused } from "./composables/useCouchNav";
 import { useCouchTheme } from "./composables/useCouchTheme";
 import { getEjsCore } from "./utils/ejsCores";
+import { buildLanguageList } from "./utils/langMap";
+import { sanitizeHtml } from "./utils/sanitize";
 import i18n from "./i18n";
 import { useAuthStore } from "./stores/auth";
 import { useSocketStore } from "./stores/socket";
 import { useThemeStore } from "./stores/theme";
 import { useLibrariesStore } from "./stores/libraries";
+import { useCollectionsStore } from "./stores/collections";
 import { useNotificationStore } from "./stores/notifications";
 import { LIBRARY_ICONS, LIBRARY_ICON_NAMES, libraryIconMarkup } from "./lib/libraryIcons";
 import client from "./services/api/client";
@@ -92,8 +95,17 @@ function createSafeSocketStore() {
     socket: createSafeSocketStore(),
     theme: useThemeStore,
     libraries: useLibrariesStore,
+    collections: useCollectionsStore,
   },
   api: client,
+  // Shared utility helpers for theme/plugin authors (plugins cannot import
+  // @/utils directly - they only have window.__GD__). buildLanguageList(dict)
+  // returns the same {name, flag} list the built-in themes use for language
+  // flags; sanitizeHtml(html) is the same sanitizer used for descriptions.
+  utils: {
+    buildLanguageList,
+    sanitizeHtml,
+  },
   registerTheme,
   registerPluginLayout,
   registerPluginCouchMode,
@@ -126,6 +138,25 @@ function createSafeSocketStore() {
     /** Persist a new selection (per-user, per-theme). */
     set: (slugs: string[]) => useThemeStore().setRecentLibraries(slugs),
   },
+  // Public collections API (admin-curated game groupings). The Collections tab
+  // already appears in stores.libraries().visible (slug "collections", route
+  // "/collections"); these let a theme render its grid / detail data-driven.
+  collections: {
+    /** Reactive list of collections (read after boot, or call fetch() first). */
+    list: () => useCollectionsStore().list,
+    /** (Re)load the collections list. */
+    fetch: () => useCollectionsStore().fetch(),
+    /** A loaded collection by slug. */
+    bySlug: (slug: string) => useCollectionsStore().bySlug(slug),
+    /** A collection's full detail incl. its member games. */
+    get: (slug: string) => useCollectionsStore().get(slug),
+    /** The collection slugs a game belongs to. */
+    forGame: (gameId: number | string) => useCollectionsStore().forGame(gameId),
+    /** Route for a single collection (nested under its container library). */
+    route: (slug?: string) => useCollectionsStore().route(slug),
+    /** Route for a container library's collection grid. */
+    libraryRoute: (librarySlug: string) => useCollectionsStore().libraryRoute(librarySlug),
+  },
   composables: {
     useCouchNav,
     couchNavPaused,
@@ -154,6 +185,7 @@ app.mount("#app");
 // Load the data-driven library registry (no-op if not authenticated yet;
 // re-fetched after login in the auth store).
 useLibrariesStore().fetch();
+useCollectionsStore().fetch();
 
 // Load plugin translations (i18n.json files from installed plugins)
 client.get("/plugins/frontend/i18n").then((res: any) => {

@@ -365,6 +365,12 @@
                 <span class="gd-dk">{{ t('detail.source') }}</span>
                 <span class="gd-dv">{{ game.source === 'gog' ? 'GOG' : 'Custom' }}</span>
               </template>
+              <template v-if="gameCollections.length">
+                <span class="gd-dk">{{ t('detail.collections') }}</span>
+                <div class="gd-dv gd-tag-inline">
+                  <router-link v-for="c in gameCollections" :key="c.slug" :to="`/collections/${c.library}/${c.slug}`" class="gd-itag gd-itag--link">{{ c.name }}</router-link>
+                </div>
+              </template>
               <template v-for="prow in pluginRows" :key="prow.id">
                 <span v-if="prow.fullWidth" class="gd-dv" style="grid-column:1 / -1">
                   <PluginDetailValue :row="prow" :game="game" library="games" variant="dlist" />
@@ -583,6 +589,7 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
+import { useCollectionsStore } from '@/stores/collections'
 import client from '@/services/api/client'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
@@ -660,6 +667,21 @@ const loading    = ref(true)
 // Rows contributed by plugins via window.__GD__.registerDetailRow (reactive to
 // both the game and plugin registration).
 const pluginRows = computed(() => game.value ? resolveDetailRows(game.value as any, 'games') : [])
+
+// Collections this game belongs to (slugs from the membership endpoint, mapped
+// to names via the collections store so the detail row can show clickable chips).
+const collectionsStore = useCollectionsStore()
+const gameCollectionSlugs = ref<string[]>([])
+const gameCollections = computed(() =>
+  gameCollectionSlugs.value
+    .map(s => { const c = collectionsStore.bySlug(s); return { slug: s, name: c?.name || s, library: c?.library || null } })
+    .filter(c => c.library),   // need the container slug to build the route
+)
+async function loadGameCollections(id: number | string) {
+  if (!collectionsStore.loaded) collectionsStore.fetch()
+  gameCollectionSlugs.value = await collectionsStore.forGame(id)
+}
+
 const coverFailed = ref(false)
 const scraping   = ref(false)
 const clearing   = ref(false)
@@ -1130,6 +1152,7 @@ async function fetchGame() {
     const { data } = await client.get(`/library/games/${id}`)
     game.value = data
     descOverflow.value = !!(data.description && data.description.length > 600)
+    loadGameCollections(data.id)
     // Lazy-load plugin ratings
     if (data.title) fetchPluginRatings(data.title)
   } catch {
@@ -1642,6 +1665,18 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
   padding: 2px 9px; border-radius: var(--radius-xs, 4px); font-size: 11px; font-weight: 600;
   background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
   color: rgba(255,255,255,.58);
+}
+/* Collection chips - clickable, tinted with the theme accent. */
+.gd-itag--link {
+  text-decoration: none; cursor: pointer;
+  background: color-mix(in srgb, var(--pl) 14%, transparent);
+  border-color: color-mix(in srgb, var(--pl) 35%, transparent);
+  color: var(--pl-light, #a78bfa);
+  transition: all var(--transition, .15s ease);
+}
+.gd-itag--link:hover {
+  background: color-mix(in srgb, var(--pl) 26%, transparent);
+  border-color: var(--pl); color: #fff;
 }
 .gd-lang-flags { display: flex; flex-wrap: wrap; gap: var(--space-1, 4px); }
 .gd-lang-flag {

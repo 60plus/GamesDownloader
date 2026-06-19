@@ -11,11 +11,13 @@ import client from '@/services/api/client'
 import { useThemeStore } from '@/stores/theme'
 import i18n from '@/i18n'
 
-// Built-in libraries map to fixed GD routes; collections live at /lib/:slug.
+// Built-in libraries map to fixed GD routes; user libraries live at /lib/:slug.
+// Collection containers (kind 'collections') live at /collections/:slug (handled
+// dynamically in route()/slugForPath, since there can be several).
 const _BUILTIN_ROUTE: Record<string, string> = {
   gog: '/library', games: '/games', emulation: '/emulation', couch: '/couch',
 }
-// Built-in display names come from the UI translations (collections use their name).
+// Built-in display names come from the UI translations (user libraries use their name).
 const _BUILTIN_LABEL_KEY: Record<string, string> = {
   gog: 'nav.gog_library', games: 'nav.games_library', emulation: 'nav.emulation', couch: 'couch.title',
 }
@@ -23,7 +25,7 @@ const _BUILTIN_LABEL_KEY: Record<string, string> = {
 export interface LibraryInfo {
   slug: string
   name: string
-  kind: string            // "gog" | "custom" | "emulation" | "collection"
+  kind: string            // "gog" | "custom" | "emulation" | "couch" | "custom_lib" | "collections"
   icon: string | null
   color: string | null
   enabled: boolean
@@ -93,9 +95,12 @@ export const useLibrariesStore = defineStore('libraries', () => {
 
   // ── Theme/plugin helpers (let any theme render libraries data-driven) ───────
 
-  /** Frontend route path for a library's list view (collections -> /lib/:slug). */
+  /** Frontend route path for a library's list view (user libraries -> /lib/:slug,
+   *  collection containers -> /collections/:slug). */
   function route(slugOrLib: string | LibraryInfo): string {
     const slug = typeof slugOrLib === 'string' ? slugOrLib : slugOrLib.slug
+    const lib = typeof slugOrLib === 'string' ? bySlug(slug) : slugOrLib
+    if (lib?.kind === 'collections') return '/collections/' + slug
     return _BUILTIN_ROUTE[slug] ?? ('/lib/' + slug)
   }
 
@@ -103,6 +108,11 @@ export const useLibrariesStore = defineStore('libraries', () => {
   function label(slugOrLib: string | LibraryInfo): string {
     const slug = typeof slugOrLib === 'string' ? slugOrLib : slugOrLib.slug
     const lib = typeof slugOrLib === 'string' ? bySlug(slug) : slugOrLib
+    // A collection container uses its own name; the legacy "Collections" one
+    // (named exactly "Collections") falls back to the localised default.
+    if (lib?.kind === 'collections') {
+      return (lib?.name && lib.name !== 'Collections') ? lib.name : i18n.t('nav.collections', lib?.name || 'Collections')
+    }
     const key = _BUILTIN_LABEL_KEY[slug]
     return key ? i18n.t(key, lib?.name || slug) : (lib?.name || slug)
   }
@@ -118,6 +128,9 @@ export const useLibrariesStore = defineStore('libraries', () => {
     if (path === '/couch') return 'couch'
     if (path === '/emulation') return 'emulation'
     if (/^\/emulation\/[^/]+$/.test(path)) return 'emulation'  // platform ROM list
+    // Collection container grid (/collections/:lib) or a collection's games
+    // (/collections/:lib/:slug) - the container slug is the second segment.
+    if (path.startsWith('/collections/')) return path.split('/')[2] || null
     const m = path.match(/^\/lib\/([^/]+)$/)
     return m ? m[1] : null
   }
