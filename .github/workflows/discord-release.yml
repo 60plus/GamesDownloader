@@ -16,9 +16,20 @@ jobs:
           URL: ${{ github.event.release.html_url }}
           BODY: ${{ github.event.release.body }}
           AUTHOR: ${{ github.event.release.author.login }}
+          ASSETS: ${{ toJSON(github.event.release.assets) }}
         run: |
           # Truncate body to 1500 chars to fit in Discord embed
           DESCRIPTION=$(echo "$BODY" | head -c 1500)
+
+          # Up to four image assets become a gallery. Extra embeds that share the
+          # release URL are merged by Discord into one gallery under the main embed,
+          # so attaching screenshots to the release shows them inline.
+          IMAGE_EMBEDS=$(echo "$ASSETS" | jq --arg url "$URL" '
+            [ .[]
+              | select((.content_type // "" | startswith("image/"))
+                       or (.name | test("\\.(png|jpe?g|webp|gif)$"; "i")))
+              | { url: $url, image: { url: .browser_download_url } }
+            ] | .[0:4]')
 
           # Build JSON payload using jq for safe escaping
           PAYLOAD=$(jq -n \
@@ -27,9 +38,10 @@ jobs:
             --arg desc "$DESCRIPTION" \
             --arg tag "$TAG" \
             --arg author "$AUTHOR" \
+            --argjson images "$IMAGE_EMBEDS" \
             '{
               content: ":rocket: **New release published!**",
-              embeds: [{
+              embeds: ([{
                 title: $title,
                 url: $url,
                 description: $desc,
@@ -39,7 +51,7 @@ jobs:
                   { name: "By", value: $author, inline: true }
                 ],
                 footer: { text: "GamesDownloader" }
-              }]
+              }] + $images)
             }')
 
           curl -X POST -H "Content-Type: application/json" \
