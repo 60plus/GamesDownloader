@@ -8,8 +8,13 @@ be deleted, only toggled.
 - Built-in "system" libraries (kind "gog", "emulation") derive their games
   implicitly from `library_games.source` / the separate `roms` table; they are
   not membership-driven.
-- "games" (custom) and user-created "collection" libraries hold LibraryGames via
+- "games" (custom) and user-created "custom_lib" libraries hold LibraryGames via
   the `library_membership` join table (a game can belong to several).
+
+The word "collection(s)" is NOT used here for user libraries - it belongs to the
+separate Collections feature (game groupings, see models/collection.py). The
+built-in "collections" index library (kind "collections") is the nav entry that
+lists those collections.
 """
 
 from __future__ import annotations
@@ -25,7 +30,9 @@ class Library(Base):
 
     slug:       Mapped[str]  = mapped_column(String(64), unique=True, index=True)
     name:       Mapped[str]  = mapped_column(String(128))
-    # "gog" | "custom" | "emulation" | "collection"
+    # "gog" | "custom" | "emulation" | "couch" | "custom_lib" | "collections"
+    #   custom_lib  = user-created separate library (e.g. "Kids games")
+    #   collections = built-in index library listing Collections (groupings)
     kind:       Mapped[str]  = mapped_column(String(16))
     icon:       Mapped[str | None] = mapped_column(String(512), nullable=True)
     color:      Mapped[str | None] = mapped_column(String(32), nullable=True)

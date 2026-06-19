@@ -74,6 +74,7 @@ async def _init_db() -> None:
     import models.rom_save_state           # noqa: F401
     import models.plugin_config            # noqa: F401
     import models.library                  # noqa: F401
+    import models.collection               # noqa: F401
 
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -134,6 +135,12 @@ async def _init_db() -> None:
         ("library_games",  "in_default_library",  "TINYINT(1) NOT NULL DEFAULT 1"),
         # Per-user library access control
         ("libraries",      "visibility",          "VARCHAR(16) NOT NULL DEFAULT 'public'"),
+        # Collections live inside a container library (kind 'collections').
+        ("collections",    "library_id",          "INT NULL"),
+        # Collections: short description (list view) + HLTB playtime override.
+        ("collections",    "description_short",   "TEXT NULL"),
+        ("collections",    "hltb_main_s",         "INT NULL"),
+        ("collections",    "hltb_complete_s",     "INT NULL"),
     ]
     async with async_engine.begin() as conn:
         for table, column, col_ddl in _COLUMN_MIGRATIONS:
@@ -222,6 +229,44 @@ async def _init_db() -> None:
                 logger.info("Migration: nulled %d remote avatar_path value(s) - upload-only policy", count)
         except Exception as exc:
             logger.warning("Avatar path migration failed: %s", exc)
+
+    # ── Library kind rename: collection → custom_lib ──────────────────────────
+    # User-created separate libraries were historically stored as kind
+    # "collection". The word "collection(s)" now belongs to the distinct
+    # Collections feature (game groupings), so user libraries become "custom_lib".
+    async with async_engine.begin() as conn:
+        try:
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM libraries WHERE kind = 'collection'")
+            )
+            count = result.scalar()
+            if count:
+                await conn.execute(
+                    text("UPDATE libraries SET kind = 'custom_lib' WHERE kind = 'collection'")
+                )
+                logger.info("Migration: renamed %d library kind(s) collection -> custom_lib", count)
+        except Exception as exc:
+            logger.warning("Library kind migration (collection->custom_lib) failed: %s", exc)
+
+    # ── Collection containers (kind 'collections') are user content ───────────
+    # No permanent built-in: any legacy 'collections' library becomes a normal
+    # deletable container, and any pre-existing collections are attached to it so
+    # they are not orphaned by the new collections.library_id column.
+    async with async_engine.begin() as conn:
+        try:
+            await conn.execute(
+                text("UPDATE libraries SET is_builtin = 0 WHERE kind = 'collections' AND is_builtin = 1")
+            )
+            lib_id = (await conn.execute(
+                text("SELECT id FROM libraries WHERE kind = 'collections' ORDER BY id LIMIT 1")
+            )).scalar()
+            if lib_id is not None:
+                await conn.execute(
+                    text("UPDATE collections SET library_id = :lid WHERE library_id IS NULL"),
+                    {"lid": lib_id},
+                )
+        except Exception as exc:
+            logger.warning("Collections container migration failed: %s", exc)
 
     # No default admin seeding - admin is created through the setup wizard
 
@@ -424,10 +469,12 @@ app.include_router(download_router)
 from endpoints.library.library_router import library_router
 from endpoints.library.upload_router import upload_router
 from endpoints.library.libraries_router import router as libraries_router
+from endpoints.library.collections_router import router as collections_router
 
 app.include_router(library_router, prefix="/api")
 app.include_router(upload_router,  prefix="/api")
 app.include_router(libraries_router)
+app.include_router(collections_router)
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 from endpoints.settings.settings_router import settings_router

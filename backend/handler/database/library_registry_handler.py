@@ -9,9 +9,12 @@ from decorators.database import begin_session
 from handler.database.base_handler import DBBaseHandler
 from models.library import Library, LibraryMembership, UserLibraryAccess  # noqa: F401
 
-# Libraries that may be restricted per-user (decision: collections/custom/GOG).
+# Libraries that may be restricted per-user (decision: user libraries/custom/GOG).
 # Emulation/couch stay governed purely by the roms.read scope.
-ACL_KINDS = frozenset({"gog", "custom", "collection"})
+# NOTE: kind "custom_lib" = user-created separate libraries (e.g. "Kids games").
+# kind "collections" = a user-created container holding Collections (game
+# groupings - models/collection.py). Both are user content and restrictable.
+ACL_KINDS = frozenset({"gog", "custom", "custom_lib", "collections"})
 
 # Built-in libraries seeded on first startup. Order/visuals mirror the previous
 # hard-coded home cards so the UI looks identical until an admin changes things.
@@ -27,6 +30,9 @@ _BUILTINS = [
     # ordering applies; the frontend only shows it when emulation is also on.
     {"slug": "couch",     "name": "Couch Mode", "kind": "couch",    "icon": "/icons/gamepad.svg",
      "color": "#f59e0b", "sort_order": 40, "is_builtin": True, "storage_folder": None},
+    # Collection containers (kind "collections") are NOT seeded - they are
+    # user-created in Settings > Libraries ("This library will be a Collection")
+    # and fully deletable. There is no permanent built-in collections library.
 ]
 
 
@@ -70,14 +76,17 @@ class LibraryRegistryHandler(DBBaseHandler):
         return lib
 
     @begin_session
-    async def create_collection(
-        self, *, name: str, slug: str, color: str | None = None,
-        icon: str | None = None, storage_folder: str | None = None,
+    async def create_user_library(
+        self, *, name: str, slug: str, kind: str = "custom_lib",
+        color: str | None = None, icon: str | None = None,
+        storage_folder: str | None = None,
         created_by: int | None = None, session: AsyncSession = None,
     ) -> Library:
+        # kind "custom_lib" = a user-created separate library (e.g. "Kids games").
+        # kind "collections" = a user-created container that holds Collections.
         max_order = (await session.execute(select(func.max(Library.sort_order)))).scalar() or 0
         lib = Library(
-            slug=slug, name=name, kind="collection", color=color, icon=icon,
+            slug=slug, name=name, kind=kind, color=color, icon=icon,
             enabled=True, sort_order=int(max_order) + 10, is_builtin=False,
             storage_folder=storage_folder, created_by=created_by,
         )
@@ -87,11 +96,21 @@ class LibraryRegistryHandler(DBBaseHandler):
         return lib
 
     @begin_session
-    async def delete_collection(self, slug: str, *, session: AsyncSession = None) -> bool:
+    async def delete_user_library(self, slug: str, *, session: AsyncSession = None) -> bool:
         lib = (await session.execute(select(Library).where(Library.slug == slug))).scalars().first()
         if lib is None or lib.is_builtin:
             return False
-        await session.delete(lib)  # membership rows cascade
+        # A collections container also owns its Collections. Delete them first so
+        # their membership rows cascade (the library_id FK is not enforced on the
+        # pre-existing table, so we cannot rely on ON DELETE CASCADE there).
+        if lib.kind == "collections":
+            from models.collection import Collection
+            colls = (await session.execute(
+                select(Collection).where(Collection.library_id == lib.id)
+            )).scalars().all()
+            for c in colls:
+                await session.delete(c)  # collection_membership rows cascade
+        await session.delete(lib)  # library_membership rows cascade
         return True
 
     # ── Per-game collection membership ──────────────────────────────────────────

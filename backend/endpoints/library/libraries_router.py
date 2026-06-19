@@ -33,11 +33,12 @@ router = APIRouter(prefix="/api/libraries", tags=["libraries"])
 # emulation library; non-admins never see GOG. Unknown kinds fall back to
 # LIBRARY_READ.
 _KIND_SCOPE = {
-    "gog":        Scopes.GOG_READ,
-    "emulation":  Scopes.ROMS_READ,
-    "couch":      Scopes.ROMS_READ,   # couch is a view of the ROM library
-    "custom":     Scopes.LIBRARY_READ,
-    "collection": Scopes.LIBRARY_READ,
+    "gog":         Scopes.GOG_READ,
+    "emulation":   Scopes.ROMS_READ,
+    "couch":       Scopes.ROMS_READ,   # couch is a view of the ROM library
+    "custom":      Scopes.LIBRARY_READ,
+    "custom_lib":  Scopes.LIBRARY_READ,  # user-created separate libraries
+    "collections": Scopes.LIBRARY_READ,  # built-in Collections index library
 }
 
 
@@ -60,6 +61,7 @@ class LibraryCreateBody(BaseModel):
     color: str | None = None
     icon: str | None = None
     create_folder: bool = False
+    is_collection: bool = False        # create a Collections container (kind 'collections')
 
 
 class MembershipBody(BaseModel):
@@ -188,7 +190,9 @@ async def upload_library_icon(
 
 @protected_route(router.post, "", scopes=[Scopes.SETTINGS_WRITE])
 async def create_library(request: Request, body: LibraryCreateBody) -> dict:
-    """Create a custom collection library, optionally with its own scan folder."""
+    """Create a user library. With `is_collection` it is a Collections container
+    (kind 'collections', no scan folder); otherwise a regular custom library,
+    optionally with its own scan folder."""
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name is required")
@@ -196,8 +200,10 @@ async def create_library(request: Request, body: LibraryCreateBody) -> dict:
     if await library_registry_handler.get_by_slug(slug) is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
 
+    # A collection container never owns a scan folder (it holds collections, not
+    # files), so the folder option is ignored for it.
     storage_folder = None
-    if body.create_folder:
+    if body.create_folder and not body.is_collection:
         storage_folder = slug
         try:
             os.makedirs(os.path.join(GAMES_PATH, slug), exist_ok=True)
@@ -205,8 +211,9 @@ async def create_library(request: Request, body: LibraryCreateBody) -> dict:
             raise HTTPException(status_code=500, detail=f"Could not create folder: {e}")
 
     user = getattr(request.state, "user", None)
-    lib = await library_registry_handler.create_collection(
-        name=name, slug=slug, color=body.color, icon=body.icon,
+    lib = await library_registry_handler.create_user_library(
+        name=name, slug=slug, kind="collections" if body.is_collection else "custom_lib",
+        color=body.color, icon=body.icon,
         storage_folder=storage_folder, created_by=getattr(user, "id", None),
     )
     return _library_to_dict(lib)
@@ -214,9 +221,9 @@ async def create_library(request: Request, body: LibraryCreateBody) -> dict:
 
 @protected_route(router.delete, "/{slug}", scopes=[Scopes.SETTINGS_WRITE])
 async def delete_library(request: Request, slug: str) -> dict:
-    """Delete a custom collection (built-in libraries cannot be deleted). Files
+    """Delete a user-created library (built-in libraries cannot be deleted). Files
     on disk are left untouched - only the library and its memberships go."""
-    ok = await library_registry_handler.delete_collection(slug)
+    ok = await library_registry_handler.delete_user_library(slug)
     if not ok:
         raise HTTPException(status_code=400, detail="Library not found or is built-in")
     return {"ok": True}
@@ -230,18 +237,18 @@ async def get_game_membership(request: Request, game_id: int) -> dict:
     if game is None:
         raise HTTPException(status_code=404, detail="Game not found")
     member_ids = set(await library_registry_handler.get_member_library_ids(game_id))
-    collections = [
+    libraries = [
         lib.slug for lib in await library_registry_handler.get_all()
-        if lib.kind == "collection" and lib.id in member_ids
+        if lib.kind == "custom_lib" and lib.id in member_ids
     ]
-    return {"in_default_library": game.in_default_library, "collections": collections}
+    return {"in_default_library": game.in_default_library, "collections": libraries}
 
 
 @protected_route(router.put, "/membership/{game_id}", scopes=[Scopes.LIBRARY_WRITE])
 async def set_game_membership(request: Request, game_id: int, body: MembershipBody) -> dict:
     """Set a game's default-library flag and its collection memberships."""
     libs = await library_registry_handler.get_all()
-    slug_to_id = {lib.slug: lib.id for lib in libs if lib.kind == "collection"}
+    slug_to_id = {lib.slug: lib.id for lib in libs if lib.kind == "custom_lib"}
     wanted_ids = [slug_to_id[s] for s in body.collections if s in slug_to_id]
 
     async with async_session_factory() as s:
