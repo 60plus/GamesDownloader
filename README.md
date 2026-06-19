@@ -57,6 +57,13 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - **Recently added per theme** choose which libraries show a "recently added" row on the home page, per theme
 - **Theme API** themes render the whole library set data-driven via `window.__GD__.stores.libraries` (visibility, order, routes, labels, icons) and `recentLibraries`, so a new theme needs no changes to the app (Modern, Classic and Neon Horizon all use it)
 
+### Collections
+- **Game collections** group related games into a collection (a series, a franchise, a theme); a game can belong to several collections and still lives in its own library
+- **Collection libraries** collections live inside container libraries you create in Settings → Libraries (tick "This library will be a Collection"); fully removable, with their own icon, and no game folder
+- **Rich detail** each collection has an About section plus Details aggregated from its members (developers, publishers, release-year range, platforms, languages, average rating and Time to Beat, genres, sources and game count), in a cover or list layout
+- **Curate** admins create a collection in one click, set a game's collections in Edit Metadata → Collections, and edit its cover (an auto fan of member covers, or your own upload), two descriptions, year range, rating and Time to Beat (auto-average or manual override)
+- **Theme API** themes render collections data-driven via `window.__GD__.collections` (list, detail, membership, routes) plus `window.__GD__.utils` (language flags, sanitized HTML); Modern, Classic and Neon Horizon all use it
+
 ### ROM Library
 - Scan local ROM directories and build a full library per platform (SNES, Genesis, Game Boy, PS1, N64, and more)
 - Automatic metadata scraping from **ScreenScraper**, **IGDB**, **LaunchBox**, **HowLongToBeat**, and **metadata plugins** in one pass
