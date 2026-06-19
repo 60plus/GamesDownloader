@@ -28,7 +28,7 @@ _hp_key: str | None = None
 _hp_val: str | None = None
 _init_done: bool = False
 _init_lock = asyncio.Lock()
-_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
 
 
 def _normalise(title: str) -> str:
@@ -43,14 +43,28 @@ def _similarity(a: str, b: str) -> float:
 
 
 async def _fetch_security_data() -> None:
-    """Fetch search URL + security token/keys from HLTB."""
+    """Refresh the (rotating) search endpoint + security token/keys from HLTB."""
     global _search_url, _security_token, _hp_key, _hp_val
 
-    # 1. Get security token + honeypot keys from /api/find/init
+    # 0. HLTB rotates its search endpoint path periodically (e.g. /api/find ->
+    #    /api/bleed). Fetch the current one from RomM's maintained fixture; the
+    #    init endpoint follows the same path ({search_url}/init), so a stale
+    #    hard-coded /api/find/init now 404s and yields no token.
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+            fr = await c.get(_HLTB_URL_SOURCE, headers={"User-Agent": _UA})
+            url = fr.text.strip()
+            if fr.status_code == 200 and url.startswith("http"):
+                _search_url = url
+    except Exception as e:
+        logger.debug("HLTB: could not fetch search endpoint (using %s): %s", _search_url, e)
+
+    # 1. Get security token + honeypot keys from {search_url}/init.
+    init_url = f"{_search_url}/init"
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
             r = await c.get(
-                f"{_BASE_URL}/api/find/init",
+                init_url,
                 params={"t": int(time.time())},
                 headers={"Referer": _BASE_URL, "User-Agent": _UA},
             )
@@ -60,10 +74,10 @@ async def _fetch_security_data() -> None:
                 _hp_key = data.get("hpKey")
                 _hp_val = data.get("hpVal")
                 logger.debug(
-                    "HLTB: security token obtained (hpKey=%s)", _hp_key
+                    "HLTB: security token obtained (hpKey=%s, endpoint=%s)", _hp_key, _search_url
                 )
             else:
-                logger.debug("HLTB: init returned %d", r.status_code)
+                logger.debug("HLTB: init %s returned %d", init_url, r.status_code)
     except Exception as e:
         logger.debug("HLTB: could not fetch security token: %s", e)
 
