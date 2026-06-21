@@ -271,3 +271,141 @@ def _fix_igdb_url(url: str, size: str) -> str | None:
     import re
     url = re.sub(r"/t_[a-z_]+/", f"/{size}/", url)
     return url
+
+
+# ── Collections / franchises (for the Collections feature) ────────────────────
+# IGDB models a game series as either a `collection` (in-universe series) or a
+# `franchise` (broader brand). Neither carries a description, but each lists its
+# games, from which we derive the cover, year range and average rating. The
+# provider_collection_id encodes the kind: 'c<id>' = collection, 'f<id>' =
+# franchise.
+
+
+async def search_collections(
+    name: str,
+    *,
+    client_id: str,
+    client_secret: str,
+) -> list[dict]:
+    """Search IGDB collections + franchises by name. Returns candidate dicts."""
+    q = (name or "").strip()
+    if not q:
+        return []
+    body = f'fields name, slug, url, games; where name ~ *"{q}"*; limit 8;'
+    out: list[dict] = []
+    for kind, endpoint, prefix in (
+        ("collection", "collections", "c"),
+        ("franchise",  "franchises",  "f"),
+    ):
+        try:
+            rows = await _igdb_post(endpoint, body, client_id, client_secret)
+        except Exception as exc:
+            logger.warning("IGDB %s search failed: %s", endpoint, exc)
+            rows = []
+        for r in rows:
+            games = r.get("games") or []
+            out.append({
+                "provider_id":            "igdb",
+                "provider_collection_id": f"{prefix}{r.get('id')}",
+                "name":                   r.get("name") or "",
+                "snippet":                f"{kind} - {len(games)} games",
+                "_first_game":            games[0] if games else None,
+            })
+
+    # Attach a representative cover (the first game's cover) to each candidate so
+    # the editor can preview a thumbnail - one batch query for all candidates.
+    gids = sorted({c["_first_game"] for c in out if c.get("_first_game")})
+    cover_map: dict[int, str] = {}
+    if gids:
+        ids = ",".join(str(g) for g in gids)
+        try:
+            grows = await _igdb_post(
+                "games", f"fields id, cover.url; where id = ({ids}); limit {len(gids)};",
+                client_id, client_secret)
+            for g in grows:
+                if g.get("cover"):
+                    u = _fix_igdb_url(g["cover"].get("url", ""), "t_cover_big")
+                    if u:
+                        cover_map[g["id"]] = u
+        except Exception as exc:
+            logger.warning("IGDB collection cover lookup failed: %s", exc)
+    for c in out:
+        c["cover_url"] = cover_map.get(c.pop("_first_game", None))
+
+    ql = q.lower()
+    out.sort(key=lambda x: _name_distance(ql, (x.get("name") or "").lower()))
+    return out[:10]
+
+
+async def get_collection(
+    provider_collection_id: str,
+    *,
+    client_id: str,
+    client_secret: str,
+) -> dict | None:
+    """Fetch an IGDB collection/franchise and aggregate cover / year range /
+    rating from its games. IGDB has no franchise description, so `description`
+    is None (the editor keeps the prose from Wikipedia / the user)."""
+    pid = (provider_collection_id or "").strip()
+    if len(pid) < 2 or pid[0] not in ("c", "f"):
+        return None
+    endpoint = "collections" if pid[0] == "c" else "franchises"
+    try:
+        igdb_id = int(pid[1:])
+    except ValueError:
+        return None
+
+    rows = await _igdb_post(
+        endpoint,
+        f"fields name, slug, url, games; where id = {igdb_id}; limit 1;",
+        client_id, client_secret,
+    )
+    if not rows:
+        return None
+    coll = rows[0]
+    game_ids = coll.get("games") or []
+
+    cover_url = None
+    start_year = end_year = None
+    rating = None
+    if game_ids:
+        ids = ",".join(str(g) for g in game_ids[:60])
+        games = await _igdb_post(
+            "games",
+            f"fields name, cover.url, first_release_date, rating, total_rating; "
+            f"where id = ({ids}); limit 60;",
+            client_id, client_secret,
+        )
+        from datetime import datetime, timezone
+        years: list[int] = []
+        ratings: list[float] = []
+        best = None
+        for g in games:
+            ts = g.get("first_release_date")
+            if ts:
+                years.append(datetime.fromtimestamp(ts, tz=timezone.utc).year)
+            rt = g.get("total_rating") or g.get("rating")
+            if rt:
+                ratings.append(rt)
+            if g.get("cover"):
+                cur = g.get("total_rating") or g.get("rating") or 0
+                bst = (best.get("total_rating") or best.get("rating") or 0) if best else -1
+                if cur > bst:
+                    best = g
+        if best and best.get("cover"):
+            cover_url = _fix_igdb_url(best["cover"].get("url", ""), "t_cover_big")
+        if years:
+            start_year, end_year = min(years), max(years)
+        if ratings:
+            rating = round((sum(ratings) / len(ratings)) / 20.0, 1)  # 0-100 -> 0-5
+
+    return {
+        "provider_id":  "igdb",
+        "name":         coll.get("name") or "",
+        "description":  None,
+        "cover_url":    cover_url,
+        "start_year":   start_year,
+        "end_year":     end_year,
+        "rating":       rating,
+        "source_url":   coll.get("url"),
+    }

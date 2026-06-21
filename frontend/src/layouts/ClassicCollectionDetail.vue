@@ -15,7 +15,7 @@
                            game count).
     * About             -> long description (HTML, sanitised).
 
-  Admin gets Edit (CollectionEditPanel) and Delete on the cover overlay.
+  Admin gets Edit (CollectionMetadataPanel) and Delete on the cover overlay.
 
   The scoped CSS for the shared visual skeleton is copied verbatim from
   ClassicGameDetail.vue so the look stays byte-identical; the only deliberate
@@ -217,13 +217,15 @@
     </template>
 
     <!-- ── EDIT PANEL ───────────────────────────────────────────────────────── -->
-    <CollectionEditPanel
-      v-if="editOpen && detail"
-      :collection="detail"
-      @close="editOpen = false"
-      @updated="onUpdated"
-      @deleted="onDeleted"
-    />
+    <Teleport to="body">
+      <CollectionMetadataPanel
+        v-if="editOpen && detail"
+        :collection="detail"
+        @close="editOpen = false"
+        @updated="onUpdated"
+        @deleted="onDeleted"
+      />
+    </Teleport>
 
   </div>
 </template>
@@ -239,7 +241,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useDialog } from '@/composables/useDialog'
 import { useI18n } from '@/i18n'
 import CollectionCover from '@/components/collections/CollectionCover.vue'
-import CollectionEditPanel from '@/components/collections/CollectionEditPanel.vue'
+import CollectionMetadataPanel from '@/components/collections/CollectionMetadataPanel.vue'
 
 const props = defineProps<{ slug: string; lib: string; refreshTick?: number }>()
 const emit = defineEmits<{

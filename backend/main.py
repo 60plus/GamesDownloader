@@ -141,6 +141,9 @@ async def _init_db() -> None:
         ("collections",    "description_short",   "TEXT NULL"),
         ("collections",    "hltb_main_s",         "INT NULL"),
         ("collections",    "hltb_complete_s",     "INT NULL"),
+        # Collections: scraped/picked hero (backdrop) + logo (clearlogo).
+        ("collections",    "hero_path",           "VARCHAR(512) NULL"),
+        ("collections",    "logo_path",           "VARCHAR(512) NULL"),
     ]
     async with async_engine.begin() as conn:
         for table, column, col_ddl in _COLUMN_MIGRATIONS:

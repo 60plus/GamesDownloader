@@ -43,6 +43,10 @@ class Collection(Base):
     # Custom uploaded / scraped cover. When NULL the UI renders an auto-stack of
     # the member covers (newest -> oldest).
     cover_path:  Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Scraped / picked hero (detail backdrop) and logo (clearlogo), like a game.
+    # NULL hero -> a random member hero is used as the backdrop; NULL logo -> none.
+    hero_path:   Mapped[str | None] = mapped_column(String(512), nullable=True)
+    logo_path:   Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     # Manual overrides. When NULL the API serves values derived from members:
     #   start_year / end_year       -> min / max member release year

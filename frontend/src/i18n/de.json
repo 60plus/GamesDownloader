@@ -1722,5 +1722,14 @@
   "packaging.started": "Verpackung gestartet - das Archiv erscheint in der Bibliothek, sobald es fertig ist",
   "packaging.failed": "Verpackung fehlgeschlagen",
   "packaging.done": "Verpackt",
-  "packaging.nothing": "Bereits verpackt - nichts zu tun"
+  "packaging.nothing": "Bereits verpackt - nichts zu tun",
+  "collections.scrape_section": "Metadaten suchen",
+  "collections.scrape_placeholder": "Name der Sammlung oder Reihe",
+  "collections.scrape_btn": "Suchen",
+  "collections.scrape_hint": "Wikipedia und IGDB nach Beschreibung, Cover und Jahresbereich durchsuchen.",
+  "collections.scrape_searching": "Suche...",
+  "collections.scrape_no_results": "Keine Ergebnisse",
+  "collections.scrape_apply": "Übernehmen",
+  "collections.scrape_use_desc": "Beschreibung übernehmen",
+  "collections.scrape_no_covers": "Keine Cover gefunden"
 }

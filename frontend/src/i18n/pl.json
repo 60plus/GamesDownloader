@@ -1759,5 +1759,14 @@
   "packaging.started": "Rozpoczęto pakowanie - archiwum pojawi się w bibliotece, gdy będzie gotowe",
   "packaging.failed": "Pakowanie nie powiodło się",
   "packaging.done": "Spakowano",
-  "packaging.nothing": "Już spakowane - nic do zrobienia"
+  "packaging.nothing": "Już spakowane - nic do zrobienia",
+  "collections.scrape_section": "Wyszukaj metadane",
+  "collections.scrape_placeholder": "Nazwa kolekcji lub franczyzy",
+  "collections.scrape_btn": "Szukaj",
+  "collections.scrape_hint": "Przeszukaj Wikipedię i IGDB w poszukiwaniu opisu, okładki i zakresu lat.",
+  "collections.scrape_searching": "Wyszukiwanie...",
+  "collections.scrape_no_results": "Brak wyników",
+  "collections.scrape_apply": "Zastosuj",
+  "collections.scrape_use_desc": "Użyj opisu",
+  "collections.scrape_no_covers": "Brak okładek"
 }

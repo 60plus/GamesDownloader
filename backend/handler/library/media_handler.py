@@ -28,6 +28,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 RESOURCES_PATH = Path(GD_BASE_PATH) / "resources" / "library"
+COLLECTION_COVERS_PATH = Path(GD_BASE_PATH) / "resources" / "collection-covers"
 
 _HDRS = {
     "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -224,6 +225,35 @@ async def download_screenshots(game_id: int, urls: list[str], overwrite: bool = 
             results.append(url)  # keep external URL as fallback
 
     return results
+
+
+async def download_collection_image(slug: str, url: str, kind: str = "cover") -> str | None:
+    """Download a scraped collection image (cover/hero/logo) to
+    resources/collection-covers/. Mirrors the manual cover-upload path so the
+    frontend serves it locally (rule: never hotlink scraped media). The cover
+    keeps the bare `{slug}.{ext}` name used by the upload endpoint; hero/logo
+    use `{slug}-{kind}.{ext}`. Returns the local path with a cache-busting
+    ?v=<mtime>, or None on failure / a non-external url."""
+    if not _is_external(url):
+        return url
+    COLLECTION_COVERS_PATH.mkdir(parents=True, exist_ok=True)
+    stem = slug if kind == "cover" else f"{slug}-{kind}"
+    for old in COLLECTION_COVERS_PATH.glob(f"{stem}.*"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    try:
+        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=30) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            ext = _ext_from(url, r.headers.get("content-type", ""))
+            dest = COLLECTION_COVERS_PATH / f"{stem}{ext}"
+            dest.write_bytes(r.content)
+            return f"/resources/collection-covers/{stem}{ext}?v={int(dest.stat().st_mtime)}"
+    except Exception as exc:
+        logger.warning("Collection %s download failed slug=%s url=%s: %s", kind, slug, url, exc)
+        return None
 
 
 async def download_all_media(game_id: int, data: dict, overwrite: bool = False) -> dict:

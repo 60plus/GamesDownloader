@@ -17,7 +17,7 @@ import logging
 import os
 import re
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -92,6 +92,8 @@ def _collection_brief(c, library_slug: str | None = None) -> dict:
         "description":       c.description,
         "description_short": c.description_short,
         "cover_path":  c.cover_path,
+        "hero_path":   c.hero_path,
+        "logo_path":   c.logo_path,
         "start_year":  c.start_year,
         "end_year":    c.end_year,
         "start_year_auto": c.start_year is None,
@@ -146,6 +148,8 @@ def _agg_meta(coll, *, covers: list[str], ratings: list[float], years: list[int]
         "description":       coll.description,
         "description_short": coll.description_short,
         "cover_path":    coll.cover_path,
+        "hero_path":     coll.hero_path,
+        "logo_path":     coll.logo_path,
         "member_covers": covers[:_STACK_COVERS],
         "member_heroes": (heroes or [])[:6],
         "developers":    developers or [],
@@ -335,6 +339,46 @@ async def get_collection(request: Request, slug: str) -> dict:
     return data
 
 
+# ── Artwork search (admin) - reuses the game editor's providers by name ────────
+
+
+@protected_route(router.get, "/{slug}/covers", scopes=[Scopes.SETTINGS_WRITE])
+async def collection_cover_options(
+    request: Request,
+    slug: str,
+    source: str = Query(default="steamgriddb", description="gog | igdb | steamgriddb | rawg | launchbox | plugins"),
+    q: str = Query(default="", description="Search query (defaults to the collection name)"),
+    asset_type: str = Query(default="grids", description="grids | heroes | logos | icons"),
+    animated: str = Query(default="any", description="any | only | exclude"),
+) -> list:
+    """Cover/hero/logo image options for a collection from one external source.
+    Reuses the exact game-editor provider search by name (no game id)."""
+    name = q
+    if not name:
+        coll = await collection_handler.get_by_slug(slug)
+        name = coll.name if coll else slug
+    from handler.metadata.external_art import search_cover_options
+    return await search_cover_options(source, name, asset_type, animated, gog_game_id=None)
+
+
+@protected_route(router.get, "/{slug}/meta-sources", scopes=[Scopes.SETTINGS_WRITE])
+async def collection_meta_sources(
+    request: Request,
+    slug: str,
+    source: str = Query(default="rawg", description="rawg | rawg-detail | igdb | steam | gog"),
+    q: str = Query(default="", description="Search query (defaults to the collection name)"),
+) -> dict:
+    """Description/details candidates for a collection from one external source.
+    RAWG / IGDB / Steam search by name; GOG returns not-found (collections have
+    no GOG product). Reuses the exact game-editor meta-source providers."""
+    name = q
+    if not name:
+        coll = await collection_handler.get_by_slug(slug)
+        name = coll.name if coll else slug
+    from handler.metadata.external_meta import search_meta_source
+    return await search_meta_source(source, name, q, game=None)
+
+
 # ── Create / update / delete (admin) ──────────────────────────────────────────
 
 
@@ -369,6 +413,8 @@ class CollectionUpdateBody(BaseModel):
     description: str | None = None
     description_short: str | None = None
     cover_path:  str | None = None   # set null to revert to the auto stack
+    hero_path:   str | None = None   # null -> auto (random member hero backdrop)
+    logo_path:   str | None = None   # null -> none
     start_year:  int | None = None   # null -> auto (min member year)
     end_year:    int | None = None   # null -> auto (max member year)
     rating:      float | None = None  # null -> auto (member average)
@@ -383,7 +429,8 @@ async def update_collection(request: Request, slug: str, body: CollectionUpdateB
     the request are touched; an explicit null clears that override."""
     provided = body.model_fields_set if hasattr(body, "model_fields_set") else body.__fields_set__
     fields: dict = {}
-    for key in ("name", "description", "description_short", "cover_path", "start_year",
+    for key in ("name", "description", "description_short", "cover_path", "hero_path",
+                "logo_path", "start_year",
                 "end_year", "rating", "hltb_main_s", "hltb_complete_s", "sort_order"):
         if key in provided:
             val = getattr(body, key)
@@ -398,6 +445,16 @@ async def update_collection(request: Request, slug: str, body: CollectionUpdateB
         if coll is None:
             raise HTTPException(status_code=404, detail="Collection not found")
         return _collection_brief(coll, await _library_slug_of(coll))
+
+    # A scraped image arrives as an external URL - pull it to the server so the
+    # frontend serves it locally (never hotlink).
+    for _key, _kind in (("cover_path", "cover"), ("hero_path", "hero"), ("logo_path", "logo")):
+        _val = fields.get(_key)
+        if isinstance(_val, str) and _val.startswith(("http://", "https://")):
+            from handler.library.media_handler import download_collection_image
+            _local = await download_collection_image(slug, _val, _kind)
+            if _local:
+                fields[_key] = _local
 
     coll = await collection_handler.update(slug, **fields)
     if coll is None:

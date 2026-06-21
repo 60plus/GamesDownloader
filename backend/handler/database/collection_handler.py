@@ -68,6 +68,7 @@ class CollectionHandler(DBBaseHandler):
         if coll is None:
             return None
         for key in ("name", "description", "description_short", "cover_path",
+                    "hero_path", "logo_path",
                     "start_year", "end_year", "rating", "hltb_main_s", "hltb_complete_s", "sort_order"):
             if key in fields:
                 setattr(coll, key, fields[key])

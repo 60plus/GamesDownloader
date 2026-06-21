@@ -62,6 +62,7 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - **Collection libraries** collections live inside container libraries you create in Settings → Libraries (tick "This library will be a Collection"); fully removable, with their own icon, and no game folder
 - **Rich detail** each collection has an About section plus Details aggregated from its members (developers, publishers, release-year range, platforms, languages, average rating and Time to Beat, genres, sources and game count), in a cover or list layout
 - **Curate** admins create a collection in one click, set a game's collections in Edit Metadata → Collections, and edit its cover (an auto fan of member covers, or your own upload), two descriptions, year range, rating and Time to Beat (auto-average or manual override)
+- **Scrape collection metadata** search a cover, hero, logo, two descriptions and details for a collection by name from the same providers as games (Wikipedia, IGDB franchises, RAWG, Steam, SteamGridDB) and any metadata plugins, in a tabbed editor that mirrors the game metadata editor
 - **Theme API** themes render collections data-driven via `window.__GD__.collections` (list, detail, membership, routes) plus `window.__GD__.utils` (language flags, sanitized HTML); Modern, Classic and Neon Horizon all use it
 
 ### ROM Library

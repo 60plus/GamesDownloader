@@ -67,6 +67,27 @@ class MetadataProviderSpec:
         Same return format as metadata_get_covers.
         """
 
+    @hookspec
+    def metadata_search_collection(self, query: str) -> list[dict[str, Any]]:
+        """Search for collections / franchises / series by name.
+
+        Return list of candidate dicts:
+        {provider_id, provider_collection_id, name, snippet?, cover_url?,
+         start_year?, end_year?}
+        A collection is a grouping of related games (e.g. a franchise). The
+        artwork hooks (metadata_get_covers / _heroes / _logos) are reused for
+        collection artwork, keyed by the collection name.
+        """
+
+    @hookspec
+    def metadata_get_collection(self, provider_collection_id: str) -> dict[str, Any] | None:
+        """Fetch full metadata for a collection by provider-specific ID.
+
+        Return dict: {provider_id, name, description?, description_short?,
+        cover_url?, hero_url?, logo_url?, start_year?, end_year?, rating?,
+        source_url?}. `rating` is on a 0-5 scale.
+        """
+
 
 class DownloadProviderSpec:
     """Hooks for download provider plugins (GOG, torrent, etc.)."""

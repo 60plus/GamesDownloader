@@ -1722,5 +1722,14 @@
   "packaging.started": "Empaquetage lancé - l'archive apparaîtra dans la bibliothèque une fois prête",
   "packaging.failed": "Échec de l'empaquetage",
   "packaging.done": "Empaqueté",
-  "packaging.nothing": "Déjà empaqueté - rien à faire"
+  "packaging.nothing": "Déjà empaqueté - rien à faire",
+  "collections.scrape_section": "Rechercher des métadonnées",
+  "collections.scrape_placeholder": "Nom de la collection ou de la franchise",
+  "collections.scrape_btn": "Rechercher",
+  "collections.scrape_hint": "Rechercher une description, une jaquette et une plage d'années sur Wikipedia et IGDB.",
+  "collections.scrape_searching": "Recherche...",
+  "collections.scrape_no_results": "Aucun résultat",
+  "collections.scrape_apply": "Appliquer",
+  "collections.scrape_use_desc": "Utiliser la description",
+  "collections.scrape_no_covers": "Aucune jaquette"
 }

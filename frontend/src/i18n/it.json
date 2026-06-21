@@ -1722,5 +1722,14 @@
   "packaging.started": "Pacchettizzazione avviata - l'archivio apparirà nella libreria quando è pronto",
   "packaging.failed": "Pacchettizzazione non riuscita",
   "packaging.done": "Pacchettizzato",
-  "packaging.nothing": "Già pacchettizzato - niente da fare"
+  "packaging.nothing": "Già pacchettizzato - niente da fare",
+  "collections.scrape_section": "Cerca metadati",
+  "collections.scrape_placeholder": "Nome della raccolta o del franchise",
+  "collections.scrape_btn": "Cerca",
+  "collections.scrape_hint": "Cerca su Wikipedia e IGDB una descrizione, copertina e intervallo di anni.",
+  "collections.scrape_searching": "Ricerca...",
+  "collections.scrape_no_results": "Nessun risultato",
+  "collections.scrape_apply": "Applica",
+  "collections.scrape_use_desc": "Usa descrizione",
+  "collections.scrape_no_covers": "Nessuna copertina"
 }

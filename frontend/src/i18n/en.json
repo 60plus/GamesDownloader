@@ -1759,5 +1759,14 @@
   "packaging.started": "Packaging started - the archive will appear in the library when ready",
   "packaging.failed": "Packaging failed",
   "packaging.done": "Packaged",
-  "packaging.nothing": "Already packaged - nothing to do"
+  "packaging.nothing": "Already packaged - nothing to do",
+  "collections.scrape_section": "Find metadata",
+  "collections.scrape_placeholder": "Collection or franchise name",
+  "collections.scrape_btn": "Search",
+  "collections.scrape_hint": "Search Wikipedia and IGDB for a description, cover and year range.",
+  "collections.scrape_searching": "Searching...",
+  "collections.scrape_no_results": "No results found",
+  "collections.scrape_apply": "Apply",
+  "collections.scrape_use_desc": "Use description",
+  "collections.scrape_no_covers": "No covers found"
 }

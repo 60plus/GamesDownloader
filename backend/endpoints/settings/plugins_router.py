@@ -772,6 +772,81 @@ async def plugin_metadata_fetch(
     raise HTTPException(status_code=404, detail="No result from plugin")
 
 
+# ── Collection metadata (Wikipedia + IGDB franchises + plugin hooks) ─────────
+
+
+@protected_route(
+    plugins_router.get, "/metadata/collections/search", scopes=[Scope.PLUGINS_READ]
+)
+async def plugin_collection_metadata_search(request: Request, q: str = Query(...)) -> list[dict]:
+    """Search every provider (Wikipedia, IGDB franchises, plugins) for a collection."""
+    from handler.metadata.collection_meta_handler import search as _search
+    try:
+        return await _search(q)
+    except Exception as e:
+        logger.warning("Collection metadata search error: %s", e)
+        return []
+
+
+@protected_route(
+    plugins_router.get, "/metadata/collections/fetch", scopes=[Scope.PLUGINS_READ]
+)
+async def plugin_collection_metadata_fetch(
+    request: Request,
+    provider_id: str = Query(...),
+    id: str = Query(...),
+) -> dict:
+    """Fetch full collection metadata from one provider by its collection id."""
+    from handler.metadata.collection_meta_handler import get as _get
+    try:
+        result = await _get(provider_id, id)
+    except Exception as e:
+        logger.warning("Collection metadata fetch error: %s", e)
+        result = None
+    if result is None:
+        raise HTTPException(status_code=404, detail="No result from provider")
+    return result
+
+
+@protected_route(
+    plugins_router.get, "/metadata/collections/covers", scopes=[Scope.PLUGINS_READ]
+)
+async def plugin_collection_metadata_covers(request: Request, q: str = Query(...)) -> list[dict]:
+    """Cover-art candidates for a collection name (IGDB + SteamGridDB + Wikipedia + plugins)."""
+    from handler.metadata.collection_meta_handler import covers as _covers
+    try:
+        return await _covers(q)
+    except Exception as e:
+        logger.warning("Collection covers error: %s", e)
+        return []
+
+
+@protected_route(
+    plugins_router.get, "/metadata/collections/heroes", scopes=[Scope.PLUGINS_READ]
+)
+async def plugin_collection_metadata_heroes(request: Request, q: str = Query(...)) -> list[dict]:
+    """Hero/background art for a collection name (SteamGridDB + plugins)."""
+    from handler.metadata.collection_meta_handler import heroes as _heroes
+    try:
+        return await _heroes(q)
+    except Exception as e:
+        logger.warning("Collection heroes error: %s", e)
+        return []
+
+
+@protected_route(
+    plugins_router.get, "/metadata/collections/logos", scopes=[Scope.PLUGINS_READ]
+)
+async def plugin_collection_metadata_logos(request: Request, q: str = Query(...)) -> list[dict]:
+    """Logo/clearlogo art for a collection name (SteamGridDB + plugins)."""
+    from handler.metadata.collection_meta_handler import logos as _logos
+    try:
+        return await _logos(q)
+    except Exception as e:
+        logger.warning("Collection logos error: %s", e)
+        return []
+
+
 # ── Translation endpoint (used by gd3-translator plugin) ────────────────────
 
 

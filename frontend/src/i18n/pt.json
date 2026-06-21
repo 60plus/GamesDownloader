@@ -1722,5 +1722,14 @@
   "packaging.started": "Empacotamento iniciado - o arquivo aparecerá na biblioteca quando estiver pronto",
   "packaging.failed": "Falha no empacotamento",
   "packaging.done": "Empacotado",
-  "packaging.nothing": "Já empacotado - nada a fazer"
+  "packaging.nothing": "Já empacotado - nada a fazer",
+  "collections.scrape_section": "Buscar metadados",
+  "collections.scrape_placeholder": "Nome da coleção ou franquia",
+  "collections.scrape_btn": "Buscar",
+  "collections.scrape_hint": "Busque no Wikipedia e IGDB uma descrição, capa e intervalo de anos.",
+  "collections.scrape_searching": "Buscando...",
+  "collections.scrape_no_results": "Sem resultados",
+  "collections.scrape_apply": "Aplicar",
+  "collections.scrape_use_desc": "Usar descrição",
+  "collections.scrape_no_covers": "Sem capas"
 }

@@ -1722,5 +1722,14 @@
   "packaging.started": "Упаковка начата - архив появится в библиотеке, когда будет готов",
   "packaging.failed": "Ошибка упаковки",
   "packaging.done": "Упаковано",
-  "packaging.nothing": "Уже упаковано - нечего делать"
+  "packaging.nothing": "Уже упаковано - нечего делать",
+  "collections.scrape_section": "Поиск метаданных",
+  "collections.scrape_placeholder": "Название коллекции или франшизы",
+  "collections.scrape_btn": "Поиск",
+  "collections.scrape_hint": "Искать описание, обложку и диапазон лет в Wikipedia и IGDB.",
+  "collections.scrape_searching": "Поиск...",
+  "collections.scrape_no_results": "Нет результатов",
+  "collections.scrape_apply": "Применить",
+  "collections.scrape_use_desc": "Использовать описание",
+  "collections.scrape_no_covers": "Обложек нет"
 }

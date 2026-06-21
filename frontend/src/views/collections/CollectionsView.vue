@@ -95,9 +95,15 @@
         <div v-if="viewMode === 'cover'" class="cover-grid"
              :style="mode === 'detail' ? { gridTemplateColumns: `repeat(${detailCols}, minmax(0, 1fr))` } : { '--cover-min': coverSizeMap[currentCoverSize] + 'px' }">
           <div v-for="(it, idx) in items" :key="it._key" class="cover-wrap" :data-alpha-idx="idx" @click="openItem(it)">
-            <div class="cover-img-wrap" :class="{ 'cover-img-wrap--coll': mode === 'grid' }">
-              <!-- Collection tile: stacked cover. Game: plain cover. -->
-              <CollectionCover v-if="mode === 'grid'" :cover="it.cover_path" :covers="it.member_covers" :name="it.title" color="var(--pl)" />
+            <div class="cover-img-wrap" :class="{ 'cover-img-wrap--coll': mode === 'grid' }"
+                 :style="mode === 'grid' && it.cover_path && collCoverRatios[it._key] ? { aspectRatio: String(collCoverRatios[it._key]) } : undefined">
+              <!-- Collection tile: a custom cover keeps its own aspect ratio
+                   (landscape / portrait / square); otherwise the fanned member
+                   covers fill a square. Member game (detail): plain cover. -->
+              <template v-if="mode === 'grid'">
+                <img v-if="it.cover_path" :src="it.cover_path" :alt="it.title" class="cover-img" loading="lazy" @load="onCollCoverLoad($event, it._key)" />
+                <CollectionCover v-else :covers="it.member_covers" :name="it.title" color="var(--pl)" />
+              </template>
               <template v-else>
                 <img v-if="it.cover_path" :src="it.cover_path" :alt="it.title" class="cover-img" loading="lazy" />
                 <div v-else class="cover-fallback">
@@ -191,13 +197,15 @@
     </div>
 
     <!-- ── Admin metadata editor ───────────────────────────────────────────── -->
-    <CollectionEditPanel
-      v-if="showEdit && detail"
-      :collection="detail"
-      @close="showEdit = false"
-      @updated="onCollectionUpdated"
-      @deleted="onCollectionDeleted"
-    />
+    <Teleport to="body">
+      <CollectionMetadataPanel
+        v-if="showEdit && detail"
+        :collection="detail"
+        @close="showEdit = false"
+        @updated="onCollectionUpdated"
+        @deleted="onCollectionDeleted"
+      />
+    </Teleport>
 
     <!-- ── Quick create (admin) ────────────────────────────────────────────── -->
     <div v-if="showCreate" class="cc-create-overlay" @click.self="showCreate = false">
@@ -224,7 +232,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import CollectionCover from '@/components/collections/CollectionCover.vue'
-import CollectionEditPanel from '@/components/collections/CollectionEditPanel.vue'
+import CollectionMetadataPanel from '@/components/collections/CollectionMetadataPanel.vue'
 import CollectionInfo from '@/components/collections/CollectionInfo.vue'
 import GameListRow from '@/components/games/GameListRow.vue'
 import { useI18n } from '@/i18n'
@@ -249,6 +257,16 @@ const detail = ref<any | null>(null)
 const loading = ref(false)
 const activeLetter = ref('')
 const gridScrollEl = ref<HTMLElement>()
+
+// A custom collection cover keeps its natural aspect ratio in the grid (clamped
+// to a sane portrait..landscape range); the auto-fan of member covers stays square.
+const collCoverRatios = ref<Record<string, number>>({})
+function onCollCoverLoad(e: Event, key: string) {
+  const img = e.target as HTMLImageElement
+  if (img.naturalWidth && img.naturalHeight) {
+    collCoverRatios.value[key] = Math.min(1.8, Math.max(0.62, img.naturalWidth / img.naturalHeight))
+  }
+}
 
 const viewMode = ref<'cover' | 'list'>((localStorage.getItem('collections_view_mode') as 'cover' | 'list') || 'cover')
 watch(viewMode, v => localStorage.setItem('collections_view_mode', v))
@@ -583,7 +601,7 @@ watch(() => route.fullPath, () => { if (route.name === 'collections-lib' || rout
 .library-main { flex: 1; display: flex; overflow: hidden; min-height: 0; }
 .grid-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; padding-right: 8px; min-width: 0; }
 
-.cover-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--cover-min,175px), 1fr)); gap: var(--space-4, 16px); padding-bottom: 20px; }
+.cover-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--cover-min,175px), 1fr)); gap: var(--space-4, 16px); padding-bottom: 20px; align-items: start; }
 /* Detail view sets a FIXED column count inline (repeat(N, 1fr) with a literal N -
    a CSS var in repeat() is invalid and breaks the grid). */
 .cover-wrap { cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
