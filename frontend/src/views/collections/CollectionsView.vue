@@ -126,8 +126,9 @@
         <!-- LIST VIEW (mirrors the games library list-row) -->
         <div v-else class="list-view">
           <template v-for="(it, idx) in items" :key="it._key">
-          <!-- Member games: the exact Games-library row (shared component) -->
-          <GameListRow v-if="mode === 'detail'" :game="it" :idx="idx" />
+          <!-- Member games: the exact Games-library row (shared component).
+               A GOG-sourced member opens in the GOG library, others in Games. -->
+          <GameListRow v-if="mode === 'detail'" :game="it" :idx="idx" @open="openMember" />
           <!-- Collection tiles: fan cover + aggregated facts -->
           <div v-else class="list-row" @click="openItem(it)">
             <div class="list-cover-wrap">
@@ -136,7 +137,10 @@
               </div>
             </div>
             <div class="list-info">
-              <div class="list-title"><span>{{ it.title }}</span></div>
+              <div class="list-title">
+                <img v-if="it.logo_path" :src="it.logo_path" :alt="it.title" class="list-coll-logo" />
+                <span v-else>{{ it.title }}</span>
+              </div>
               <div class="list-meta"><span v-if="it.years">{{ it.years }}</span></div>
             </div>
             <div class="list-hero">
@@ -144,42 +148,11 @@
               <div class="list-hero-overlay" />
               <div v-if="descText(it)" class="list-hero-desc"><p class="list-hero-desc-text">{{ descText(it) }}</p></div>
             </div>
-            <div class="list-qf-col">
-              <div class="list-qf">
-                <div v-if="it.developers?.length" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.developer') }}</span>
-                  <span class="list-qf-val">{{ aggList(it.developers) }}</span>
-                </div>
-                <div v-if="it.publishers?.length" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.publisher') }}</span>
-                  <span class="list-qf-val">{{ aggList(it.publishers) }}</span>
-                </div>
-                <div v-if="it.years" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.released') }}</span>
-                  <span class="list-qf-val">{{ it.years }}</span>
-                </div>
-                <div v-if="osOf(it).windows || osOf(it).mac || osOf(it).linux" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('library.platform_label') }}</span>
-                  <span class="list-qf-val list-qf-os">
-                    <span v-if="osOf(it).windows" class="list-os-chip list-os-chip--win" title="Windows"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3,12V6.75L9,5.43V11.91L3,12M20,3V11.76L11,12.97V5.38L20,3M3,13L9,13.18V19.83L3,18.35V13M20,13.21V21.72L11,20.5V13.12L20,13.21Z"/></svg></span>
-                    <span v-if="osOf(it).mac" class="list-os-chip list-os-chip--mac" title="macOS"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg></span>
-                    <span v-if="osOf(it).linux" class="list-os-chip list-os-chip--linux" title="Linux"><img src="/icons/os-linux.svg" width="14" height="14" alt="Linux" /></span>
-                  </span>
-                </div>
-                <div v-if="it.sources?.length" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.source') }}</span>
-                  <span class="list-qf-val">{{ it.sources.join(', ') }}</span>
-                </div>
-                <div class="list-qf-row">
-                  <span class="list-qf-label">{{ t('library.games') }}</span>
-                  <span class="list-qf-val">{{ it.member_count }}</span>
-                </div>
-              </div>
-            </div>
-            <div class="list-right">
-              <div v-if="it.rating" class="list-scores">
-                <div class="list-score" title="Rating"><svg width="24" height="24" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg> {{ Number(it.rating).toFixed(1) }}</div>
-              </div>
+            <!-- Same Details table as the collection-detail band/side (shared
+                 component) so the aggregated facts read identically and the wide
+                 value column wraps long studio names cleanly. -->
+            <div class="list-details">
+              <CollectionDetails :detail="it" compact />
             </div>
           </div>
           </template>
@@ -234,6 +207,7 @@ import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import CollectionCover from '@/components/collections/CollectionCover.vue'
 import CollectionMetadataPanel from '@/components/collections/CollectionMetadataPanel.vue'
 import CollectionInfo from '@/components/collections/CollectionInfo.vue'
+import CollectionDetails from '@/components/collections/CollectionDetails.vue'
 import GameListRow from '@/components/games/GameListRow.vue'
 import { useI18n } from '@/i18n'
 
@@ -277,7 +251,7 @@ const coverSizes = [
   { id: 'xs', label: 'XS' }, { id: 's', label: 'S' }, { id: 'm', label: 'M' },
   { id: 'l', label: 'L' }, { id: 'xl', label: 'XL' }, { id: 'xxl', label: 'XXL' },
 ]
-const currentCoverSize = ref(localStorage.getItem('collections-card-size') || 'm')
+const currentCoverSize = ref(localStorage.getItem('collections-card-size') || 'xxl')
 watch(currentCoverSize, v => localStorage.setItem('collections-card-size', v))
 const coverSizeMap: Record<string, number> = { xs: 115, s: 145, m: 175, l: 215, xl: 265, xxl: 310 }
 
@@ -381,17 +355,6 @@ function descText(it: any): string {
   const clean = raw.replace(/<[^>]*>/g, '').trim()
   return clean.length > 260 ? clean.slice(0, 260) + '…' : clean
 }
-// Compact display of an aggregated list (e.g. a collection's developers).
-function aggList(arr: string[] | undefined): string {
-  const a = arr || []
-  if (a.length <= 2) return a.join(', ')
-  return a.slice(0, 2).join(', ') + ' +' + (a.length - 2)
-}
-// Normalised OS flags - from the collection's aggregate or the game's own.
-function osOf(it: any): { windows: boolean; mac: boolean; linux: boolean } {
-  if (mode.value === 'grid') return it.platforms || { windows: false, mac: false, linux: false }
-  return { windows: !!it.os_windows, mac: !!it.os_mac, linux: !!it.os_linux }
-}
 
 // Detail cover grid: cover size sets the COLUMN COUNT (not the layout width).
 // One step smaller than the libraries (XXL=5 …) so the About panel gets more room.
@@ -405,9 +368,13 @@ function goBack() {
 
 function openItem(it: any) {
   if (mode.value === 'grid') { router.push({ name: 'collection-detail', params: { lib: container.value, slug: it.slug } }); return }
-  // Members are Games-library games (GOG catalog games are not collectable), so
-  // they open in the Games library by their LibraryGame id.
-  router.push({ name: 'games-detail', params: { id: it.id } })
+  openMember(it)
+}
+// Members are ALWAYS local library games (GOG catalog games live on GOG's servers
+// and can't be collected), so a member opens in its local library by LibraryGame
+// id - never the GOG catalog, even when it was originally downloaded from GOG.
+function openMember(g: any) {
+  router.push({ name: 'games-detail', params: { id: g.id } })
 }
 
 async function loadGrid() {
@@ -666,6 +633,7 @@ watch(() => route.fullPath, () => { if (route.name === 'collections-lib' || rout
 }
 .list-title { font-size: var(--fs-md, 14px); font-weight: 700; color: var(--text); overflow: hidden; }
 .list-title > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.list-coll-logo { max-height: 40px; max-width: 170px; width: auto; object-fit: contain; filter: drop-shadow(0 1px 4px rgba(0,0,0,.5)); }
 .list-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-sm, 12px); color: var(--muted); margin-top: 6px; }
 .meta-sep::before { content: '·'; }
 
@@ -690,23 +658,15 @@ watch(() => route.fullPath, () => { if (route.name === 'collections-lib' || rout
 }
 
 .genre-chip { padding: 1px 7px; border-radius: var(--radius-xs, 4px); font-size: var(--fs-xs, 10px); background: color-mix(in srgb, var(--pl) 14%, transparent); color: var(--pl-light, #a78bfa); }
-.list-qf-col { flex-shrink: 0; width: 230px; border-left: 1px solid var(--glass-border); padding: 10px 12px; display: flex; align-items: center; justify-content: center; }
-.list-qf { display: flex; flex-direction: column; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-sm); overflow: hidden; width: 100%; }
-.list-qf-row { display: flex; align-items: center; border-bottom: 1px solid var(--glass-border); min-height: 26px; }
-.list-qf-row:last-child { border-bottom: none; }
-.list-qf-label { flex-shrink: 0; width: 100px; padding: 4px 8px; font-size: 9px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; border-right: 1px solid var(--glass-border); background: rgba(255,255,255,.04); white-space: nowrap; line-height: 1.3; display: flex; align-items: center; align-self: stretch; }
-.list-qf-val { flex: 1; padding: 4px 8px; font-size: 11px; color: var(--text); line-height: 1.3; display: flex; flex-wrap: wrap; gap: 3px; align-items: center; justify-content: center; text-align: center; }
-.list-qf-os { gap: var(--space-1, 4px); }
-.list-os-chip { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 5px; background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); }
-.list-os-chip--win { color: #60a5fa; }
-.list-os-chip--mac { color: #c4b5fd; }
-.list-os-chip--linux { color: #facc15; }
+/* Right block - the shared Details table. Width 350 (= old quickfacts 230 +
+   rating 120) gives the value column enough room that aggregated studio names
+   wrap cleanly instead of being cut mid-word. */
+.list-details {
+  box-sizing: border-box; width: 350px; flex-shrink: 0;
+  border-left: 1px solid var(--glass-border); padding: 12px 14px;
+  display: flex; align-items: center; justify-content: center;
+}
 .src-gog { color: #a78bfa !important; }
 .src-custom { color: #2dd4bf !important; }
 
-.list-right { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; min-width: 100px; border-left: 1px solid var(--glass-border); padding: 10px 16px; }
-.list-scores { display: flex; flex-direction: column; gap: var(--space-2, 8px); align-items: center; }
-.list-score { display: flex; align-items: center; gap: var(--space-2, 8px); font-size: 15px; font-weight: 700; color: var(--text); white-space: nowrap; }
-.list-score .score-ico { width: 26px; height: 26px; image-rendering: pixelated; opacity: .85; }
-.list-score svg { width: 24px; height: 24px; }
 </style>

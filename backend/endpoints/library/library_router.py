@@ -476,6 +476,19 @@ async def create_library_game(request: Request, body: GameCreateBody) -> dict:
     return _game_to_dict(game)
 
 
+# Metadata that lives on the shared GogGame for source='gog' games so an edit in
+# any library (Games / collection / GOG) syncs both ways - GOG is the single
+# source of truth. Local / physical facts (files, size, source, title, is_active)
+# stay on the LibraryGame and are NOT synced (they legitimately differ).
+_GOG_SHARED_META = (
+    "description", "description_short", "developer", "publisher", "release_date",
+    "cover_path", "background_path", "logo_path", "icon_path",
+    "genres", "tags", "features", "rating", "meta_ratings",
+    "languages", "requirements", "screenshots", "videos",
+)
+_GOG_SHARED_OS = ("os_windows", "os_mac", "os_linux")
+
+
 @protected_route(library_router.patch, "/games/{game_id}", scopes=[Scope.LIBRARY_WRITE])
 async def update_library_game(request: Request, game_id: int, body: GameUpdateBody) -> dict:
     game = await _lib.get_by_id(game_id)
@@ -499,8 +512,29 @@ async def update_library_game(request: Request, game_id: int, body: GameUpdateBo
     from handler.library.media_handler import download_all_media
     data = await download_all_media(game.id, data, overwrite=True)
 
+    # GOG-sourced game: write the shared metadata through to the linked GogGame so
+    # the edit shows in the GOG library too (and syncs both ways). Then clear the
+    # LibraryGame's own copy of those nullable fields so the read falls back to the
+    # GogGame; OS bools (non-nullable) are mirrored on both records.
+    gog_game = None
+    if game.source == "gog" and game.gog_game_id:
+        shared = {k: v for k, v in data.items() if k in _GOG_SHARED_META or k in _GOG_SHARED_OS}
+        if shared:
+            from handler.gog.gog_sync_handler import gog_sync_handler
+            await gog_sync_handler.update_fields(game.gog_game_id, shared)
+            for k in _GOG_SHARED_META:
+                if k in shared:
+                    data[k] = None
+
     updated = await _lib.update(game, data)
-    return _game_to_dict(updated)
+
+    if game.source == "gog" and game.gog_game_id:
+        from handler.database.session import async_session_factory as _asf
+        from models.gog_game import GogGame as _GG
+        async with _asf() as _s:
+            gog_game = await _s.get(_GG, game.gog_game_id)
+
+    return _game_to_dict(updated, gog_game=gog_game)
 
 
 def _safe_abs(rel_path: str) -> str | None:

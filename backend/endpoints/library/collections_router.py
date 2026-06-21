@@ -115,9 +115,28 @@ async def _library_slug_of(coll) -> str | None:
     return next((l.slug for l in libs if l.id == coll.library_id), None)
 
 
+async def _resolve_usernames(user_ids) -> dict:
+    """Map user ids to usernames (for owner badges)."""
+    from models.user import User as _U
+    ids = {i for i in user_ids if i}
+    if not ids:
+        return {}
+    async with async_session_factory() as s:
+        rows = (await s.execute(select(_U.id, _U.username).where(_U.id.in_(ids)))).all()
+    return {r[0]: r[1] for r in rows}
+
+
+async def _admin_username() -> str:
+    """The first admin's name - the owner fallback for games with no publisher."""
+    from models.user import User as _U, Role as _Role
+    async with async_session_factory() as s:
+        name = (await s.execute(select(_U.username).where(_U.role == _Role.ADMIN).limit(1))).scalar_one_or_none()
+    return name or "Admin"
+
+
 async def _serialize_member_games(games: list[LibraryGame]) -> list[dict]:
     """Reuse the library game serialiser (with GOG metadata fallback) for the
-    detail view's member list."""
+    detail view's member list; resolve owner names like the Games library."""
     from endpoints.library.library_router import _game_to_dict
     if not games:
         return []
@@ -127,7 +146,10 @@ async def _serialize_member_games(games: list[LibraryGame]) -> list[dict]:
         async with async_session_factory() as s:
             rows = (await s.execute(select(GogGame).where(GogGame.id.in_(gog_ids)))).scalars().all()
             gog_map = {gg.id: gg for gg in rows}
-    return [_game_to_dict(g, gog_game=gog_map.get(g.gog_game_id)) for g in games]
+    name_map = await _resolve_usernames({g.published_by for g in games})
+    fallback = await _admin_username()
+    return [_game_to_dict(g, owner_username=name_map.get(g.published_by, fallback),
+                          gog_game=gog_map.get(g.gog_game_id)) for g in games]
 
 
 def _agg_meta(coll, *, covers: list[str], ratings: list[float], years: list[int],
@@ -336,6 +358,8 @@ async def get_collection(request: Request, slug: str) -> dict:
         hltb_complete_s=round(sum(comps) / len(comps)) if comps else None,
     )
     data["games"] = games
+    owners = await _resolve_usernames({coll.created_by})
+    data["owner_username"] = owners.get(coll.created_by)
     return data
 
 

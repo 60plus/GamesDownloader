@@ -272,129 +272,14 @@
 
         <!-- ── LIST VIEW ───────────────────────────────────────────────────── -->
         <div v-else class="list-view">
-          <div
-            v-for="(game, idx) in displayedGames"
+          <GameListRow
+            v-for="(game, idx) in gogRows"
             :key="game.id"
-            class="list-row"
-            @click="openGame(game)"
-          >
-            <!-- Cover - tilt/glow effects only on the cover element -->
-            <div
-              class="list-cover-wrap"
-              @mousemove="onCardMove($event)"
-              @mouseleave="onCardLeave($event)"
-              @mouseenter="onCardEnter($event)"
-            >
-              <div class="cover-img-wrap">
-                <img v-if="game.cover_url || game.cover_path" :src="coverSrc(game)" class="list-cover-img" loading="lazy" />
-                <div v-else class="list-cover-fallback" />
-                <div class="cover-sheen" />
-                <div class="cover-overlay" />
-                <div v-if="game.download_status === 'completed'" class="list-cover-check" :title="t('detail.available')">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                </div>
-              </div>
-            </div>
-
-            <!-- Info -->
-            <div class="list-info">
-              <div class="list-title">
-                <img v-if="game.logo_path || game.logo_url" :src="game.logo_path || game.logo_url" :alt="game.title" class="list-logo-img" />
-                <span v-else>{{ game.title }}</span>
-              </div>
-              <div class="list-meta">
-                <span v-if="game.developer">{{ game.developer }}</span>
-              </div>
-              <span v-if="game.owner_username" class="list-owner-badge" :title="'Owner: ' + game.owner_username">
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                {{ game.owner_username }}
-              </span>
-            </div>
-
-            <!-- Hero art + description overlay -->
-            <div class="list-hero">
-              <img
-                v-if="game.background_path || game.background_url || game.cover_path"
-                :src="game.background_path || game.background_url || game.cover_path"
-                :alt="game.title"
-                :class="['list-hero-img', listHeroAnimClass]"
-                :style="{ animationDelay: (idx * -7) + 's' }"
-                loading="lazy"
-              />
-              <div class="list-hero-overlay" />
-              <div v-if="game.description_short || game.description" class="list-hero-desc">
-                <p class="list-hero-desc-text">{{ listDescText(game) }}</p>
-              </div>
-            </div>
-
-            <!-- Quickfacts - standalone column between desc and ratings -->
-            <div class="list-qf-col">
-              <div class="list-qf">
-                <div v-if="game.developer" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.developer') }}</span>
-                  <span class="list-qf-val">{{ game.developer }}</span>
-                </div>
-                <div v-if="game.publisher && game.publisher !== game.developer" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.publisher') }}</span>
-                  <span class="list-qf-val">{{ game.publisher }}</span>
-                </div>
-                <div v-if="(game.genres || []).length" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('library.genre') }}</span>
-                  <span class="list-qf-val">
-                    <span v-for="g in (game.genres || []).slice(0, 3)" :key="g" class="genre-chip">{{ g }}</span>
-                  </span>
-                </div>
-                <div v-if="game.os_windows || game.os_mac || game.os_linux" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('library.platform_label') }}</span>
-                  <span class="list-qf-val list-qf-os">
-                    <span v-if="game.os_windows" class="list-os-chip list-os-chip--win" title="Windows">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3,12V6.75L9,5.43V11.91L3,12M20,3V11.76L11,12.97V5.38L20,3M3,13L9,13.18V19.83L3,18.35V13M20,13.21V21.72L11,20.5V13.12L20,13.21Z"/></svg>
-                    </span>
-                    <span v-if="game.os_mac" class="list-os-chip list-os-chip--mac" title="macOS">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-                    </span>
-                    <span v-if="game.os_linux" class="list-os-chip list-os-chip--linux" title="Linux">
-                      <img src="/icons/os-linux.svg" width="14" height="14" alt="Linux" />
-                    </span>
-                  </span>
-                </div>
-                <div v-if="game.release_date" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.released') }}</span>
-                  <span class="list-qf-val">{{ releaseYear(game.release_date) }}</span>
-                </div>
-                <div v-if="listDownloadSize(game)" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.size') }}</span>
-                  <span class="list-qf-val">{{ listDownloadSize(game) }}</span>
-                </div>
-                <div v-if="listLangCount(game)" class="list-qf-row">
-                  <span class="list-qf-label">{{ t('detail.languages') }}</span>
-                  <span class="list-qf-val">{{ listLangCount(game) }}</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Right: Ratings + status only -->
-            <div class="list-right">
-              <div v-if="game.rating || game.meta_ratings?.rawg || game.meta_ratings?.igdb || game.meta_ratings?.steam" class="list-scores">
-                <div v-if="game.rating" class="list-score list-score--gog" title="GOG Rating">
-                  <img src="/icons/gog.ico" width="24" height="24" alt="GOG" class="score-ico" />
-                  {{ game.rating.toFixed(1) }}
-                </div>
-                <div v-if="game.meta_ratings?.rawg" class="list-score list-score--ext" title="RAWG Rating">
-                  <img src="/icons/RAWG.ico" width="24" height="24" alt="RAWG" class="score-ico" />
-                  {{ (game.meta_ratings.rawg).toFixed(1) }}
-                </div>
-                <div v-if="game.meta_ratings?.igdb" class="list-score list-score--ext" title="IGDB Rating">
-                  <img src="/icons/igdb.ico" width="24" height="24" alt="IGDB" class="score-ico" />
-                  {{ Math.round(game.meta_ratings.igdb) }}
-                </div>
-                <div v-if="game.meta_ratings?.steam" class="list-score list-score--ext" title="Metacritic">
-                  <img src="/icons/metacritic.svg" width="24" height="24" alt="Metacritic" class="score-ico" />
-                  {{ Math.round(game.meta_ratings.steam * 10) }}
-                </div>
-              </div>
-            </div>
-          </div>
+            :game="game"
+            :idx="idx"
+            is-gog
+            @open="openGame"
+          />
         </div>
 
       </div><!-- /grid-scroll -->
@@ -422,6 +307,7 @@ import { useThemeStore } from '@/stores/theme'
 import { storeToRefs } from 'pinia'
 import client from '@/services/api/client'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
+import GameListRow from '@/components/games/GameListRow.vue'
 import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
@@ -773,6 +659,10 @@ const displayedGames = computed(() => {
   }
   return list
 })
+
+// The list view uses the shared GameListRow; normalise the GOG cover (strip CDN
+// suffixes) into cover_path so the component renders it directly.
+const gogRows = computed(() => displayedGames.value.map((g: any) => ({ ...g, cover_path: coverSrc(g) })))
 
 function openGame(game: Game) {
   router.push({ name: 'game-detail', params: { id: game.id } })

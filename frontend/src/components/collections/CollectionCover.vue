@@ -76,9 +76,12 @@ function cardStyle(i: number, n: number): CSSProperties {
      (z-index above this wrap) always renders on top of them. */
   isolation: isolate;
 }
+/* A custom cover keeps its own aspect ratio (covers scraped for a collection can
+   be portrait, landscape or square) - contain shows the whole art with no
+   side-cropping, centred in whatever slot the host gives us. */
 .cc-single {
   width: 100%; height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 

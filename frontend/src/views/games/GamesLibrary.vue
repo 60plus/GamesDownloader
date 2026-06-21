@@ -211,7 +211,7 @@
 
         <!-- ── LIST VIEW ────────────────────────────────────────────────── -->
         <div v-else class="list-view">
-          <GameListRow v-for="(game, idx) in displayedGames" :key="game.id" :game="game" :idx="idx" />
+          <GameListRow v-for="(game, idx) in displayedGames" :key="game.id" :game="game" :idx="idx" @open="openGame" />
         </div>
 
       </div><!-- /grid-scroll -->
@@ -491,26 +491,12 @@ async function fetchGames() {
     if (searchQuery.value.trim()) params.search = searchQuery.value.trim()
     if (librarySlug.value) params.library = librarySlug.value
     const { data } = await client.get('/library/games', { params })
+    // Keep the WHOLE API object (languages, files, logo, etc.) so the shared
+    // GameListRow renders the same facts here as in the GOG library and in
+    // collections; just add the derived available-file count.
     games.value = (data.items as any[]).map(g => ({
-      id:               g.id,
-      title:            g.title,
-      slug:             g.slug,
-      source:           g.source,
-      cover_path:       g.cover_path,
-      background_path:  g.background_path,
-      developer:        g.developer,
-      publisher:        g.publisher,
-      rating:           g.rating,
-      meta_ratings:     g.meta_ratings,
-      genres:           g.genres,
-      os_windows:       g.os_windows,
-      os_mac:           g.os_mac,
-      os_linux:         g.os_linux,
-      file_count:       (g.files as any[])?.filter((f: any) => f.is_available).length ?? 0,
-      release_date:     g.release_date,
-      description:      g.description,
-      description_short: g.description_short,
-      is_active:        g.is_active,
+      ...g,
+      file_count: (g.files as any[])?.filter((f: any) => f.is_available).length ?? 0,
     }))
   } catch (e) {
     console.error('Failed to fetch library games', e)
