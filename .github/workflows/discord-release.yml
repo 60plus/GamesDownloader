@@ -8,6 +8,30 @@ jobs:
   announce:
     runs-on: ubuntu-latest
     steps:
+      - name: Wait for the Docker image to be published
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # Announce on Discord only once the image is actually pullable, so the
+          # "New release published" ping never arrives before the Docker Hub tag
+          # exists (the build can take 20-40 min, and longer if it stalls). Poll
+          # the public Docker Hub tags API for the version tag (v-prefix stripped)
+          # until it returns 200, then let the announce step run.
+          IMG_TAG="${TAG#v}"
+          API="https://hub.docker.com/v2/repositories/60plus/gamesdownloader/tags/${IMG_TAG}"
+          echo "Waiting for Docker Hub tag: ${IMG_TAG}"
+          for i in $(seq 1 120); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API")
+            if [ "$CODE" = "200" ]; then
+              echo "Image ${IMG_TAG} is available after ~$(( (i - 1) * 30 ))s."
+              exit 0
+            fi
+            echo "[$i/120] image not ready yet (HTTP ${CODE}); waiting 30s..."
+            sleep 30
+          done
+          echo "::error::Docker image ${IMG_TAG} did not appear within ~60 min; not announcing. Re-publish the release once the image is built to retry."
+          exit 1
+
       - name: Post release to Discord
         env:
           WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
