@@ -589,9 +589,6 @@ async function fetchCollectionsSummary() {
 function containerRecentColls(slug: string): any[] {
   return [...(containerColls.value[slug] || [])].sort((a, b) => (b.id || 0) - (a.id || 0)).slice(0, 24)
 }
-function collCover(c: any): string {
-  return c?.cover_path || c?.member_covers?.[0] || ''
-}
 function openCollection(cont: any, coll: any) {
   router.push({ name: 'collection-detail', params: { lib: cont.slug, slug: coll.slug } })
 }

@@ -346,10 +346,6 @@ const route      = useRoute()
 const themeStore = useThemeStore()
 const { cardTilt, cardShine, cardZoom, cardGlow, cardLift, coverSize: storedCoverSize } = storeToRefs(themeStore)
 const isClassic  = computed(() => themeStore.currentLayout === 'classic')
-const listHeroAnimClass = computed(() => {
-  if (!themeStore.heroAnim || !themeStore.animations) return ''
-  return `list-hero-img--${themeStore.heroAnimStyle}`
-})
 
 const viewMode    = ref<'cover' | 'list'>(
   (localStorage.getItem('gog_view_mode') as 'cover' | 'list') || 'cover'
@@ -489,11 +485,6 @@ function onCardLeave(e: MouseEvent) {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-function listDescText(game: Game): string {
-  const raw = (game.description_short || game.description || '').replace(/<[^>]*>/g, '').trim()
-  return raw.length > 260 ? raw.slice(0, 260) + '…' : raw
-}
-
 // Mirror of backend _fix_gog_url - strips deprecated GOG CDN formatter suffixes
 // that cause HTTP 400: _product_card, _product_tile_256, _aw, _logo2x, _logo
 const _GOG_SUFFIX_RE = /_(product_card|product_tile_\d+|aw|logo2x|logo)(v2[^.]*)?(?=\.(jpg|png|webp)$)/i
@@ -507,36 +498,6 @@ function coverSrc(game: Game): string {
   // If still no file extension, append .jpg
   if (!/\.\w{2,5}(\?|$)/.test(fixed)) return fixed + '.jpg'
   return fixed
-}
-
-function releaseYear(rd: string): string {
-  const m = rd.match(/\b(\d{4})\b/)
-  return m ? m[1] : rd.slice(0, 4)
-}
-
-function listDownloadSize(game: Game): string {
-  const inst = game.installers
-  if (!inst) return ''
-  // Sum the largest installer per OS (usually Windows first)
-  let maxBytes = 0
-  for (const entries of Object.values(inst)) {
-    if (Array.isArray(entries) && entries.length > 0) {
-      const sz = entries[0].total_size || 0
-      if (sz > maxBytes) maxBytes = sz
-    }
-  }
-  if (!maxBytes) return ''
-  const gb = maxBytes / 1_073_741_824
-  if (gb >= 1) return gb.toFixed(1) + ' GB'
-  const mb = maxBytes / 1_048_576
-  if (mb >= 1) return mb.toFixed(0) + ' MB'
-  return '< 1 MB'
-}
-
-function listLangCount(game: Game): string {
-  const n = Object.keys(game.languages || {}).length
-  if (!n) return ''
-  return n === 1 ? '1 lang' : `${n} langs`
 }
 
 // ── Data loading ───────────────────────────────────────────────────────────
@@ -912,8 +873,7 @@ function openGame(game: Game) {
   display: flex; flex-direction: column; justify-content: flex-end;
   padding: 10px; opacity: 0; transition: opacity .18s;
 }
-.cover-wrap:hover .cover-overlay,
-.list-cover-wrap:hover .cover-overlay { opacity: 1; }
+.cover-wrap:hover .cover-overlay { opacity: 1; }
 .overlay-title {
   font-size: var(--fs-sm, 12px); font-weight: 700; color: #fff;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1009,204 +969,6 @@ function openGame(game: Game) {
 
 /* ── List view ────────────────────────────────────────────────────────────── */
 .list-view { display: flex; flex-direction: column; gap: var(--space-2, 8px); padding-bottom: 20px; }
-.list-row {
-  display: flex; align-items: stretch; gap: 0;
-  padding: 0; border-radius: var(--radius-sm); overflow: hidden;
-  border: 1px solid var(--glass-border); background: var(--glass-bg);
-  cursor: pointer; transition: all var(--transition);
-  height: 260px;
-}
-.list-row:hover { background: var(--glass-highlight); border-color: color-mix(in srgb, var(--pl) 30%, transparent); }
-
-/* Cover - 3:4 portrait, 180×240 */
-.list-cover-wrap { flex-shrink: 0; width: 200px; padding: 10px; box-sizing: border-box; }
-.list-cover-wrap .cover-img-wrap {
-  width: 100%; height: 240px;
-  border-radius: var(--radius-sm, 8px); overflow: hidden;
-  background: var(--bg2); border: 1px solid var(--glass-border);
-  box-shadow: 0 6px 24px rgba(0,0,0,0.45);
-  position: relative;
-  transition: transform 0.35s cubic-bezier(.23,1,.32,1), box-shadow 0.2s ease;
-  transform-style: preserve-3d;
-}
-.list-cover-wrap .cover-img-wrap::after {
-  content: '';
-  position: absolute; inset: -1px;
-  border-radius: inherit;
-  border: 1px solid var(--pl);
-  box-shadow: 0 0 24px var(--pglow2);
-  opacity: 0;
-  transition: opacity var(--transition);
-  pointer-events: none; z-index: 2;
-}
-.list-cover-wrap .cover-img-wrap.glow-active::after { opacity: var(--card-glow, 1); }
-.list-cover-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.list-cover-fallback { width: 100%; height: 100%; background: var(--bg3); }
-
-/* Info (title + meta) column */
-.list-info {
-  flex-shrink: 0; width: 200px; min-width: 0; overflow: hidden;
-  display: flex; flex-direction: column; justify-content: center;
-  text-align: center; align-items: center; gap: var(--space-1, 4px);
-  padding: 10px 16px; border-left: 1px solid var(--glass-border);
-}
-.list-title {
-  font-size: var(--fs-md, 14px); font-weight: 700; color: var(--text);
-  overflow: hidden; min-height: 20px;
-}
-.list-title > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.list-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-sm, 12px); color: var(--muted); margin-top: 6px; }
-.list-owner-badge {
-  display: inline-flex; align-items: center; gap: var(--space-1, 4px);
-  padding: 2px 10px; border-radius: 10px;
-  background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
-  font-size: var(--fs-xs, 10px); font-weight: 600; color: var(--muted);
-  white-space: nowrap; margin-top: 2px;
-}
-
-/* Hero background column - after info */
-.list-hero {
-  flex: 1; min-width: 0; overflow: hidden;
-  position: relative; border-left: 1px solid var(--glass-border);
-}
-.list-hero-img {
-  position: absolute; inset: 0;
-  width: 100%; height: 100%; object-fit: cover; display: block;
-  filter: brightness(.30);
-}
-.list-hero-overlay {
-  position: absolute; inset: 0;
-  background: linear-gradient(to right, rgba(0,0,0,.5) 0%, rgba(0,0,0,.2) 50%, rgba(0,0,0,.5) 100%);
-}
-.list-hero-desc {
-  position: absolute; inset: 0;
-  display: flex; align-items: center; justify-content: center;
-  padding: 16px 24px; z-index: 2;
-}
-.list-hero-desc-text {
-  margin: 0; font-size: var(--fs-sm, 12px); line-height: 1.7; color: rgba(255,255,255,.8);
-  text-align: center; display: -webkit-box; -webkit-line-clamp: 7;
-  -webkit-box-orient: vertical; overflow: hidden;
-  text-shadow: 0 1px 4px rgba(0,0,0,.6);
-}
-.list-hero-img--kenburns {
-  animation: list-kb calc(44s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite;
-}
-.list-hero-img--drift {
-  animation: list-drift calc(30s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite;
-}
-.list-hero-img--pulse {
-  animation: list-pulse calc(10s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite;
-}
-@keyframes list-kb {
-  0%   { transform: scale(1.05) translateX(0); }
-  50%  { transform: scale(1.12) translateX(-3%); }
-  100% { transform: scale(1.05) translateX(0); }
-}
-@keyframes list-drift {
-  0%   { transform: translateX(0) scale(1.04); }
-  50%  { transform: translateX(-4%) scale(1.04); }
-  100% { transform: translateX(0) scale(1.04); }
-}
-@keyframes list-pulse {
-  0%,100% { transform: scale(1.02); }
-  50%     { transform: scale(1.08); }
-}
-[data-animations="false"] .list-hero-img--kenburns,
-[data-animations="false"] .list-hero-img--drift,
-[data-animations="false"] .list-hero-img--pulse { animation: none; }
-.meta-sep::before { content: '·'; margin-right: 6px; }
-.genre-chip { padding: 1px 7px; border-radius: var(--radius-xs, 4px); font-size: var(--fs-xs, 10px); }
-
-/* Logo instead of title text */
-.list-logo-img {
-  max-height: 36px; max-width: 180px; width: auto;
-  object-fit: contain; object-position: left;
-  filter: drop-shadow(0 1px 4px rgba(0,0,0,.5));
-}
-
-/* OS badges */
-.list-os { display: flex; align-items: center; gap: 5px; margin-top: 5px; }
-.os-badge {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; border-radius: 5px;
-  background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
-}
-.os-badge--win { color: #60a5fa; }
-.os-badge--mac { color: #c4b5fd; }
-.os-badge--linux { color: #facc15; }
-
-/* ── List quickfacts column - between desc and ratings ────────────────────── */
-.list-qf-col {
-  flex-shrink: 0; width: 230px;
-  border-left: 1px solid var(--glass-border);
-  padding: 10px 12px;
-  display: flex; align-items: center; justify-content: center;
-}
-
-/* ── List right column: Ratings + status ─────────────────────────────────── */
-.list-right {
-  display: flex; flex-direction: column; align-items: center;
-  justify-content: center;
-  gap: 6px; flex-shrink: 0; min-width: 100px;
-  border-left: 1px solid var(--glass-border);
-  padding: 10px 16px;
-}
-
-/* Quickfacts mini-table */
-.list-qf {
-  display: flex; flex-direction: column;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  margin-bottom: 0;
-}
-.list-qf-row {
-  display: flex; align-items: center;
-  border-bottom: 1px solid var(--glass-border);
-  min-height: 26px;
-}
-.list-qf-row:last-child { border-bottom: none; }
-.list-qf-label {
-  flex-shrink: 0; width: 100px;
-  padding: 4px 8px;
-  font-size: 9px; font-weight: 700; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .5px;
-  border-right: 1px solid var(--glass-border);
-  background: rgba(255,255,255,.04);
-  white-space: nowrap; line-height: 1.3;
-  display: flex; align-items: center;
-  align-self: stretch;
-}
-.list-qf-val {
-  flex: 1; padding: 4px 8px;
-  font-size: 11px; color: var(--text); line-height: 1.3;
-  display: flex; flex-wrap: wrap; gap: 3px; align-items: center; justify-content: center; text-align: center;
-}
-.list-qf-os { display: flex; gap: var(--space-1, 4px); align-items: center; }
-.list-os-chip {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; border-radius: 5px;
-  background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
-}
-.list-os-chip--win   { color: #60a5fa; }
-.list-os-chip--mac   { color: #c4b5fd; }
-.list-os-chip--linux { color: #facc15; }
-
-.list-scores { display: flex; flex-direction: column; align-items: center; gap: var(--space-2, 8px); }
-.list-score {
-  display: inline-flex; align-items: center; gap: var(--space-2, 8px);
-  font-size: 15px; font-weight: 700; color: var(--text);
-}
-.list-score .score-ico { width: 42px; height: 42px; }
-.list-cover-check {
-  position: absolute; bottom: 8px; right: 8px; z-index: 6;
-  width: 24px; height: 24px; border-radius: 50%;
-  background: #22c55e; display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 2px 8px rgba(34,197,94,.5);
-}
-
 /* ── Sync dialog ──────────────────────────────────────────────────────────── */
 .sync-dialog-overlay {
   position: fixed; inset: 0; z-index: 7000;

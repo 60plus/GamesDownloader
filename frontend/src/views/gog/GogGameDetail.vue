@@ -681,7 +681,6 @@ import { useNotifications } from '@/composables/useNotifications'
 import { useAuthStore } from '@/stores/auth'
 import { sanitizeHtml } from '@/utils/sanitize'
 import { ratingVal } from '@/utils/rating'
-import TranslateButton from '@/components/common/TranslateButton.vue'
 import HeroBackground from '@/components/common/HeroBackground.vue'
 import { useI18n } from '@/i18n'
 
