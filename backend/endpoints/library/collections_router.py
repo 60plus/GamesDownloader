@@ -164,6 +164,7 @@ def _agg_meta(coll, *, covers: list[str], ratings: list[float], years: list[int]
     `hltb_complete_s` here are the member averages; a stored override wins."""
     avg = round(sum(ratings) / len(ratings), 1) if ratings else None
     return {
+        "id":            coll.id,
         "slug":          coll.slug,
         "name":          coll.name,
         "library":       library_slug,

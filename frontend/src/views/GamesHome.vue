@@ -443,6 +443,35 @@
       </section>
     </template>
 
+    <!-- ── Recently Added - collection containers (the collections inside) ──── -->
+    <template v-if="!searchActive">
+      <section v-for="cont in collectionContainers" :key="'rc-' + cont.slug"
+               v-show="libShown(cont.slug) && recentShown(cont.slug) && containerColls[cont.slug] && containerColls[cont.slug].length"
+               class="home-recent-section" :style="{ order: orderOf(cont.slug) }">
+        <div class="home-section-head">
+          <button class="home-section-title home-section-link" @click="router.push(libs.route(cont))">
+            {{ cont.name }}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <div class="home-row-nav">
+            <button class="home-nav-btn" @click="scrollRow('rc-' + cont.slug, 'left')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <button class="home-nav-btn" @click="scrollRow('rc-' + cont.slug, 'right')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>
+          </div>
+        </div>
+        <div class="home-recent-scroll" :ref="(el: any) => { if (el) rowRefs['rc-' + cont.slug] = el }">
+          <div v-for="coll in containerRecentColls(cont.slug)" :key="coll.slug" class="home-recent-cover" @click="openCollection(cont, coll)">
+            <div class="home-recent-img-wrap home-recent-img-wrap--coll">
+              <!-- Custom cover as a single image; otherwise the fanned member covers. -->
+              <img v-if="coll.cover_path" :src="coll.cover_path" :alt="coll.name" class="home-recent-img" loading="lazy" />
+              <CollectionCover v-else :covers="coll.member_covers" :name="coll.name" color="var(--pl)" />
+              <div class="home-recent-overlay"><span class="home-recent-overlay-title">{{ coll.name }}</span></div>
+            </div>
+            <div class="home-recent-title">{{ coll.name }}</div>
+          </div>
+        </div>
+      </section>
+    </template>
+
   </div>
 </template>
 
@@ -534,21 +563,37 @@ const collData = ref<Record<string, any>>({})
 // drops disabled / user-hidden libraries.
 const collectionContainers = computed(() => libs.visible.filter(l => l.kind === 'collections'))
 const collSummary = ref<Record<string, { count: number; cover: string | null; covers: string[]; hero: string | null }>>({})
+// Full collection list per container - feeds the container's "recently added" row.
+const containerColls = ref<Record<string, any[]>>({})
 async function fetchCollectionsSummary() {
   const out: Record<string, { count: number; cover: string | null; covers: string[]; hero: string | null }> = {}
+  const lists: Record<string, any[]> = {}
   await Promise.all(collectionContainers.value.map(async (cont) => {
     try {
       const { data } = await client.get('/collections', { params: { library: cont.slug } })
       const list = Array.isArray(data) ? data : []
+      lists[cont.slug] = list
       // Pick a random collection (like the game cards pick a random game); the
       // hero comes from the SAME collection that the fan is showing.
       const pick = list.length ? list[Math.floor(Math.random() * list.length)] : null
       const heroes: string[] = pick?.member_heroes || []
       const hero = heroes.length ? heroes[Math.floor(Math.random() * heroes.length)] : (pick?.member_covers?.[0] || null)
       out[cont.slug] = { count: list.length, cover: pick?.cover_path || null, covers: pick?.member_covers || [], hero }
-    } catch { out[cont.slug] = { count: 0, cover: null, covers: [], hero: null } }
+    } catch { out[cont.slug] = { count: 0, cover: null, covers: [], hero: null }; lists[cont.slug] = [] }
   }))
   collSummary.value = out
+  containerColls.value = lists
+}
+// Recently-added collections in a container (newest first; collections have no
+// timestamp, so the auto-increment id is the recency proxy).
+function containerRecentColls(slug: string): any[] {
+  return [...(containerColls.value[slug] || [])].sort((a, b) => (b.id || 0) - (a.id || 0)).slice(0, 24)
+}
+function collCover(c: any): string {
+  return c?.cover_path || c?.member_covers?.[0] || ''
+}
+function openCollection(cont: any, coll: any) {
+  router.push({ name: 'collection-detail', params: { lib: cont.slug, slug: coll.slug } })
 }
 
 // Per-theme "recently added" library selection (null => all libraries).
@@ -979,6 +1024,12 @@ onMounted(async () => {
 .home-recent-img { width: 100%; height: 100%; object-fit: cover; transition: transform .3s; }
 .home-recent-cover:hover .home-recent-img { transform: scale(1.06); }
 .home-recent-fallback { width: 100%; height: 100%; background: rgba(255,255,255,.04); }
+/* Collection tiles match the game tiles' size; a custom cover fills the tile
+   like a game cover (no letterbox bars), and the (square-calibrated) fan is
+   enlarged and lifted to sit centred in the taller portrait tile. */
+.home-recent-img-wrap--coll .home-recent-img { object-fit: cover; }
+.home-recent-img-wrap--coll :deep(.cc-card--front) { width: 78%; margin-left: -39%; }
+.home-recent-img-wrap--coll :deep(.cc-card) { width: 68%; margin-left: -34%; bottom: 14%; }
 .home-recent-overlay {
   position: absolute; inset: 0;
   background: linear-gradient(to top, rgba(0,0,0,.85) 0%, transparent 50%);
