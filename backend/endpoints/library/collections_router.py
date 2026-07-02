@@ -496,11 +496,10 @@ async def delete_collection(request: Request, slug: str) -> dict:
     return {"ok": True}
 
 
-@protected_route(router.post, "/{slug}/cover", scopes=[Scopes.SETTINGS_WRITE])
-async def upload_collection_cover(
-    request: Request, slug: str, file: UploadFile = File(...),
-) -> dict:
-    """Upload a custom cover (PNG, JPG, WEBP, max 5 MB). Overrides the auto stack."""
+async def _upload_collection_image(slug: str, file: UploadFile, kind: str) -> dict:
+    """Shared body for the custom artwork uploads (PNG, JPG, WEBP, max 5 MB).
+    kind is cover/hero/logo; file stems and target columns follow the ones
+    download_collection_image already established ({slug} / {slug}-{kind})."""
     coll = await collection_handler.get_by_slug(slug)
     if coll is None:
         raise HTTPException(status_code=404, detail="Collection not found")
@@ -513,19 +512,44 @@ async def upload_collection_cover(
         )
     content = await file.read()
     if len(content) > _MAX_COVER_BYTES:
-        raise HTTPException(status_code=413, detail="Cover too large (max 5 MB)")
+        raise HTTPException(status_code=413, detail="Image too large (max 5 MB)")
 
     covers_dir = os.path.join(RESOURCES_PATH, "collection-covers")
     os.makedirs(covers_dir, exist_ok=True)
-    for old in glob.glob(os.path.join(covers_dir, f"{slug}.*")):
+    stem = slug if kind == "cover" else f"{slug}-{kind}"
+    for old in glob.glob(os.path.join(covers_dir, f"{stem}.*")):
         try:
             os.remove(old)
         except OSError:
             pass
-    dest = os.path.join(covers_dir, f"{slug}{ext}")
+    dest = os.path.join(covers_dir, f"{stem}{ext}")
     with open(dest, "wb") as fh:
         fh.write(content)
 
-    cover_url = f"/resources/collection-covers/{slug}{ext}?v={int(os.path.getmtime(dest))}"
-    coll = await collection_handler.update(slug, cover_path=cover_url)
+    url = f"/resources/collection-covers/{stem}{ext}?v={int(os.path.getmtime(dest))}"
+    coll = await collection_handler.update(slug, **{f"{kind}_path": url})
     return _collection_brief(coll, await _library_slug_of(coll))
+
+
+@protected_route(router.post, "/{slug}/cover", scopes=[Scopes.SETTINGS_WRITE])
+async def upload_collection_cover(
+    request: Request, slug: str, file: UploadFile = File(...),
+) -> dict:
+    """Upload a custom cover (PNG, JPG, WEBP, max 5 MB). Overrides the auto stack."""
+    return await _upload_collection_image(slug, file, "cover")
+
+
+@protected_route(router.post, "/{slug}/hero", scopes=[Scopes.SETTINGS_WRITE])
+async def upload_collection_hero(
+    request: Request, slug: str, file: UploadFile = File(...),
+) -> dict:
+    """Upload a custom hero backdrop. Overrides the auto member-hero fallback."""
+    return await _upload_collection_image(slug, file, "hero")
+
+
+@protected_route(router.post, "/{slug}/logo", scopes=[Scopes.SETTINGS_WRITE])
+async def upload_collection_logo(
+    request: Request, slug: str, file: UploadFile = File(...),
+) -> dict:
+    """Upload a custom clearlogo, shown by themes instead of the text title."""
+    return await _upload_collection_image(slug, file, "logo")

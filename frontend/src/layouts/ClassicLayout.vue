@@ -11,6 +11,7 @@
       <!-- Library header -->
       <div class="lib-head">
         <img v-if="activeLib === 'roms' && activePlatformFsSlug" :src="`/platforms/icons/${activePlatformFsSlug}.png`" class="lib-head-icon" :alt="activePlatformFsSlug" @error="($event.target as HTMLImageElement).src = '/icons/gamepad.svg'" />
+        <img v-else-if="activeCollectionLogo" :src="activeCollectionLogo" class="lib-head-icon" :alt="libDisplayName" @error="($event.target as HTMLImageElement).src = '/icons/gamepad.svg'" />
         <LibraryIcon v-else-if="activeLibObj" :icon="activeLibObj.icon" :color="activeLibObj.color" :size="70" class="lib-head-icon" :alt="activeLibObj.name" />
         <span class="lib-head-name">{{ libDisplayName }}</span>
         <span class="game-count">{{ libraries.find(l => l.id === activeLib)?.count ?? 0 }} {{ activeLib === 'roms' ? t('emulation.roms_count') : t('library.games') }}</span>
@@ -681,6 +682,7 @@ interface Game {
   title: string
   icon?: string            // 36×36 icon (icon_path / icon_url)
   cover?: string           // large cover fallback if no icon
+  logo?: string            // collection clearlogo (collections list only)
   downloaded?: boolean
   rating?: number
   release_date?: string
@@ -826,6 +828,13 @@ function isUserLib(id: string): boolean {
 // library games, so the detail pane treats it like the built-in "games" library.
 const classicDetailLib = computed(() => isUserLib(activeLib.value) ? 'games' : activeLib.value)
 
+// Clearlogo of the selected collection - replaces the sidebar header icon while
+// a collection (or one of its members) is open in the collections container.
+const activeCollectionLogo = computed(() => {
+  if (!activeLibIsCollections.value || !activeCollectionSlug.value) return ''
+  return games.value.find(g => String(g.id) === activeCollectionSlug.value)?.logo || ''
+})
+
 const libDisplayName = computed(() => {
   const map: Record<string, string> = { gog: t('nav.gog_library'), games: t('nav.games_library'), roms: t('nav.emulation') }
   return map[activeLib.value] ?? activeLibObj.value?.name ?? ''
@@ -969,6 +978,7 @@ async function fetchCollectionsList() {
       release_date: c.start_year ? String(c.start_year) : '',
       icon:         c.cover_path || (c.member_covers && c.member_covers[0]) || '',
       cover:        c.cover_path || (c.member_covers && c.member_covers[0]) || '',
+      logo:         c.logo_path || '',
     }))
     const libIdx = libraries.value.findIndex(l => l.id === activeLib.value)
     if (libIdx >= 0) libraries.value[libIdx].count = games.value.length

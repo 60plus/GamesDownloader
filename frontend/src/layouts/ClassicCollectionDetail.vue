@@ -70,8 +70,15 @@
           </div>
         </div>
 
-        <!-- Title -->
-        <div class="game-title">{{ detail.name }}</div>
+        <!-- Clearlogo / text title fallback (same pattern as the game detail) -->
+        <img
+          v-if="detail.logo_path && !logoFailed"
+          :src="detail.logo_path"
+          :alt="detail.name"
+          class="coll-logo"
+          @error="logoFailed = true"
+        />
+        <div v-else class="game-title">{{ detail.name }}</div>
 
         <!-- Rating row (below title, above chips) -->
         <div v-if="detail.rating != null" class="cover-ratings">
@@ -258,7 +265,8 @@ const { t } = useI18n()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const detail   = ref<any>(null)
-const heroBg   = ref('')   // a random member hero used for the blurred backdrop
+const heroBg   = ref('')   // collection hero (else a random member hero) backdrop
+const logoFailed = ref(false)
 const loading  = ref(false)
 const editOpen = ref(false)
 const deleting = ref(false)
@@ -312,8 +320,12 @@ async function load() {
   detail.value = null
   try {
     detail.value = await store.get(props.slug)
+    logoFailed.value = false
+    // The collection's own (scraped/uploaded) hero wins; without one, fall back
+    // to a random member hero like before.
     const heroes: string[] = detail.value?.member_heroes || []
-    heroBg.value = heroes.length ? heroes[Math.floor(Math.random() * heroes.length)] : ''
+    heroBg.value = detail.value?.hero_path
+      || (heroes.length ? heroes[Math.floor(Math.random() * heroes.length)] : '')
   } finally {
     loading.value = false
   }
@@ -418,7 +430,18 @@ async function onDelete() {
 
 /* Elements BELOW cover-wrap in DOM flow are non-positioned -> keep them above
    any future hero background. */
-.game-title, .cover-ratings, .meta-chips { position: relative; z-index: 4; }
+.coll-logo, .game-title, .cover-ratings, .meta-chips { position: relative; z-index: 4; }
+
+/* Collection clearlogo (transparent, same footprint as the game logo) */
+.coll-logo {
+  max-width: 320px;
+  max-height: 110px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 16px rgba(0,0,0,.8));
+  margin-top: 18px;
+}
 
 /* Collection cover box - same footprint as a game cover (2:3 portrait) so the
    fanned member-cover composite occupies exactly the cover slot. */

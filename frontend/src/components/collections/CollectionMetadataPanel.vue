@@ -52,6 +52,15 @@
             </div>
           </div>
 
+          <!-- Upload / revert (same mechanics as the cover above) -->
+          <label class="mep-upload-btn" style="margin-top:8px">
+            <input type="file" accept="image/png,image/jpeg,image/webp" class="mep-file-input" @change="onHeroFile" />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            {{ heroUploadBusy ? t('meta.saving') : t('collections.hero_upload') }}
+          </label>
+          <button v-if="selectedBackground" class="mep-clear-btn" :disabled="heroUploadBusy" @click="revertHero">{{ t('collections.hero_revert') }}</button>
+          <div v-if="heroUploadMsg" class="mep-cover-msg">{{ heroUploadMsg }}</div>
+
           <!-- Logo -->
           <div class="mep-label" style="margin-top:12px">{{ t('meta.tab_logo') }}</div>
           <div class="mep-cover-current mep-cover-current--logo" @click="switchTab('logo')" style="cursor:pointer">
@@ -60,6 +69,15 @@
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
             </div>
           </div>
+
+          <!-- Upload / revert (same mechanics as the cover above) -->
+          <label class="mep-upload-btn" style="margin-top:8px">
+            <input type="file" accept="image/png,image/jpeg,image/webp" class="mep-file-input" @change="onLogoFile" />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            {{ logoUploadBusy ? t('meta.saving') : t('collections.logo_upload') }}
+          </label>
+          <button v-if="selectedLogo" class="mep-clear-btn" :disabled="logoUploadBusy" @click="revertLogo">{{ t('collections.logo_revert') }}</button>
+          <div v-if="logoUploadMsg" class="mep-cover-msg">{{ logoUploadMsg }}</div>
         </div>
 
         <!-- RIGHT: Category tabs + content -->
@@ -499,6 +517,59 @@ async function revertCover() {
     coverUploadBusy.value = false
   }
 }
+
+// ── Hero / logo upload + revert (same mechanics as the cover above) ──────────
+const heroUploadBusy = ref(false)
+const heroUploadMsg  = ref('')
+const logoUploadBusy = ref(false)
+const logoUploadMsg  = ref('')
+
+async function _uploadArtFile(e: Event, kind: 'hero' | 'logo') {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  const busy = kind === 'hero' ? heroUploadBusy : logoUploadBusy
+  const msg  = kind === 'hero' ? heroUploadMsg  : logoUploadMsg
+  busy.value = true; msg.value = ''
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+    const { data } = await client.post(`/collections/${props.collection.slug}/${kind}`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    if (kind === 'hero') selectedBackground.value = data.hero_path
+    else selectedLogo.value = data.logo_path
+    msg.value = t('meta.saved')
+    emit('updated')
+  } catch (err: any) {
+    msg.value = err?.response?.data?.detail || 'Upload failed'
+  } finally {
+    busy.value = false
+    input.value = ''
+  }
+}
+
+async function _revertArt(kind: 'hero' | 'logo') {
+  const busy = kind === 'hero' ? heroUploadBusy : logoUploadBusy
+  const msg  = kind === 'hero' ? heroUploadMsg  : logoUploadMsg
+  busy.value = true; msg.value = ''
+  try {
+    await client.patch(`/collections/${props.collection.slug}`, { [`${kind}_path`]: null })
+    if (kind === 'hero') selectedBackground.value = ''
+    else selectedLogo.value = ''
+    msg.value = t('meta.saved')
+    emit('updated')
+  } catch (err: any) {
+    msg.value = err?.response?.data?.detail || 'Failed'
+  } finally {
+    busy.value = false
+  }
+}
+
+function onHeroFile(e: Event) { _uploadArtFile(e, 'hero') }
+function onLogoFile(e: Event) { _uploadArtFile(e, 'logo') }
+function revertHero() { _revertArt('hero') }
+function revertLogo() { _revertArt('logo') }
 
 // ── Description sources ────────────────────────────────────────────────────────
 const descQuery   = ref(props.collection.name || '')
