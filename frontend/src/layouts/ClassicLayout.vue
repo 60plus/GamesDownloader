@@ -283,10 +283,18 @@
           <router-view />
         </template>
 
-        <!-- Collections container: a collection detail, or a "pick one" prompt -->
+        <!-- Collections container: an open member game, a collection detail, or
+             a "pick one" prompt. The member detail renders here (members are
+             always library games) so the sidebar stays on the collection list. -->
         <template v-else-if="activeLibIsCollections">
+          <ClassicGameDetail
+            v-if="activeGameId"
+            :game-id="activeGameId"
+            active-lib="games"
+            :refresh-tick="detailRefreshTick"
+          />
           <ClassicCollectionDetail
-            v-if="activeCollectionSlug"
+            v-else-if="activeCollectionSlug"
             :slug="activeCollectionSlug"
             :lib="activeLib"
             :refresh-tick="detailRefreshTick"
@@ -1168,19 +1176,13 @@ function maybeAutoSelectFirst() {
 
 // ── Collections ───────────────────────────────────────────────────────────────
 function onOpenMemberGame(game: any) {
-  // Opening a member leaves the collection for the game's own library (so the
-  // sidebar shows its siblings), like clicking a member in the Modern theme.
-  // GOG members resolve their detail by gog_game_id (separate id space); others
-  // are library games addressed by LibraryGame id.
-  if (game?.source === 'gog' && game?.gog_game_id) {
-    activeLib.value = 'gog'
-    fetchGames()
-    router.push({ name: 'game-detail', params: { id: game.gog_game_id } })
-  } else {
-    activeLib.value = 'games'
-    fetchGames()
-    router.push({ name: 'games-detail', params: { id: game.id } })
-  }
+  // Members are ALWAYS local library games (GOG catalog games live on GOG's
+  // servers and can't be collected), so a member opens by LibraryGame id -
+  // never the GOG catalog, even when it was originally downloaded from GOG.
+  // activeLib stays on the collections container so the sidebar keeps showing
+  // the collection list until the user switches libraries himself; the detail
+  // renders inside the collections branch of the template.
+  router.push({ name: 'games-detail', params: { id: game.id } })
 }
 
 async function onCollectionChanged() {
@@ -1507,8 +1509,10 @@ watch(() => route.name, name => {
   }
   // Detail pages → keep lib in sync without reloading the list
   if (name === 'game-detail')      { activeLib.value = 'gog' }
-  // Stay on the user library when opening one of its games (a library game).
-  if (name === 'games-detail' && !isUserLib(activeLib.value)) { activeLib.value = 'games' }
+  // Stay on the user library (or the collections container, when a member was
+  // opened from a collection detail) when opening one of its games - they are
+  // all library games, so the built-in "games" lib is only a fallback.
+  if (name === 'games-detail' && !isUserLib(activeLib.value) && !activeLibIsCollections.value) { activeLib.value = 'games' }
   if (name === 'emulation-detail') {
     activeLib.value = 'roms'
     if (route.params.platform) activePlatformSlug.value = route.params.platform as string

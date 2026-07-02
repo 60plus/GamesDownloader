@@ -524,12 +524,12 @@ async function onDelete() {
 /* Centre the tiles when they don't fill the strip (no scrolling needed). */
 .shots-strip--center { justify-content: center; }
 /* Portrait cover tiles (the only deliberate deviation from the reference):
-   the strip height is unchanged, but each tile is 3:4 so member COVERS show
-   without cropping. Width is derived from the strip height via aspect-ratio,
-   so the tiles are narrower than the landscape screenshot tiles. */
+   each tile is 3:4 so member COVERS show without cropping. Width is derived
+   from the strip WIDTH (6 tiles per view, 5 gaps x 6px) and height follows
+   via aspect-ratio - never from the image's intrinsic size, so animated
+   covers with larger native dimensions render the same as static ones. */
 .shot-item {
-  flex: 0 0 auto;
-  height: 100%;
+  flex: 0 0 calc((100% - 30px) / 6);
   aspect-ratio: 3/4;
   border-radius: 7px;
   overflow: hidden;
