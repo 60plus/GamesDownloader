@@ -616,11 +616,14 @@ watch(() => route.fullPath, () => { if (route.name === 'collections-lib' || rout
 .list-row {
   display: flex; align-items: stretch; border-radius: var(--radius-sm);
   border: 1px solid var(--glass-border); background: var(--glass-bg);
-  cursor: pointer; transition: all var(--transition); overflow: hidden; height: 240px;
+  cursor: pointer; transition: all var(--transition); overflow: hidden;
+  /* min- (not fixed) height - also styles the member GameListRow root in the
+     detail list view, where a tall quick-facts column must grow the row. */
+  min-height: 240px;
 }
 .list-row:hover { background: var(--glass-highlight, rgba(255,255,255,.05)); border-color: color-mix(in srgb, var(--pl) 30%, transparent); }
 .list-cover-wrap { flex-shrink: 0; width: 200px; padding: 10px; box-sizing: border-box; display: flex; align-items: center; }
-.list-cover-wrap .cover-img-wrap { width: 100%; height: 220px; }
+.list-cover-wrap .cover-img-wrap { width: 100%; height: 100%; }
 .list-cover-wrap .cover-img-wrap--coll { height: 180px; aspect-ratio: auto; }
 .list-cover-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .list-cover-fallback { width: 100%; height: 100%; background: var(--bg3, rgba(255,255,255,.04)); }

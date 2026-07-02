@@ -62,6 +62,56 @@ export const LANG_MAP: Record<string, LangEntry> = {
   es_mx:    { flag: 'mx', name: 'Spanish', group: 'es' },
   gk:       { flag: 'gr', name: 'Greek',   group: 'el' },
   sb:       { flag: 'rs', name: 'Serbian' },
+  // Steam / custom-library languages missing from the GOG set above. Only
+  // plain ISO 3166-1 country codes as flags (no subdivision flags like es-ct,
+  // they are not guaranteed to exist in every flag-icons build).
+  be:       { flag: 'by', name: 'Belarusian' },
+  bg:       { flag: 'bg', name: 'Bulgarian' },
+  ca:       { flag: 'ad', name: 'Catalan' },
+  et:       { flag: 'ee', name: 'Estonian' },
+  is:       { flag: 'is', name: 'Icelandic' },
+  sl:       { flag: 'si', name: 'Slovenian' },
+  lv:       { flag: 'lv', name: 'Latvian' },
+  lt:       { flag: 'lt', name: 'Lithuanian' },
+  hr:       { flag: 'hr', name: 'Croatian' },
+  sr:       { flag: 'rs', name: 'Serbian', group: 'sb' },
+  bs:       { flag: 'ba', name: 'Bosnian' },
+  mk:       { flag: 'mk', name: 'Macedonian' },
+  sq:       { flag: 'al', name: 'Albanian' },
+  gl:       { flag: 'es', name: 'Galician' },
+  eu:       { flag: 'es', name: 'Basque' },
+  id:       { flag: 'id', name: 'Indonesian' },
+  in:       { flag: 'id', name: 'Indonesian', group: 'id' },  // legacy ISO code
+  ms:       { flag: 'my', name: 'Malay' },
+  vi:       { flag: 'vn', name: 'Vietnamese' },
+  hi:       { flag: 'in', name: 'Hindi' },
+  fa:       { flag: 'ir', name: 'Persian' },
+  ur:       { flag: 'pk', name: 'Urdu' },
+  az:       { flag: 'az', name: 'Azerbaijani' },
+  ka:       { flag: 'ge', name: 'Georgian' },
+  kk:       { flag: 'kz', name: 'Kazakh' },
+  uz:       { flag: 'uz', name: 'Uzbek' },
+  mn:       { flag: 'mn', name: 'Mongolian' },
+  af:       { flag: 'za', name: 'Afrikaans' },
+  fil:      { flag: 'ph', name: 'Filipino' },
+  tl:       { flag: 'ph', name: 'Filipino', group: 'fil' },
+  bn:       { flag: 'bd', name: 'Bengali' },
+  ta:       { flag: 'in', name: 'Tamil' },
+  te:       { flag: 'in', name: 'Telugu' },
+  ml:       { flag: 'in', name: 'Malayalam' },
+  my:       { flag: 'mm', name: 'Burmese' },
+  km:       { flag: 'kh', name: 'Khmer' },
+  lo:       { flag: 'la', name: 'Lao' },
+  si:       { flag: 'lk', name: 'Sinhala' },
+  am:       { flag: 'et', name: 'Amharic' },
+  sw:       { flag: 'tz', name: 'Swahili' },
+  ga:       { flag: 'ie', name: 'Irish' },
+  cy:       { flag: 'gb', name: 'Welsh' },
+  mt:       { flag: 'mt', name: 'Maltese' },
+  lb:       { flag: 'lu', name: 'Luxembourgish' },
+  nb:       { flag: 'no', name: 'Norwegian', group: 'no' },
+  nn:       { flag: 'no', name: 'Norwegian', group: 'no' },
+  iw:       { flag: 'il', name: 'Hebrew', group: 'he' },      // legacy ISO code
 };
 
 /**
@@ -141,6 +191,54 @@ const NAME_NORMALIZE: Record<string, { flag: string; name: string }> = {
   'español (al)':           { flag: 'mx', name: 'Spanish' },
   'српска':                 { flag: 'rs', name: 'Serbian' },
   'yкраїнська':             { flag: 'ua', name: 'Ukrainian' },
+  // Native names for the Steam / custom-library additions
+  'беларуская':             { flag: 'by', name: 'Belarusian' },
+  'български':              { flag: 'bg', name: 'Bulgarian' },
+  'català':                 { flag: 'ad', name: 'Catalan' },
+  'eesti':                  { flag: 'ee', name: 'Estonian' },
+  'íslenska':               { flag: 'is', name: 'Icelandic' },
+  'slovenščina':            { flag: 'si', name: 'Slovenian' },
+  'slovenski':              { flag: 'si', name: 'Slovenian' },
+  'slovenský':              { flag: 'sk', name: 'Slovak' },
+  'latviešu':               { flag: 'lv', name: 'Latvian' },
+  'latviski':               { flag: 'lv', name: 'Latvian' },
+  'lietuvių':               { flag: 'lt', name: 'Lithuanian' },
+  'hrvatski':               { flag: 'hr', name: 'Croatian' },
+  'srpski':                 { flag: 'rs', name: 'Serbian' },
+  'српски':                 { flag: 'rs', name: 'Serbian' },
+  'македонски':             { flag: 'mk', name: 'Macedonian' },
+  'shqip':                  { flag: 'al', name: 'Albanian' },
+  'galego':                 { flag: 'es', name: 'Galician' },
+  'euskara':                { flag: 'es', name: 'Basque' },
+  'bahasa indonesia':       { flag: 'id', name: 'Indonesian' },
+  'bahasa melayu':          { flag: 'my', name: 'Malay' },
+  'tiếng việt':             { flag: 'vn', name: 'Vietnamese' },
+  'हिन्दी':                   { flag: 'in', name: 'Hindi' },
+  'فارسی':                  { flag: 'ir', name: 'Persian' },
+  'اردو':                   { flag: 'pk', name: 'Urdu' },
+  'azərbaycanca':           { flag: 'az', name: 'Azerbaijani' },
+  'ქართული':               { flag: 'ge', name: 'Georgian' },
+  'қазақша':                { flag: 'kz', name: 'Kazakh' },
+  'қазақ тілі':             { flag: 'kz', name: 'Kazakh' },
+  'oʻzbekcha':              { flag: 'uz', name: 'Uzbek' },
+  'монгол':                 { flag: 'mn', name: 'Mongolian' },
+  'filipino':               { flag: 'ph', name: 'Filipino' },
+  'tagalog':                { flag: 'ph', name: 'Filipino' },
+  'বাংলা':                   { flag: 'bd', name: 'Bengali' },
+  'தமிழ்':                   { flag: 'in', name: 'Tamil' },
+  'తెలుగు':                  { flag: 'in', name: 'Telugu' },
+  'മലയാളം':                { flag: 'in', name: 'Malayalam' },
+  'ဗမာစာ':                  { flag: 'mm', name: 'Burmese' },
+  'ភាសាខ្មែរ':                { flag: 'kh', name: 'Khmer' },
+  'ລາວ':                    { flag: 'la', name: 'Lao' },
+  'සිංහල':                   { flag: 'lk', name: 'Sinhala' },
+  'kiswahili':              { flag: 'tz', name: 'Swahili' },
+  'gaeilge':                { flag: 'ie', name: 'Irish' },
+  'cymraeg':                { flag: 'gb', name: 'Welsh' },
+  'malti':                  { flag: 'mt', name: 'Maltese' },
+  'lëtzebuergesch':         { flag: 'lu', name: 'Luxembourgish' },
+  'norsk bokmål':           { flag: 'no', name: 'Norwegian' },
+  'norsk nynorsk':          { flag: 'no', name: 'Norwegian' },
 };
 
 /** Simple base-name lookup: "Spanish" -> flag+name from LANG_MAP */
@@ -182,25 +280,33 @@ export function resolveLang(codeOrName: string): { flag: string; name: string } 
 export function buildLanguageList(languages: Record<string, unknown> | string[] | null | undefined): { flag: string; name: string }[] {
   if (!languages) return [];
 
-  // Collect all language identifiers (try both keys and values)
-  const raw: string[] = [];
+  // Each source entry is ONE language with up to two spellings: for object
+  // input the key is usually a code ("be") and the value its native name
+  // ("беларуская"). Both used to be emitted separately, which doubled every
+  // language the maps don't know - resolve them together instead.
+  const candidates: string[][] = [];
   if (Array.isArray(languages)) {
-    raw.push(...languages.map(String));
+    for (const item of languages) candidates.push([String(item)]);
   } else if (typeof languages === 'object') {
     for (const [k, v] of Object.entries(languages)) {
-      // If value is a non-empty string and key looks like a code, use both
-      // If key looks like a full name ("English"), use key
-      raw.push(k);
-      if (typeof v === 'string' && v.trim() && v !== k) raw.push(v);
+      const pair = [k];
+      if (typeof v === 'string' && v.trim() && v !== k) pair.push(v);
+      candidates.push(pair);
     }
   }
-  if (raw.length === 0) return [];
+  if (candidates.length === 0) return [];
 
   const seen = new Set<string>();
   const result: { flag: string; name: string }[] = [];
 
-  for (const item of raw) {
-    const resolved = resolveLang(item);
+  for (const spellings of candidates) {
+    // Prefer the spelling that resolves to a known flag; when neither does,
+    // fall back to the native name (more readable than a bare 2-letter code).
+    let resolved = resolveLang(spellings[0]);
+    if (!resolved.flag && spellings.length > 1) {
+      const alt = resolveLang(spellings[1]);
+      if (alt.flag || alt.name.length > resolved.name.length) resolved = alt;
+    }
     // Deduplicate by normalized name (Portuguese, Chinese, English, etc.)
     const dedup = resolved.name.toLowerCase();
     if (seen.has(dedup)) continue;

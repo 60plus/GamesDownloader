@@ -1066,13 +1066,17 @@ onBeforeUnmount(() => {
   padding: 0; border-radius: var(--radius-sm);
   border: 1px solid var(--glass-border); background: var(--glass-bg);
   cursor: pointer; transition: all var(--transition); overflow: hidden;
-  height: 260px;
+  /* min- (not fixed) height, like GameListRow's own rule: this scoped copy
+     also hits the child component's root and a fixed height would clip a
+     quick-facts column taller than the row (e.g. many language flags). */
+  min-height: 260px;
 }
 .list-row:hover { background: var(--glass-highlight); border-color: color-mix(in srgb, var(--pl) 30%, transparent); }
 
 .list-cover-wrap { flex-shrink: 0; width: 200px; padding: 10px; box-sizing: border-box; }
 .list-cover-wrap .cover-img-wrap {
-  width: 100%; height: 240px; border-radius: var(--radius-sm, 8px); overflow: hidden;
+  /* 100% (not fixed) so the cover tracks a grown row, like GameListRow's rule */
+  width: 100%; height: 100%; border-radius: var(--radius-sm, 8px); overflow: hidden;
   background: var(--bg2); border: 1px solid var(--glass-border);
   box-shadow: 0 6px 24px rgba(0,0,0,0.45); position: relative;
   transition: transform 0.35s cubic-bezier(.23,1,.32,1), box-shadow 0.2s ease;
