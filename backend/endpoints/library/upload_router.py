@@ -268,6 +268,7 @@ async def _url_upload_job(
 ) -> None:
     from handler.socket_handler import sio
     import httpx
+    from utils.net_guard import make_request_guard
 
     dest_path = dest_dir / filename
     size = 0
@@ -275,7 +276,13 @@ async def _url_upload_job(
     last_emit = 0.0
     try:
         timeout = httpx.Timeout(30.0, read=300.0)
-        async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+        # SSRF guard: block localhost / cloud-metadata / link-local on every hop
+        # (initial + redirects), but allow RFC-1918 LAN so a self-hoster can pull
+        # a file from a NAS on their own network.
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=timeout,
+            event_hooks={"request": [make_request_guard(allow_private_lan=True)]},
+        ) as client:
             async with client.stream("GET", url) as resp:
                 resp.raise_for_status()
                 # Prefer the server-provided name (Content-Disposition).
@@ -345,6 +352,15 @@ async def upload_game_file_from_url(request: Request, game_id: int, body: Upload
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(status_code=400, detail="Only http(s) URLs are supported")
+
+    # Fail fast on an obviously-internal target (localhost / cloud metadata /
+    # link-local). LAN is allowed here (self-hosters pull from their own NAS);
+    # the download job re-checks every redirect hop with the same policy.
+    from utils.net_guard import assert_fetch_allowed, UnsafeURLError
+    try:
+        assert_fetch_allowed(url, allow_private_lan=True)
+    except UnsafeURLError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     filename = _safe_filename(parsed.path)
     dest_dir = _dest_dir_for(game.title, body.os, body.file_type)

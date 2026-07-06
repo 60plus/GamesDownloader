@@ -610,6 +610,29 @@ async def install_from_store(request: Request) -> dict:
     if not download_url:
         raise HTTPException(status_code=400, detail="downloadUrl is required")
 
+    # Only install from GitHub or a configured store-source host. Without this,
+    # an attacker-supplied downloadUrl points install_plugin_from_url (which runs
+    # pip on the package) at any server, turning this into arbitrary-URL RCE.
+    # Allowlisted hosts skip an IP check, so a LAN-hosted store (e.g. a local
+    # gitea) keeps working.
+    from urllib.parse import urlparse
+    dl_host = (urlparse(download_url).hostname or "").lower()
+    if urlparse(download_url).scheme not in ("http", "https") or not dl_host:
+        raise HTTPException(status_code=400, detail="Invalid download URL")
+    allowed_hosts = {"github.com", "raw.githubusercontent.com",
+                     "objects.githubusercontent.com", "codeload.github.com"}
+    async with async_session_factory() as session:
+        result = await session.execute(select(PluginStoreSource))
+        for src in result.scalars().all():
+            h = (urlparse(src.url).hostname or "").lower()
+            if h:
+                allowed_hosts.add(h)
+    if dl_host not in allowed_hosts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Refusing to install from '{dl_host}': not a configured store source",
+        )
+
     try:
         manifest = await install_plugin_from_url(download_url)
     except ValueError as exc:
