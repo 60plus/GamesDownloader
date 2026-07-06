@@ -578,3 +578,42 @@ export function resolveDetailRows(
   }
   return out;
 }
+
+// ── Theme home sections ─────────────────────────────────────────────────────
+// A theme that renders EXTRA sections on its home page (trailer shelves, genre
+// tiles, top-rated rails...) registers them here so Settings -> Libraries can
+// offer per-user on/off toggles next to the core library visibility. The
+// hidden set is stored per-theme in the theme store (themeSettings), so each
+// theme remembers its own selection. A theme layout registers on mount and
+// unregisters on unmount, so only the ACTIVE layout's sections are listed.
+
+export interface ThemeHomeSection {
+  /** Stable section id - the per-user setting key (e.g. "trailers"). */
+  id: string;
+  /** Display label: an i18n key when translatable, else shown verbatim. */
+  label: string;
+}
+
+const _homeSections = shallowReactive<ThemeHomeSection[]>([]);
+
+/** Register a theme's togglable home sections. Returns an unregister fn. */
+export function registerHomeSections(sections: ThemeHomeSection[]): () => void {
+  const valid = (sections || []).filter((s) => s && s.id);
+  for (const s of valid) {
+    const i = _homeSections.findIndex((x) => x.id === s.id);
+    if (i >= 0) _homeSections.splice(i, 1, s);
+    else _homeSections.push(s);
+  }
+  const ids = valid.map((s) => s.id);
+  return () => {
+    for (const id of ids) {
+      const i = _homeSections.findIndex((x) => x.id === id);
+      if (i >= 0) _homeSections.splice(i, 1);
+    }
+  };
+}
+
+/** The active theme's registered home sections (reactive). */
+export function getHomeSections(): ThemeHomeSection[] {
+  return _homeSections;
+}

@@ -207,6 +207,22 @@
         <span v-if="!recentLibs.length" class="ls-sec-desc" style="margin:0;">{{ t('appearance.recent_libs_empty') }}</span>
       </div>
     </div>
+
+    <!-- Theme home sections (only when the active theme registered any) -->
+    <div v-if="themeHomeSections.length" class="ls-section">
+      <div class="ls-sec-title">{{ t('appearance.home_sections') }}</div>
+      <div class="ls-sec-desc">{{ t('appearance.home_sections_desc') }}</div>
+      <div
+        class="ls-recent-list"
+        @mouseenter="setHint(t('appearance.home_sections'), t('hint.home_sections'))"
+        @mouseleave="clearHint()"
+      >
+        <label v-for="s in themeHomeSections" :key="s.id" class="ls-recent-item">
+          <input type="checkbox" :checked="!themeStore.isHomeSectionHidden(s.id)" @change="themeStore.toggleHomeSection(s.id)" />
+          <span>{{ t(s.label, s.label) }}</span>
+        </label>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -221,6 +237,7 @@ import { useDialog } from '@/composables/useDialog'
 import { useI18n } from '@/i18n'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import LibraryIconPicker from '@/components/common/LibraryIconPicker.vue'
+import { getHomeSections } from '@/themes'
 import type { LibraryInfo } from '@/stores/libraries'
 
 const { t } = useI18n()
@@ -239,6 +256,9 @@ function onIconHover(name: string | null) {
   if (name) setHint(t('libraries.icon'), name)
   else clearHint()
 }
+
+// Home sections the ACTIVE theme registered (empty for themes without extras).
+const themeHomeSections = computed(() => getHomeSections())
 
 // Per-user "recently added" picker (per theme). Couch has no home feed.
 const recentLibs = computed(() => libsStore.visible.filter(l => l.kind !== 'couch'))

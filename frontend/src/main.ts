@@ -9,8 +9,9 @@ import "flag-icons/css/flag-icons.min.css";
 import { createAppRouter } from "./plugins/router";
 import { createAppPinia } from "./plugins/pinia";
 import { vuetify } from "./plugins/vuetify";
-import { registerTheme, registerPluginLayout, registerPluginCouchMode, registerMetadataTab, registerDetailRow } from "./themes/index";
+import { registerTheme, registerPluginLayout, registerPluginCouchMode, registerMetadataTab, registerDetailRow, resolveDetailRows, registerHomeSections, getHomeSections } from "./themes/index";
 import { useCouchNav, navPaused as couchNavPaused } from "./composables/useCouchNav";
+import { useDialog } from "./composables/useDialog";
 import { useCouchTheme } from "./composables/useCouchTheme";
 import { getEjsCore } from "./utils/ejsCores";
 import { buildLanguageList } from "./utils/langMap";
@@ -26,8 +27,11 @@ import { LIBRARY_ICONS, LIBRARY_ICON_NAMES, libraryIconMarkup } from "./lib/libr
 import client from "./services/api/client";
 
 import DownloadManager from "./components/gog/DownloadManager.vue";
+import DownloadDialog from "./components/gog/DownloadDialog.vue";
 import RandomGamePicker from "./components/RandomGamePicker.vue";
 import AmbientBackground from "./components/common/AmbientBackground.vue";
+import GameRequestDialog from "./components/GameRequestDialog.vue";
+import { openMetadataEditor, openCollectionEditor, closeMetadataEditor, closeCollectionEditor, openRomMetadataEditor, closeRomMetadataEditor } from "./lib/pluginUi";
 
 import "@mdi/font/css/materialdesignicons.css";
 import "./styles/base.css";
@@ -42,8 +46,14 @@ app.use(vuetify);
 
 // Register shared components globally so plugin themes can use them
 app.component("DownloadManager", DownloadManager);
+// GOG server-download dialog (v-model + gog-id + game-title) so a plugin theme
+// rendering its own GOG detail page reuses the core download flow.
+app.component("DownloadDialog", DownloadDialog);
 app.component("RandomGamePicker", RandomGamePicker);
 app.component("AmbientBackground", AmbientBackground);
+// Game request dialog (visible + default-platform + @close) so plugin themes
+// can offer the "Request a game" flow without re-implementing it.
+app.component("GameRequestDialog", GameRequestDialog);
 
 // ── Expose plugin API on window for compiled theme plugins ──────────────────
 // Theme plugins compiled on container startup import from window.__GD__
@@ -68,6 +78,32 @@ function createSafeAuthStore() {
       }
     });
     return _proxy;
+  };
+}
+
+// Progress events plugins may subscribe to via __GD__.events - a narrow,
+// read-only bridge; raw socket emit/on stays off-limits.
+const PLUGIN_SOCKET_EVENTS = new Set([
+  "torrent:download_progress",
+  "torrent:download_complete",
+  "torrent:download_error",
+  "upload:url_progress",
+  "upload:url_complete",
+  "upload:url_error",
+]);
+
+function createPluginEventBridge() {
+  return {
+    /** Subscribe to a whitelisted server event. Returns an unsubscribe fn. */
+    on(event: string, cb: (data: any) => void): () => void {
+      if (!PLUGIN_SOCKET_EVENTS.has(event)) {
+        console.warn(`[__GD__.events] event "${event}" is not exposed to plugins`);
+        return () => {};
+      }
+      const store = useSocketStore();
+      store.socket?.on(event, cb);
+      return () => store.socket?.off(event, cb);
+    },
   };
 }
 
@@ -98,6 +134,9 @@ function createSafeSocketStore() {
     collections: useCollectionsStore,
   },
   api: client,
+  // Narrow subscription bridge for server progress events (whitelist only):
+  // __GD__.events.on("upload:url_progress", cb) -> unsubscribe fn.
+  events: createPluginEventBridge(),
   // Shared utility helpers for theme/plugin authors (plugins cannot import
   // @/utils directly - they only have window.__GD__). buildLanguageList(dict)
   // returns the same {name, flag} list the built-in themes use for language
@@ -111,6 +150,22 @@ function createSafeSocketStore() {
   registerPluginCouchMode,
   registerMetadataTab,
   registerDetailRow,
+  // Consumer side of registerDetailRow, for plugin themes that render their
+  // own game detail pages and must show plugin rows natively.
+  resolveDetailRows,
+  // Theme-declared home sections. A theme layout with its own extra home-page
+  // sections (trailer shelf, genre tiles...) calls register() on mount (and the
+  // returned unregister on unmount); Settings -> Libraries then offers per-user
+  // on/off toggles for them. The theme reads isHidden(id) to skip a section and
+  // re-reads on the `gd-theme-updated` DOM event (fired when a toggle changes).
+  homeSections: {
+    /** register([{id, label}]) -> unregister(). `label` may be an i18n key. */
+    register: registerHomeSections,
+    /** The active theme's registered sections (reactive; used by Settings). */
+    list: getHomeSections,
+    /** Has this user switched the section off? (per-user, per-theme) */
+    isHidden: (id: string) => useThemeStore().isHomeSectionHidden(id),
+  },
   // Public, theme/plugin-facing API for the per-theme "recently added" home
   // feed. Themes call recentLibraries.get() to learn which library slugs the
   // user wants a recently-added row for (already filtered to visible, non-couch
@@ -161,6 +216,27 @@ function createSafeSocketStore() {
     useCouchNav,
     couchNavPaused,
     useCouchTheme,
+  },
+  // Imperative access to the shared core editors, for themes that render their
+  // own detail pages. The panels stay core components (plugin metadata tabs
+  // mount inside them); PluginUiHost in App.vue renders the requested one.
+  // openMetadataEditor({game, apiPrefix?, onSaved?, onClosed?});
+  // openCollectionEditor(collectionOrSlug, {onUpdated?, onDeleted?, onClosed?}).
+  // Saves also dispatch 'gd-game-updated' / 'gd-collection-updated' DOM events.
+  ui: {
+    openMetadataEditor,
+    openCollectionEditor,
+    closeMetadataEditor,
+    closeCollectionEditor,
+    // openRomMetadataEditor({rom, onSaved?, onClosed?}) - the emulation twin;
+    // saves also dispatch a 'gd-rom-updated' DOM event.
+    openRomMetadataEditor,
+    closeRomMetadataEditor,
+    // Styled in-app dialogs (same look in every theme) so plugins never have
+    // to fall back to the browser-native window.confirm()/alert() popups.
+    // confirm(msg, {title?, danger?, confirmText?, cancelText?}) -> Promise<boolean>
+    confirm: (msg: string, opts?: Record<string, unknown>) => useDialog().gdConfirm(msg, opts as any),
+    alert: (msg: string, opts?: Record<string, unknown>) => useDialog().gdAlert(msg, opts as any),
   },
   getEjsCore,
   // Built-in library icon set, for themes/plugins that render library glyphs

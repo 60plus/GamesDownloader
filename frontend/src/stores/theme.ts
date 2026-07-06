@@ -218,6 +218,23 @@ export const useThemeStore = defineStore("theme", () => {
     setThemeSettingValue("recentLibraries", slugs);
   }
 
+  // Per-theme hidden home sections: ids of theme-registered home sections
+  // (registerHomeSections) this user switched off. Unset = show everything.
+  function getHiddenHomeSections(): string[] {
+    const v = themeSettings.value[themeId.value]?.hiddenHomeSections;
+    return Array.isArray(v) ? (v as string[]) : [];
+  }
+  function isHomeSectionHidden(id: string): boolean {
+    return getHiddenHomeSections().includes(id);
+  }
+  function toggleHomeSection(id: string) {
+    const cur = getHiddenHomeSections();
+    setThemeSettingValue(
+      "hiddenHomeSections",
+      cur.includes(id) ? cur.filter(s => s !== id) : [...cur, id],
+    );
+  }
+
   // Per-user library visibility (global across themes). Hiding a library only
   // removes it from this user's home page / nav; it does not change access.
   function getHiddenLibraries(): string[] { return hiddenLibraries.value; }
@@ -384,6 +401,7 @@ export const useThemeStore = defineStore("theme", () => {
     setTheme, setSkin, toggleAnimations, toggleAmbient, toggleGrid, toggleOrbMotion,
     getThemeSettingValue, setThemeSettingValue, resetThemeSettings,
     getRecentLibraries, setRecentLibraries,
+    getHiddenHomeSections, isHomeSectionHidden, toggleHomeSection,
     getHiddenLibraries, isLibraryHidden, setHiddenLibraries, toggleHiddenLibrary,
     getLibraryOrder, setLibraryOrder,
     applyToDOM,

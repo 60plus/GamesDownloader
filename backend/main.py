@@ -26,7 +26,7 @@ from fastapi_pagination import add_pagination
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from config import DEBUG, DEV_HOST, DEV_PORT, RESOURCES_PATH
+from config import DEBUG, DEV_HOST, DEV_PORT, GD_VERSION, RESOURCES_PATH
 from handler.auth.middleware import AuthMiddleware
 from middleware.ip_allowlist import IpAllowlistMiddleware
 from middleware.etag import ETagMiddleware
@@ -385,7 +385,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="GamesDownloader API",
-    version="3.0.0",
+    version=GD_VERSION,
     description="Self-hosted game library - GOG + ROMs + Emulation + Plugins",
     lifespan=lifespan,
     docs_url="/api/docs" if DEBUG else None,
@@ -556,7 +556,7 @@ socket_app = socketio.ASGIApp(sio, app)
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/api/health", tags=["system"])
 async def health_check() -> dict:
-    return {"status": "ok", "version": "3.0.0"}
+    return {"status": "ok", "version": GD_VERSION}
 
 
 # ── Static: serve /resources/ ─────────────────────────────────────────────────

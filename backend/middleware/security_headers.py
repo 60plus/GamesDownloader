@@ -87,7 +87,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data: https:; "
             "connect-src 'self'; "
-            "media-src 'self' blob:; "
+            # https: mirrors img-src - plugin store entries may showcase webm
+            # clips next to screenshots, and themes may stream remote video
+            "media-src 'self' blob: https:; "
             "worker-src 'self' blob:; "
             # YouTube allowed for the trailer embeds (game detail / home
             # players). frame-src governs what WE may embed, so this does not

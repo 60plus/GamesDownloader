@@ -272,6 +272,12 @@ class PluginManager:
         results = self._pm.hook.metadata_provider_id()
         return [r for r in results if r]
 
+    def get_plugin_instances(self) -> list[Any]:
+        """Return the registered plugin instances - lets callers probe
+        per-plugin optional hooks (a global hook call loses the pairing
+        between plugins and their results)."""
+        return list(self._pm.get_plugins())
+
     def get_download_providers(self) -> list[str]:
         """Return IDs of all loaded download providers."""
         results = self._pm.hook.download_provider_id()

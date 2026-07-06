@@ -47,7 +47,10 @@
     <!-- Available Plugins -->
     <section class="ps-section">
       <div class="ps-section-head">
-        <h2 class="ps-section-title">{{ t('pstore.available') }}</h2>
+        <div class="ps-section-title-row">
+          <h2 class="ps-section-title">{{ t('pstore.available') }}</h2>
+          <span v-if="gdVersion" class="ps-gd-version">{{ t('pstore.gd_version', 'GD Version') }}: {{ gdVersion }}</span>
+        </div>
         <p class="ps-section-sub">{{ t('pstore.available_desc') }}</p>
       </div>
 
@@ -97,14 +100,20 @@
             <span v-if="p._source" class="ps-card-source">{{ p._source }}</span>
           </div>
           <div class="ps-card-action" @click.stop>
-            <template v-if="p.installed && p.updateAvailable">
+            <template v-if="p.installed && p.updateAvailable && !gdTooOld(p)">
               <button class="ps-btn ps-btn--update" :disabled="installing === p.id" @click="showUpdateConfirm(p)">
                 <span v-if="installing === p.id" class="ps-spinner" />
                 {{ t('pstore.update') }}
               </button>
             </template>
+            <template v-else-if="p.installed && p.updateAvailable">
+              <span class="ps-blocked-badge">{{ t('pstore.requires_gd', 'Requires GD') }} {{ p.gdVersionMin }}+</span>
+            </template>
             <template v-else-if="p.installed">
               <span class="ps-installed-badge">{{ t('pstore.installed') }}</span>
+            </template>
+            <template v-else-if="gdTooOld(p)">
+              <span class="ps-blocked-badge">{{ t('pstore.requires_gd', 'Requires GD') }} {{ p.gdVersionMin }}+</span>
             </template>
             <template v-else>
               <button class="ps-btn ps-btn--primary" :disabled="installing === p.id" @click="installPlugin(p)">
@@ -141,10 +150,13 @@
             </div>
             <p class="ps-modal-desc">{{ detailPlugin.description }}</p>
             <div v-if="detailPlugin.screenshots?.length" class="ps-modal-screenshots">
-              <img v-for="(s, i) in detailPlugin.screenshots" :key="i" :src="s" class="ps-modal-screenshot" @click="lightboxScreenshots = detailPlugin.screenshots; lightboxIdx = i" />
+              <template v-for="(s, i) in detailPlugin.screenshots" :key="i">
+                <video v-if="isVideo(s)" :src="s" class="ps-modal-screenshot" autoplay muted loop playsinline @click="lightboxScreenshots = detailPlugin.screenshots; lightboxIdx = i" />
+                <img v-else :src="s" class="ps-modal-screenshot" @click="lightboxScreenshots = detailPlugin.screenshots; lightboxIdx = i" />
+              </template>
             </div>
             <div class="ps-modal-details">
-              <div v-if="detailPlugin.gdVersionMin"><strong>Min GD Version:</strong> {{ detailPlugin.gdVersionMin }}</div>
+              <div v-if="detailPlugin.gdVersionMin" :class="{ 'ps-min-gd-bad': gdTooOld(detailPlugin) }"><strong>Min GD Version:</strong> {{ detailPlugin.gdVersionMin }}<template v-if="gdVersion"> ({{ t('pstore.gd_version', 'GD Version') }}: {{ gdVersion }})</template></div>
               <div v-if="detailPlugin.repository"><strong>Repository:</strong> <a :href="detailPlugin.repository" target="_blank">{{ detailPlugin.repository }}</a></div>
               <div v-if="detailPlugin.updated"><strong>Updated:</strong> {{ detailPlugin.updated }}</div>
               <div v-if="detailPlugin.downloadSize"><strong>Size:</strong> {{ formatSize(detailPlugin.downloadSize) }}</div>
@@ -156,6 +168,9 @@
             <div class="ps-modal-actions">
               <template v-if="detailPlugin.installed && !detailPlugin.updateAvailable">
                 <span class="ps-installed-badge">{{ t('pstore.installed') }} (v{{ detailPlugin.installedVersion }})</span>
+              </template>
+              <template v-else-if="gdTooOld(detailPlugin)">
+                <span class="ps-blocked-badge">{{ t('pstore.requires_gd', 'Requires GD') }} {{ detailPlugin.gdVersionMin }}+</span>
               </template>
               <template v-else-if="detailPlugin.installed && detailPlugin.updateAvailable">
                 <span class="ps-version-transition">v{{ detailPlugin.installedVersion }} → v{{ detailPlugin.version }}</span>
@@ -196,7 +211,8 @@
           <button v-if="lightboxIdx > 0" class="ps-lightbox-nav ps-lightbox-prev" @click.stop="lightboxIdx--">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
-          <img :src="lightboxImg" class="ps-lightbox-img" @click.stop />
+          <video v-if="isVideo(lightboxImg)" :src="lightboxImg" class="ps-lightbox-img" controls autoplay loop playsinline @click.stop />
+          <img v-else :src="lightboxImg" class="ps-lightbox-img" @click.stop />
           <button v-if="lightboxIdx < lightboxScreenshots.length - 1" class="ps-lightbox-nav ps-lightbox-next" @click.stop="lightboxIdx++">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
@@ -234,6 +250,7 @@ const addingSource = ref(false)
 const sourceError = ref('')
 
 const plugins = ref<StorePlugin[]>([])
+const gdVersion = ref('')
 const browsing = ref(false)
 const fetchErrors = ref<{ source: string; error: string }[]>([])
 const search = ref('')
@@ -281,9 +298,31 @@ const filteredPlugins = computed(() => {
   return list
 })
 
+function versionLt(a: string, b: string): boolean {
+  const pa = (a.match(/\d+/g) || []).map(Number)
+  const pb = (b.match(/\d+/g) || []).map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0
+    if (x !== y) return x < y
+  }
+  return false
+}
+
+// Server version below the plugin's declared minimum - install/update blocked
+// (the backend refuses too, this only surfaces it before the attempt).
+function gdTooOld(p: StorePlugin): boolean {
+  return !!(p.gdVersionMin && gdVersion.value && versionLt(gdVersion.value, p.gdVersionMin))
+}
+
 function typeBadgeClass(type: string): string {
   const map: Record<string, string> = { metadata: 'sp-badge--metadata', download: 'sp-badge--download', library: 'sp-badge--library', theme: 'sp-badge--theme', widget: 'sp-badge--widget', lifecycle: 'sp-badge--lifecycle' }
   return map[type] || 'sp-badge--default'
+}
+
+// Store entries may mix video clips (webm/mp4) into screenshots - render
+// those as looping <video> instead of <img>.
+function isVideo(url: string): boolean {
+  return /\.(webm|mp4)(\?|$)/i.test(url || '')
 }
 
 function iconUrl(url: string | undefined): string {
@@ -336,11 +375,13 @@ async function fetchPlugins() {
     const { data } = await client.get('/plugins/store/browse')
     plugins.value = data.plugins || []
     fetchErrors.value = data.errors || []
+    gdVersion.value = data.gd_version || ''
   } catch { /* ignore */ }
   finally { browsing.value = false }
 }
 
 async function installPlugin(p: StorePlugin) {
+  if (gdTooOld(p)) return
   const ok = await gdConfirm(t('pstore.install_confirm', `Install plugin "${p.name}" v${p.version}?`), { title: t('pstore.install', 'Install Plugin'), confirmText: t('pstore.install', 'Install') })
   if (!ok) return
   installing.value = p.id; statusMsg.value = ''
@@ -387,6 +428,8 @@ onMounted(async () => {
 /* Sections */
 .ps-section { display: flex; flex-direction: column; gap: var(--space-3, 12px); }
 .ps-section-head { padding: 0 2px; }
+.ps-section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ps-gd-version { padding: 3px 10px; border-radius: 99px; border: 1px solid color-mix(in srgb, var(--pl) 40%, transparent); background: color-mix(in srgb, var(--pl) 15%, transparent); color: var(--pl-light, #fff); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .ps-section-title { font-size: var(--fs-md, 14px); font-weight: 700; color: var(--text); margin: 0 0 2px; }
 .ps-section-sub { font-size: var(--fs-sm, 12px); color: var(--muted); margin: 0; }
 
@@ -436,6 +479,8 @@ onMounted(async () => {
 .ps-card-footer { display: flex; gap: var(--space-3, 12px); font-size: 11px; color: var(--muted); margin-top: auto; }
 .ps-card-action { position: absolute; top: 14px; right: 14px; }
 .ps-installed-badge { padding: 4px 10px; border-radius: 99px; background: rgba(74,222,128,.12); color: #4ade80; font-size: 11px; font-weight: 600; border: 1px solid rgba(74,222,128,.3); }
+.ps-blocked-badge { padding: 4px 10px; border-radius: 99px; background: rgba(248,113,113,.12); color: #f87171; font-size: 11px; font-weight: 600; border: 1px solid rgba(248,113,113,.3); white-space: nowrap; }
+.ps-min-gd-bad, .ps-min-gd-bad strong { color: #f87171; }
 
 /* Loading & Empty */
 .ps-loading { padding: var(--space-8, 32px); text-align: center; color: var(--muted); font-size: 13px; }

@@ -30,6 +30,13 @@ class MetadataProviderSpec:
         """Return a unique identifier for this provider (e.g. 'igdb')."""
 
     @hookspec
+    def metadata_provider_ratings(self) -> bool:
+        """Whether this provider returns numeric 0-10 game ratings (rendered
+        and edited as scores under its meta_ratings key). Badge-style
+        providers (tiers, statuses) return False. Providers without this
+        hook are assumed to return ratings."""
+
+    @hookspec
     def metadata_search_game(self, query: str) -> list[dict[str, Any]]:
         """Search for games by title. Return list of match dicts."""
 

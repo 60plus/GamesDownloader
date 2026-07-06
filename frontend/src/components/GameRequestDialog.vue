@@ -301,8 +301,10 @@ import { useI18n } from '@/i18n'
 import client from '@/services/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useRequestNotify } from '@/composables/useRequestNotify'
+import { useDialog } from '@/composables/useDialog'
 
 const { t } = useI18n()
+const { gdConfirm } = useDialog()
 
 const props = defineProps<{ visible: boolean; defaultPlatform?: string }>()
 const emit  = defineEmits(['close'])
@@ -565,7 +567,8 @@ async function saveNote() {
 }
 
 async function deleteReq(r: GameReq) {
-  if (!confirm(t('requests.delete_request'))) return
+  // Styled in-app confirm - not the browser-native popup.
+  if (!await gdConfirm(t('requests.delete_request'), { danger: true })) return
   try { await client.delete(`/requests/${r.id}`); requests.value = requests.value.filter(x => x.id !== r.id) } catch { /* ignore */ }
 }
 

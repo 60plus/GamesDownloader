@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -15,12 +16,17 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from config import PLUGINS_PATH
+from config import GD_VERSION, PLUGINS_PATH
 
 logger = logging.getLogger(__name__)
 
 REQUIRED_MANIFEST_FIELDS = ["id", "name", "version", "author", "type", "entry"]
 ALLOWED_TYPES = ["metadata", "download", "library", "theme", "widget", "lifecycle"]
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """Lenient version parse: '1.0.15' / 'v1.0' -> numeric tuple, () if none."""
+    return tuple(int(p) for p in re.findall(r"\d+", v or "")[:3])
 
 
 async def install_plugin_from_url(url: str) -> dict:
@@ -120,6 +126,19 @@ async def install_plugin_from_zip(zip_path: Path) -> dict:
                 f"Invalid plugin type '{manifest['type']}'. "
                 f"Allowed: {', '.join(ALLOWED_TYPES)}"
             )
+
+        # 3.5 Version gate: refuse plugins that require a newer GD than this
+        # image. Unparseable values skip the check rather than block installs.
+        min_gd = str(manifest.get("min_gd_version") or "").strip()
+        if min_gd:
+            need = _version_tuple(min_gd)
+            have = _version_tuple(GD_VERSION)
+            if need and have and have < need:
+                raise ValueError(
+                    f"Plugin '{manifest.get('name', manifest['id'])}' requires "
+                    f"GamesDownloader {min_gd} or newer, but this server runs "
+                    f"{GD_VERSION}. Update GamesDownloader first."
+                )
 
         # 4. Security: plugin_id must not contain path separators or dots
         plugin_id = manifest["id"]

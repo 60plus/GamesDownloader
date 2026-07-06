@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from config import PLUGINS_PATH
+from config import GD_VERSION, PLUGINS_PATH
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.config.config_handler import config_handler
@@ -467,7 +467,7 @@ async def browse_store(request: Request) -> dict:
                 errors.append({"source": src.name, "error": str(exc)})
                 logger.warning("Failed to fetch store %s: %s", src.url, exc)
 
-    return {"plugins": all_plugins, "errors": errors}
+    return {"plugins": all_plugins, "errors": errors, "gd_version": GD_VERSION}
 
 
 @protected_route(plugins_router.get, "/store/updates", scopes=[Scope.PLUGINS_READ])
@@ -708,27 +708,47 @@ async def get_plugin_i18n():
     plugins_router.get, "/metadata/providers", scopes=[Scope.PLUGINS_READ]
 )
 async def plugin_metadata_providers(request: Request) -> list[dict]:
-    """Return list of installed metadata provider plugins with id, name, has_logo."""
+    """Return list of installed metadata provider plugins with id, name,
+    logo_url and whether the provider serves numeric ratings (badge-style
+    providers like Steam Deck tiers report ratings=False)."""
+    from pathlib import Path
     providers = []
     try:
-        ids = plugin_manager.hook.metadata_provider_id()
-        names = plugin_manager.hook.metadata_provider_name()
-        for pid, pname in zip(ids, names):
-            if pid:
-                # Resolve plugin_id for logo URL (provider_id may differ from plugin_id)
-                from pathlib import Path
-                plugin_id = pid
-                if not Path(PLUGINS_PATH, pid).is_dir():
-                    # Try common suffixes
-                    for suffix in ["-metadata", "-scraper", "-plugin"]:
-                        if Path(PLUGINS_PATH, pid + suffix).is_dir():
-                            plugin_id = pid + suffix
-                            break
-                providers.append({
-                    "id": pid,
-                    "name": pname or pid,
-                    "logo_url": f"/api/plugins/{plugin_id}/logo",
-                })
+        for plug in plugin_manager.get_plugin_instances():
+            pid_fn = getattr(plug, "metadata_provider_id", None)
+            if not callable(pid_fn):
+                continue
+            try:
+                pid = pid_fn()
+            except Exception:
+                continue
+            if not pid:
+                continue
+            name_fn = getattr(plug, "metadata_provider_name", None)
+            try:
+                pname = name_fn() if callable(name_fn) else None
+            except Exception:
+                pname = None
+            ratings_fn = getattr(plug, "metadata_provider_ratings", None)
+            try:
+                # No hook = classic rating provider (backward compatible).
+                ratings = bool(ratings_fn()) if callable(ratings_fn) else True
+            except Exception:
+                ratings = True
+            # Resolve plugin_id for logo URL (provider_id may differ from plugin_id)
+            plugin_id = pid
+            if not Path(PLUGINS_PATH, pid).is_dir():
+                # Try common suffixes
+                for suffix in ["-metadata", "-scraper", "-plugin"]:
+                    if Path(PLUGINS_PATH, pid + suffix).is_dir():
+                        plugin_id = pid + suffix
+                        break
+            providers.append({
+                "id": pid,
+                "name": pname or pid,
+                "logo_url": f"/api/plugins/{plugin_id}/logo",
+                "ratings": ratings,
+            })
     except Exception as e:
         logger.warning("Failed to list metadata providers: %s", e)
     return providers

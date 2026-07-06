@@ -23,6 +23,12 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return os.environ.get(key, str(default)).lower() in ("1", "true", "yes")
 
 
+# ── Version ───────────────────────────────────────────────────────────────────
+# Bumped in every release commit, so each Docker image reports the version it
+# was built from. Plugin installs are gated on this against the manifest's
+# min_gd_version field.
+GD_VERSION: Final[str] = "1.0.15"
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_PATH: Final[str] = _env("GD_BASE_PATH", "/data")
 CONFIG_PATH: Final[Path] = Path(BASE_PATH) / "config"
