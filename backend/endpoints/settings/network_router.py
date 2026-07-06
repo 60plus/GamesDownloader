@@ -30,11 +30,12 @@ network_router = APIRouter(
 # ── Pydantic models ─────────────────────────────────────────────────────────────
 
 class NetworkConfig(BaseModel):
-    """Trusted proxies, IP allowlist, CORS origins."""
+    """Trusted proxies, IP allowlist, CORS origins, public base URL."""
     trusted_proxies:      str  = ""     # comma-separated IPs / CIDRs
     ip_allowlist_enabled: bool = False
     ip_allowlist:         str  = ""     # comma-separated IPs / CIDRs
     cors_origins:         str  = ""     # comma-separated origins (* = wildcard)
+    public_base_url:      str  = ""     # e.g. https://games.example.com (for reset links)
 
 
 class RegistrationConfig(BaseModel):
@@ -63,6 +64,7 @@ async def get_network_config(request: Request):
         "ip_allowlist_enabled": await config_handler.get_bool("ip_allowlist_enabled", default=False),
         "ip_allowlist":         (await config_handler.get("ip_allowlist"))          or "",
         "cors_origins":         (await config_handler.get("cors_origins"))          or "",
+        "public_base_url":      (await config_handler.get("public_base_url"))       or "",
     }
 
 
@@ -72,6 +74,7 @@ async def save_network_config(request: Request, body: NetworkConfig):
     await config_handler.set("ip_allowlist_enabled", str(body.ip_allowlist_enabled).lower())
     await config_handler.set("ip_allowlist",         body.ip_allowlist)
     await config_handler.set("cors_origins",         body.cors_origins)
+    await config_handler.set("public_base_url",      body.public_base_url.strip().rstrip("/"))
     logger.info("Network security config updated by %s", getattr(request.state, "user", "?"))
     return {"ok": True, "note": "CORS changes take effect after container restart."}
 

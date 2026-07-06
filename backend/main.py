@@ -326,17 +326,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("GamesDownloaderV3 starting up…")
 
     from config import AUTH_SECRET_KEY
-    if AUTH_SECRET_KEY in _WEAK_KEYS or len(AUTH_SECRET_KEY) < 32:
+    # A KNOWN default/empty key lets anyone forge authentication tokens - refuse
+    # to start ALWAYS, even under GD_DEBUG, because signing with a publicly-known
+    # value is a full auth bypass regardless of environment.
+    if AUTH_SECRET_KEY in _WEAK_KEYS:
+        logger.critical(
+            "FATAL: GD_AUTH_SECRET_KEY is a known default/empty value - anyone "
+            "could forge authentication tokens. Set a strong random secret via "
+            "the GD_AUTH_SECRET_KEY environment variable. Refusing to start."
+        )
+        raise SystemExit(1)
+    # A short but non-default secret is weak yet not publicly forgeable: fatal in
+    # production, a warning in debug (so local dev with a short random key runs).
+    if len(AUTH_SECRET_KEY) < 32:
         if not DEBUG:
             logger.critical(
-                "FATAL: GD_AUTH_SECRET_KEY is weak or default. "
-                "Set a strong random secret (min 32 chars) via the GD_AUTH_SECRET_KEY "
-                "environment variable. Refusing to start in production mode."
+                "FATAL: GD_AUTH_SECRET_KEY is too short (min 32 chars). "
+                "Refusing to start in production mode."
             )
             raise SystemExit(1)
         logger.warning(
-            "⚠  GD_AUTH_SECRET_KEY is weak or default! Set a strong random secret "
-            "via the GD_AUTH_SECRET_KEY environment variable before going to production."
+            "⚠  GD_AUTH_SECRET_KEY is shorter than 32 chars. Set a strong random "
+            "secret via the GD_AUTH_SECRET_KEY environment variable before production."
         )
 
     await _init_db()

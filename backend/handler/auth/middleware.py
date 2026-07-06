@@ -86,11 +86,24 @@ class AuthMiddleware(BaseHTTPMiddleware):
         except Exception:
             return
 
+        # Route Basic auth through the same brute-force gate as the login
+        # endpoint. Without this, Basic-auth password guessing bypasses the ban
+        # and rate-limit entirely (it runs on every request, so a banned IP must
+        # not even reach verify_password). Bearer/UI logins are unaffected.
+        from handler.auth import brute_force
+        blocked, _ = await brute_force.check_ip(request)
+        if blocked:
+            return  # IP is banned - leave user unauthenticated (endpoint returns 401)
+
         user = await _load_user(username)
         if user and user.enabled and verify_password(password, user.hashed_password):
+            await brute_force.record_success(request)
             request.state.user = user
             base = scopes_for_role(user.role)
             request.state.scopes = apply_permission_overrides(user.permissions, base)
+        else:
+            # Count the failed attempt (wrong password, unknown or disabled user).
+            await brute_force.record_failure(request)
 
 
 async def _load_user(username: str):

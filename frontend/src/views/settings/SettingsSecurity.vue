@@ -514,6 +514,17 @@
             placeholder="* or https://app.example.com, https://mobile.example.com" />
         </div>
 
+        <!-- Public base URL -->
+        <div class="ss-subsection-title">{{ t('security.public_url', 'Public URL') }}</div>
+        <div class="field-group field-group--wide"
+          @mouseenter="setHint(t('security.public_url', 'Public URL'), t('security.public_url_hint', 'The address users reach this server at. Used to build password-reset links so they cannot be spoofed via request headers. Leave empty to derive from the request.'))"
+          @mouseleave="clearHint()">
+          <label class="field-label">{{ t('security.public_url_label', 'Public base URL') }}</label>
+          <div class="field-hint">{{ t('security.public_url_hint', 'The address users reach this server at (e.g. https://games.example.com). Used to build password-reset links so they cannot be spoofed via request headers. Leave empty to derive from the request.') }}</div>
+          <input v-model="net.public_base_url" class="field-input"
+            placeholder="https://games.example.com" />
+        </div>
+
         <div v-if="netSaved" class="field-ok">{{ t('security.network_saved') }}</div>
         <div class="ss-actions">
           <button class="action-btn action-btn--primary" :disabled="netSaving" @click="saveNet">
@@ -1564,6 +1575,7 @@ interface NetConfig {
   ip_allowlist_enabled: boolean
   ip_allowlist:         string
   cors_origins:         string
+  public_base_url:      string
 }
 
 interface InviteCode {
@@ -1582,6 +1594,7 @@ const net = reactive<NetConfig & { registration_mode: string }>({
   ip_allowlist_enabled: false,
   ip_allowlist:         '',
   cors_origins:         '',
+  public_base_url:      '',
   registration_mode:    'open',
 })
 
@@ -1609,6 +1622,7 @@ async function loadNet() {
     net.ip_allowlist_enabled = cfg.ip_allowlist_enabled ?? false
     net.ip_allowlist         = cfg.ip_allowlist         ?? ''
     net.cors_origins         = cfg.cors_origins         ?? ''
+    net.public_base_url      = cfg.public_base_url      ?? ''
     net.registration_mode    = reg.mode                  ?? 'open'
   } catch { /* ignore */ } finally {
     netLoading.value = false
@@ -1624,6 +1638,7 @@ async function saveNet() {
       ip_allowlist_enabled: net.ip_allowlist_enabled,
       ip_allowlist:         net.ip_allowlist,
       cors_origins:         net.cors_origins,
+      public_base_url:      net.public_base_url,
     })
     netSaved.value = true
     setTimeout(() => { netSaved.value = false }, 3000)

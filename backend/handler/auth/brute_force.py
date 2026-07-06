@@ -7,15 +7,19 @@ Config keys stored in config_handler (DB):
   bf_ban_seconds    int  (default 900  - 15-min ban after threshold exceeded)
   bf_whitelist      str  (comma-separated IPs to never block, default "")
 
-Real-IP extraction priority (safe against header spoofing):
-  1. CF-Connecting-IP  - set by Cloudflare, client cannot forge it end-to-end
-  2. X-Real-IP         - set by nginx/traefik on the proxy host
-  3. X-Forwarded-For   - leftmost entry, ONLY trusted when the direct TCP
-                         connection comes from a private/LAN network (i.e. a
-                         local reverse proxy).  If someone connects directly
-                         from a public IP they could inject this header, so
-                         we fall through to the TCP peer in that case.
-  4. request.client.host - always the actual TCP connection peer
+Real-IP extraction (safe against header spoofing): forwarded headers
+(CF-Connecting-IP, X-Real-IP, X-Forwarded-For) are trusted ONLY when the direct
+TCP peer is a trusted proxy (private/LAN address, or explicitly configured in
+trusted_proxies). A client connecting directly from an untrusted peer cannot
+spoof its IP via these headers; we fall through to request.client.host (the
+actual TCP peer) in that case. See _client_ip.
+
+NOTE: this trusts headers whenever the peer is private, which is correct when a
+LAN reverse proxy is the only path to the app. If the app port is ALSO reachable
+directly on the LAN (e.g. published to 0.0.0.0) AND the app sits behind Docker's
+userland proxy (which masks every source as the private bridge gateway), the
+peer always looks private, so restrict the port to the proxy at the network
+layer (firewall / bind to the proxy host) for full protection.
 """
 from __future__ import annotations
 
@@ -75,37 +79,40 @@ def _client_ip(request, trusted_proxies: list[str] | None = None) -> str:
     """
     Extract the real client IP safely.
 
-    Priority chain (see module docstring for rationale):
-      1. CF-Connecting-IP  - Cloudflare; cannot be spoofed by end-user
-      2. X-Real-IP         - nginx / haproxy / traefik single-hop header
-      3. X-Forwarded-For (leftmost) - only when direct TCP peer is trusted:
-            a) explicitly listed in trusted_proxies config, OR
-            b) is a private/LAN address (legacy default behaviour)
-      4. request.client.host - raw TCP connection, always available
+    ALL forwarded headers (CF-Connecting-IP, X-Real-IP, X-Forwarded-For) are
+    honoured ONLY when the direct TCP peer is a trusted proxy - either
+    explicitly listed in trusted_proxies, or a private/LAN address (the default
+    self-hosted setup, where the app sits behind a LAN reverse proxy). A request
+    arriving from an UNtrusted peer cannot spoof its IP by sending these headers,
+    so the IP allowlist and the brute-force ban cannot be bypassed by header
+    rotation. When the peer is untrusted (or trusted but sent no header) we fall
+    back to the raw TCP connection address.
     """
-    # 1. Cloudflare
-    cf = (request.headers.get("CF-Connecting-IP") or "").strip()
-    if cf:
-        return cf
-
-    # 2. nginx / haproxy / traefik
-    real = (request.headers.get("X-Real-IP") or "").strip()
-    if real:
-        return real
-
-    # 3. X-Forwarded-For - safe ONLY when the connecting peer is trusted
     direct = (request.client.host if request.client else "") or ""
-    if direct:
-        tp = trusted_proxies or []
-        peer_trusted = _is_private(direct) or any(_ip_in_range(direct, t) for t in tp)
-        if peer_trusted:
-            xff = (request.headers.get("X-Forwarded-For") or "").strip()
-            if xff:
-                leftmost = xff.split(",")[0].strip()
-                if leftmost:
-                    return leftmost
 
-    # 4. Fallback: raw TCP peer (proxy IP or direct client)
+    tp = trusted_proxies or []
+    peer_trusted = bool(direct) and (
+        _is_private(direct) or any(_ip_in_range(direct, t) for t in tp)
+    )
+
+    if peer_trusted:
+        # 1. Cloudflare
+        cf = (request.headers.get("CF-Connecting-IP") or "").strip()
+        if cf:
+            return cf
+        # 2. nginx / haproxy / traefik single-hop header
+        real = (request.headers.get("X-Real-IP") or "").strip()
+        if real:
+            return real
+        # 3. X-Forwarded-For (leftmost)
+        xff = (request.headers.get("X-Forwarded-For") or "").strip()
+        if xff:
+            leftmost = xff.split(",")[0].strip()
+            if leftmost:
+                return leftmost
+
+    # 4. Fallback: raw TCP peer (untrusted direct client, or trusted proxy that
+    #    forwarded no header).
     return direct or "unknown"
 
 

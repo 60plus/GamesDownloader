@@ -328,8 +328,18 @@ async def logout(request: Request) -> None:
 _RESET_TOKEN_EXPIRE_HOURS = 1
 
 
-def _base_url(request: Request) -> str:
-    """Return scheme://host -- works behind reverse proxies."""
+async def _base_url(request: Request) -> str:
+    """Return scheme://host for building links (e.g. password-reset).
+
+    Prefers the admin-configured public_base_url so a password-reset link cannot
+    be poisoned by spoofing the Host / X-Forwarded-Host header (an attacker could
+    otherwise make the reset email point a valid token at their own domain).
+    Falls back to request headers when it is not configured (unchanged).
+    """
+    from handler.config.config_handler import config_handler
+    configured = (await config_handler.get("public_base_url") or "").strip().rstrip("/")
+    if configured:
+        return configured
     fwd_proto = request.headers.get("X-Forwarded-Proto", "")
     scheme = fwd_proto or request.url.scheme
     host = request.headers.get("X-Forwarded-Host", "") or request.headers.get("Host", "") or request.url.netloc
@@ -464,7 +474,7 @@ async def forgot_password(req: ForgotPasswordRequest, request: Request) -> dict:
     user = await _users_db.get_by_email(req.email)
     if user and user.enabled:
         token = _create_reset_token(user.id)
-        reset_url = f"{_base_url(request)}/reset-password?token={token}"
+        reset_url = f"{await _base_url(request)}/reset-password?token={token}"
         fire_task(_send_reset_email(user.email, reset_url))
 
     return {"ok": True}
