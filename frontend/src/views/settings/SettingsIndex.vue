@@ -217,6 +217,9 @@ const activeComponent = computed(() => {
   border-bottom: 1px solid var(--glass-border);
   flex-shrink: 0;
   overflow-x: auto;
+  /* .stab overlaps the border with margin-bottom: -1px; without this the 1px
+     spill shows up as a useless vertical micro-scrollbar */
+  overflow-y: hidden;
 }
 .settings-tabs::-webkit-scrollbar { height: 0; }
 

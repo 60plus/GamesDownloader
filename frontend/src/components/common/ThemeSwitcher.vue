@@ -648,6 +648,9 @@ const { setHint, clearHint } = useSettingsHint()
   overflow: hidden;
   background: var(--bg2);
   border: 1px solid var(--glass-border);
+  /* plugin previewHtml may contain position:absolute accents; without this
+     they anchor to the viewport and float over the page (stray dot top-right) */
+  position: relative;
 }
 /* ── Modern preview ── */
 .prev-modern {

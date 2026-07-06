@@ -3,6 +3,7 @@
     <router-view />
     <GdDialog />
     <PluginUiHost />
+    <AboutDialog />
   </v-app>
 </template>
 
@@ -13,6 +14,7 @@ import { useAuthStore } from '@/stores/auth'
 import { registerTheme } from '@/themes/index'
 import GdDialog from '@/components/GdDialog.vue'
 import PluginUiHost from '@/components/common/PluginUiHost.vue'
+import AboutDialog from '@/components/common/AboutDialog.vue'
 
 const themeStore = useThemeStore()
 const authStore  = useAuthStore()

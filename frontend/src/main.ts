@@ -32,6 +32,7 @@ import RandomGamePicker from "./components/RandomGamePicker.vue";
 import AmbientBackground from "./components/common/AmbientBackground.vue";
 import GameRequestDialog from "./components/GameRequestDialog.vue";
 import { openMetadataEditor, openCollectionEditor, closeMetadataEditor, closeCollectionEditor, openRomMetadataEditor, closeRomMetadataEditor } from "./lib/pluginUi";
+import { openAbout } from "./lib/about";
 
 import "@mdi/font/css/materialdesignicons.css";
 import "./styles/base.css";
@@ -237,6 +238,9 @@ function createSafeSocketStore() {
     // confirm(msg, {title?, danger?, confirmText?, cancelText?}) -> Promise<boolean>
     confirm: (msg: string, opts?: Record<string, unknown>) => useDialog().gdConfirm(msg, opts as any),
     alert: (msg: string, opts?: Record<string, unknown>) => useDialog().gdAlert(msg, opts as any),
+    // openAbout() - the shared About dialog (logo, version, Discord invite);
+    // themes add an "About" entry to their user menu and call this.
+    openAbout,
   },
   getEjsCore,
   // Built-in library icon set, for themes/plugins that render library glyphs
