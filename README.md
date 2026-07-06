@@ -37,10 +37,14 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - Manual override for any metadata field
 - Screenshot gallery management with drag-to-reorder
 - **How Long to Beat (HLTB)** playtime estimates (Main Story + 100%) displayed on game detail pages for GOG, Library, and ROM titles
+- **Aggregate rating** a single 0-5 score merging provider scores and plugin ratings, shown on tiles, detail pages and search results
+- **Local trailer copy** download the trailer to the server (yt-dlp) or upload your own file; players prefer the local copy over YouTube
+- **Animated covers** multi-frame WebP/GIF covers are detected and flagged so themes can pause the animation until hover
 
 ### Custom Games Library
 - Add any game, not just GOG titles
 - Upload game files directly through the web UI with progress bar
+- **Upload via link** paste a direct http(s) URL and the server downloads the file in the background with live socket.io progress
 - **Add via torrent** admins can add games to the server library using a magnet link, .torrent URL, or by uploading a .torrent file; completed downloads are moved to `data/games/CUSTOM/` and automatically registered in the library
 - Organize by OS, file type (game / DLC / extra), version, and language
 - Native streaming downloads, browser download manager with progress bar
@@ -75,6 +79,9 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - Artwork: box art (front, 3D, back, spine), hero banners, screenshots, support art, wheel logos, bezels, Steam Grid art, video trailers
 - Platform-aware cover aspect ratios (e.g. 3:4 modern, 1:1 Game Boy, 16:11 SNES)
 - **Multi-source ratings** - IGDB (/100), LaunchBox (/10), and plugin ratings displayed as badges on game detail pages alongside ScreenScraper score (/20)
+- **Aggregate ROM rating and feeds** a 0-5 aggregate built from all rating sources powers `/roms/recent` and `/roms/top-rated` tile feeds for themes
+- **Fill-missing scrape mode** batch scrape can target only the fields a ROM is missing (existing data and media files stay untouched), next to new-only and force-overwrite
+- **Full ROM metadata editor** parity with the game editor: provider ratings incl. plugin sources, time-to-beat hours, upload/clear on every media tab and search-by-title matching
 - **Video trailers** shown as the first slide in the media carousel with a Trailer badge; click to play in a modal
 - **Company logos** developer and publisher displayed as ScreenScraper logos in the game hero
 - **Alternative names & franchises** stored from ScreenScraper `noms[]` and `familles[]`
@@ -155,6 +162,7 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - Glass-style UI throughout (backdrop-filter blur, color-mix accents, theme-aware glows); all buttons, toggles, and chips use the unified glass pattern
 - Ambient background effect using game hero artwork
 - 14 color skins (7 solid + 7 dual-gradient), all UI elements adapt to active skin
+- **About dialog** in the user menu of every theme: running version, project blurb and the community Discord invite
 - Persistent view mode and sort preferences per library
 - Fully responsive
 
@@ -187,12 +195,15 @@ GamesDownloader is a personal project built on the belief that games you own sho
 - **6 plugin types** metadata scrapers, download providers, library sources, themes, widgets, lifecycle hooks
 - **Metadata plugins work across all libraries** - GOG, Games Library, and ROM Library all call plugin hooks for covers, heroes, logos, screenshots, descriptions, and ratings
 - **Theme plugins** can provide Vue SFC layouts (`.vue` files), automatically compiled on container startup via Vite; full custom layouts, not just color overrides
-- **Plugin Store** browse and install plugins from configurable store sources; update detection with changelog preview and version transition display; container restart button for theme plugins; notification badge on user avatar when updates available; screenshot gallery with fullscreen lightbox and navigation
+- **Plugin Store** browse and install plugins from configurable store sources; update detection with changelog preview and version transition display; container restart button for theme plugins; notification badge on user avatar when updates available; screenshot gallery with fullscreen lightbox and navigation - entries can mix webm/mp4 clips into the gallery (looping muted previews)
+- **Version-gated installs** every install path (upload, URL, store) checks the plugin's `min_gd_version` against the running server; the store shows the running GD Version and greys incompatible plugins out with a Requires GD badge
+- **Theme platform APIs** shared metadata editors and styled dialogs (`__GD__.ui`), whitelisted server progress events (`__GD__.events`), per-theme home sections with user toggles (`__GD__.homeSections`) and native plugin detail rows (`registerDetailRow` / `resolveDetailRows`) - full reference in [gd3-plugin-template](https://github.com/60plus/gd3-plugin-template)
 - **Notification system** general-purpose badge on user avatar; plugins can push their own notifications via `window.__GD__.notifications.add()`
 - **Plugin management UI** install, enable/disable, configure, and uninstall from the browser
 - **Plugin config** per-plugin settings rendered as forms (boolean, string, number, select fields)
 - **Plugin i18n** plugins deliver their own translations via `i18n.json`, merged at runtime; no hardcoded plugin strings in the main app
 - **Available plugins** (installed separately via [Plugin Store](https://github.com/60plus/gd3-plugin-store)):
+  - **Vapor Theme** - storefront look in the spirit of the big game launchers: hero carousel, shelves, rich hover cards, a full Retro/emulation experience and its own detail pages
   - **NEON HORIZON Theme** - futuristic Netflix-style layout with hero banner, library tabs, particles, 8 color skins, Colorful Pop couch mode
   - **TheGamesDB Scraper** - covers, heroes, logos from TheGamesDB.net community database
   - **PPE.pl Metadata Scraper** - Polish game descriptions, ratings, screenshot galleries

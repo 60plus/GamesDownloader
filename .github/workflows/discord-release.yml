@@ -55,6 +55,16 @@ jobs:
               | { url: $url, image: { url: .browser_download_url } }
             ] | .[0:4]')
 
+          # Direct video links (webm/mp4) found in the release body go into the
+          # plain message content - Discord renders a playable player for raw
+          # video URLs there (embeds cannot). First link only, to keep it tidy.
+          VIDEO_URL=$(echo "$BODY" | grep -oE 'https://[^ )>]+\.(webm|mp4)' | head -1 || true)
+          CONTENT=":rocket: **New release published!**"
+          if [ -n "$VIDEO_URL" ]; then
+            CONTENT="$CONTENT
+          $VIDEO_URL"
+          fi
+
           # Build JSON payload using jq for safe escaping
           PAYLOAD=$(jq -n \
             --arg title "$NAME" \
@@ -62,9 +72,10 @@ jobs:
             --arg desc "$DESCRIPTION" \
             --arg tag "$TAG" \
             --arg author "$AUTHOR" \
+            --arg content "$CONTENT" \
             --argjson images "$IMAGE_EMBEDS" \
             '{
-              content: ":rocket: **New release published!**",
+              content: $content,
               embeds: ([{
                 title: $title,
                 url: $url,
