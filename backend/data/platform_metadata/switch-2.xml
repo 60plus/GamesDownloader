@@ -1,0 +1,59 @@
+<theme>
+    <variables>
+        <systemName>Nintendo Switch 2</systemName>
+        <systemDescription>The Nintendo Switch 2 is a hybrid video game console developed by Nintendo, released on June 5, 2025 as the successor to the Nintendo Switch. It keeps the handheld/docked hybrid design while adding a larger 7.9-inch 1080p display with a 120 Hz refresh rate, 4K output in docked mode, magnetically attached Joy-Con 2 controllers that can also work as a mouse, and the GameChat social features. The console is backward compatible with nearly the entire library of the original Switch.</systemDescription>
+        <systemManufacturer>Nintendo</systemManufacturer>
+        <systemReleaseYear>2025</systemReleaseYear>
+        <systemReleaseDate>2025-06-05</systemReleaseDate>
+        <systemReleaseDateFormated>June 5, 2025</systemReleaseDateFormated>
+        <systemHardwareType>Console</systemHardwareType>
+        <systemCoverSize>105-170</systemCoverSize>
+        <systemColor>E60012</systemColor>
+        <systemColorPalette1>E60012</systemColorPalette1>
+        <systemColorPalette2>FFFFFF</systemColorPalette2>
+        <systemColorPalette3>414548</systemColorPalette3>
+        <systemColorPalette4>1F2126</systemColorPalette4>
+    </variables>
+    <language name="de_DE">
+        <variables>
+            <systemDescription>Die Nintendo Switch 2 ist eine Hybrid-Videospielkonsole von Nintendo, die am 5. Juni 2025 als Nachfolgerin der Nintendo Switch erschien. Sie behält das Hybrid-Design aus Handheld- und Dock-Betrieb bei und ergänzt es um ein größeres 7,9-Zoll-1080p-Display mit 120 Hz, 4K-Ausgabe im Dock-Modus, magnetisch befestigte Joy-Con-2-Controller, die auch als Maus funktionieren, sowie die GameChat-Funktionen. Die Konsole ist mit nahezu der gesamten Spielebibliothek der ursprünglichen Switch abwärtskompatibel.</systemDescription>
+            <systemHardwareType>Konsole</systemHardwareType>
+        </variables>
+    </language>
+    <language name="es_ES">
+        <variables>
+            <systemDescription>La Nintendo Switch 2 es una videoconsola híbrida desarrollada por Nintendo, lanzada el 5 de junio de 2025 como sucesora de la Nintendo Switch. Mantiene el diseño híbrido portátil/sobremesa y añade una pantalla más grande de 7,9 pulgadas a 1080p con 120 Hz, salida 4K en modo TV, mandos Joy-Con 2 de acople magnético que también funcionan como ratón y las funciones sociales GameChat. La consola es retrocompatible con casi toda la biblioteca de la Switch original.</systemDescription>
+            <systemHardwareType>Consola</systemHardwareType>
+        </variables>
+    </language>
+    <language name="fr_FR">
+        <variables>
+            <systemDescription>La Nintendo Switch 2 est une console de jeu hybride développée par Nintendo, sortie le 5 juin 2025 en tant que successeure de la Nintendo Switch. Elle conserve le concept hybride portable/salon tout en ajoutant un écran plus grand de 7,9 pouces en 1080p à 120 Hz, une sortie 4K en mode TV, des manettes Joy-Con 2 à fixation magnétique pouvant aussi servir de souris, ainsi que les fonctions sociales GameChat. La console est rétrocompatible avec la quasi-totalité de la ludothèque de la Switch d'origine.</systemDescription>
+            <systemHardwareType>Console</systemHardwareType>
+        </variables>
+    </language>
+    <language name="it_IT">
+        <variables>
+            <systemDescription>La Nintendo Switch 2 è una console ibrida sviluppata da Nintendo, pubblicata il 5 giugno 2025 come successore della Nintendo Switch. Mantiene il design ibrido portatile/fissa aggiungendo uno schermo più grande da 7,9 pollici a 1080p con 120 Hz, uscita 4K in modalità dock, controller Joy-Con 2 ad aggancio magnetico utilizzabili anche come mouse e le funzioni social GameChat. La console è retrocompatibile con quasi tutta la libreria della Switch originale.</systemDescription>
+            <systemHardwareType>Console</systemHardwareType>
+        </variables>
+    </language>
+    <language name="pl_PL">
+        <variables>
+            <systemDescription>Nintendo Switch 2 to hybrydowa konsola do gier opracowana przez Nintendo, wydana 5 czerwca 2025 roku jako następczyni Nintendo Switch. Zachowuje hybrydową konstrukcję przenośno-stacjonarną, dodając większy, 7,9-calowy ekran 1080p o odświeżaniu 120 Hz, obraz 4K w trybie zadokowanym, mocowane magnetycznie kontrolery Joy-Con 2, które działają także jak mysz, oraz funkcje społecznościowe GameChat. Konsola jest wstecznie kompatybilna z niemal całą biblioteką pierwszego Switcha.</systemDescription>
+            <systemHardwareType>Konsola</systemHardwareType>
+        </variables>
+    </language>
+    <language name="pt_BR">
+        <variables>
+            <systemDescription>O Nintendo Switch 2 é um console de videogame híbrido desenvolvido pela Nintendo, lançado em 5 de junho de 2025 como sucessor do Nintendo Switch. Mantém o design híbrido portátil/de mesa e adiciona uma tela maior de 7,9 polegadas em 1080p com 120 Hz, saída 4K no modo dock, controles Joy-Con 2 com encaixe magnético que também funcionam como mouse e os recursos sociais GameChat. O console é retrocompatível com quase toda a biblioteca do Switch original.</systemDescription>
+            <systemHardwareType>Console</systemHardwareType>
+        </variables>
+    </language>
+    <language name="ru_RU">
+        <variables>
+            <systemDescription>Nintendo Switch 2 - гибридная игровая консоль, разработанная Nintendo и выпущенная 5 июня 2025 года как преемница Nintendo Switch. Она сохраняет гибридную конструкцию портативного и стационарного режимов, добавляя увеличенный 7,9-дюймовый экран 1080p с частотой 120 Гц, вывод изображения в 4K в док-режиме, магнитно крепящиеся контроллеры Joy-Con 2, которые работают и как мышь, а также социальные функции GameChat. Консоль обратно совместима почти со всей библиотекой оригинального Switch.</systemDescription>
+            <systemHardwareType>Консоль</systemHardwareType>
+        </variables>
+    </language>
+</theme>

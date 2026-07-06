@@ -53,6 +53,10 @@ class RomMetadataUpdate(BaseModel):
     regions: list[str] | None = None
     languages: list[str] | None = None
     rating: float | None = None
+    ss_score: float | None = None       # ScreenScraper 0-20
+    igdb_rating: float | None = None    # IGDB 0-100
+    lb_rating: float | None = None      # LaunchBox 0-10
+    plugin_ratings: dict | None = None  # {provider_id: {name, rating, logo_url}}
     player_count: str | None = None
     hltb_id:         int | None = None
     hltb_main_s:     int | None = None
@@ -232,6 +236,8 @@ async def list_roms(
             "plugin_ratings":  rom.plugin_ratings,
             "player_count":    rom.player_count,
             "is_identified":   rom.is_identified,
+            "rating_agg":      _rom_rating_agg(rom),
+            "created_at":      rom.created_at.isoformat() if rom.created_at else None,
         }
 
     return {
@@ -268,25 +274,86 @@ async def stream_rom(request: Request, rom_id: int):
 
 # ── Home literal routes (MUST be before /{rom_id} to avoid route capture) ──────
 
+def _rom_rating_agg(rom) -> float | None:
+    """Aggregate 0-5 score across the ROM's rating sources (SS /20, IGDB /100,
+    LaunchBox /10, plugin ratings /10) - the emulation twin of the library's
+    aggregate_rating."""
+    vals: list[float] = []
+    if rom.ss_score is not None:
+        vals.append(rom.ss_score / 4)
+    if rom.igdb_rating is not None:
+        vals.append(rom.igdb_rating / 20)
+    if rom.lb_rating is not None:
+        vals.append(rom.lb_rating / 2)
+    for entry in (rom.plugin_ratings or {}).values():
+        try:
+            vals.append(float(entry.get("rating")) / 2)
+        except (TypeError, ValueError, AttributeError):
+            continue
+    if not vals:
+        return None
+    return round(min(5.0, max(0.0, sum(vals) / len(vals))), 1)
+
+
+# Fields the fill-missing scrape mode treats as "gaps": a ROM missing ANY of
+# them gets queued and only those fields are filled in.
+_GAP_FIELDS = (
+    "cover_path", "background_path", "screenshots", "support_path", "wheel_path",
+    "bezel_path", "steamgrid_path", "video_path", "summary", "developer",
+    "publisher", "release_year", "genres", "player_count",
+)
+
+
+def _rom_has_gaps(rom) -> bool:
+    for f in _GAP_FIELDS:
+        v = getattr(rom, f, None)
+        if v is None or v == "" or v == []:
+            return True
+    return False
+
+
 @protected_route(router.get, "/recent", scopes=[Scopes.LIBRARY_READ])
 async def get_recent_roms(request: Request, limit: int = 24) -> list[dict]:
     """Return the most recently added ROMs across all platforms (for home page row)."""
     roms = await rom_handler.get_recent(limit=min(limit, 48))
-    return [
-        {
-            "id":                   rom.id,
-            "name":                 rom.name or rom.fs_name_no_ext,
-            "cover_path":           rom.cover_path,
-            "cover_type":           rom.cover_type,
-            "cover_aspect":         rom.cover_aspect,
-            "background_path":      rom.background_path,
-            "platform_slug":        rom.platform.slug    if rom.platform else None,
-            "platform_fs_slug":     rom.platform.fs_slug if rom.platform else None,
-            "platform_name":        (rom.platform.custom_name or rom.platform.name) if rom.platform else None,
-            "platform_cover_aspect": _get_cover_aspect(rom.platform.fs_slug) if rom.platform else "3/4",
-        }
-        for rom in roms
-    ]
+    return [_rom_tile_dict(rom) for rom in roms]
+
+
+def _rom_tile_dict(rom) -> dict:
+    """The slim tile payload shared by /recent and /top-rated."""
+    return {
+        "id":                   rom.id,
+        "name":                 rom.name or rom.fs_name_no_ext,
+        "cover_path":           rom.cover_path,
+        "cover_type":           rom.cover_type,
+        "cover_aspect":         rom.cover_aspect,
+        "background_path":      rom.background_path,
+        "wheel_path":           rom.wheel_path,
+        "platform_slug":        rom.platform.slug    if rom.platform else None,
+        "platform_fs_slug":     rom.platform.fs_slug if rom.platform else None,
+        "platform_name":        (rom.platform.custom_name or rom.platform.name) if rom.platform else None,
+        "platform_cover_aspect": _get_cover_aspect(rom.platform.fs_slug) if rom.platform else "3/4",
+        "fs_size_bytes":        rom.fs_size_bytes,
+        "created_at":           rom.created_at.isoformat() if rom.created_at else None,
+        "release_year":         rom.release_year,
+        "player_count":         rom.player_count,
+        "genres":               (rom.genres or [])[:3],
+        "rating_agg":           _rom_rating_agg(rom),
+    }
+
+
+@protected_route(router.get, "/top-rated", scopes=[Scopes.LIBRARY_READ])
+async def get_top_rated_roms(request: Request, limit: int = 24) -> list[dict]:
+    """Best-rated ROMs across ALL platforms, ranked by the aggregate score."""
+    roms = await rom_handler.get_rated()
+    ranked = sorted(roms, key=lambda r: _rom_rating_agg(r) or 0, reverse=True)
+    out: list[dict] = []
+    for rom in ranked[: min(limit, 48)]:
+        d = _rom_tile_dict(rom)
+        if not d["rating_agg"]:
+            break
+        out.append(d)
+    return out
 
 
 @protected_route(router.get, "/summary", scopes=[Scopes.LIBRARY_READ])
@@ -493,6 +560,7 @@ async def get_rom(request: Request, rom_id: int) -> dict:
         "hltb_main_s":      rom.hltb_main_s,
         "hltb_extra_s":     rom.hltb_extra_s,
         "hltb_complete_s":  rom.hltb_complete_s,
+        "rating_agg":       _rom_rating_agg(rom),
     }
 
 
@@ -524,6 +592,10 @@ async def update_rom_metadata(
     if body.regions is not None:      data["regions"] = body.regions
     if body.languages is not None:    data["languages"] = body.languages
     if body.rating is not None:       data["rating"] = body.rating
+    if body.ss_score is not None:       data["ss_score"] = body.ss_score
+    if body.igdb_rating is not None:    data["igdb_rating"] = body.igdb_rating
+    if body.lb_rating is not None:      data["lb_rating"] = body.lb_rating
+    if body.plugin_ratings is not None: data["plugin_ratings"] = body.plugin_ratings
     if body.player_count is not None: data["player_count"] = body.player_count
     if body.hltb_id is not None:        data["hltb_id"]        = body.hltb_id
     if body.hltb_main_s is not None:    data["hltb_main_s"]    = body.hltb_main_s
@@ -539,6 +611,27 @@ async def update_rom_metadata(
     if body.video_path is not None:       data["video_path"] = body.video_path
     if body.picto_path is not None:       data["picto_path"] = body.picto_path
 
+    # An EMPTY string on a *_path field means "remove this media": the column
+    # goes NULL and the file leaves the disk (None still means "no change").
+    _media_cols = [
+        ("cover_path", "cover"), ("background_path", "background"),
+        ("support_path", "support"), ("wheel_path", "wheel"),
+        ("bezel_path", "bezel"), ("steamgrid_path", "steamgrid"),
+        ("video_path", "video"), ("picto_path", "pictoliste"),
+    ]
+    for _field, _fname in _media_cols:
+        if getattr(body, _field) == "":
+            data[_field] = None
+            if media_dir.exists():
+                for _old in media_dir.glob(f"{_fname}.*"):
+                    _old.unlink(missing_ok=True)
+
+    # Replaced media keeps its filename (cover.png -> cover.png), so the URL
+    # alone would let the browser serve the STALE cached image and the save
+    # looks like it never happened - version the URL with the save time.
+    import time as _time
+    _bust = f"?v={int(_time.time())}"
+
     # Download cover if URL provided
     if body.cover_url:
         import re
@@ -549,7 +642,7 @@ async def update_rom_metadata(
         dest = media_dir / f"cover.{ext}"
         saved = await _download_image(body.cover_url, dest)
         if saved:
-            data["cover_path"] = _resource_url(platform_slug, rom_id, saved.name)
+            data["cover_path"] = _resource_url(platform_slug, rom_id, saved.name) + _bust
 
     # Download background if URL provided
     if body.background_url:
@@ -561,7 +654,7 @@ async def update_rom_metadata(
         dest = media_dir / f"background.{ext}"
         saved = await _download_image(body.background_url, dest)
         if saved:
-            data["background_path"] = _resource_url(platform_slug, rom_id, saved.name)
+            data["background_path"] = _resource_url(platform_slug, rom_id, saved.name) + _bust
 
     # Download extra media if URLs provided
     _extra_media = [
@@ -582,7 +675,7 @@ async def update_rom_metadata(
             _dest = media_dir / f"{fname}.{_ext}"
             saved = await _download_image(url_val, _dest)
             if saved:
-                data[f"{fname}_path"] = _resource_url(platform_slug, rom_id, saved.name)
+                data[f"{fname}_path"] = _resource_url(platform_slug, rom_id, saved.name) + _bust
 
     if data:
         await rom_handler.update_metadata(rom_id, data)
@@ -596,6 +689,68 @@ async def update_rom_metadata(
         "cover_path":      updated.cover_path,
         "background_path": updated.background_path,
     }
+
+
+# ── ROM media upload (local file from the metadata editor) ───────────────────
+
+_UPLOAD_KINDS = {
+    "cover": "cover_path", "background": "background_path", "support": "support_path",
+    "wheel": "wheel_path", "bezel": "bezel_path", "steamgrid": "steamgrid_path",
+    "video": "video_path",
+}
+_UPLOAD_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "mp4", "webm"}
+
+
+@protected_route(router.post, "/{rom_id}/media/{kind}/upload", scopes=[Scopes.LIBRARY_WRITE])
+async def upload_rom_media(
+    request: Request,
+    rom_id: int,
+    kind: str,
+    file: UploadFile = File(...),
+) -> dict:
+    """Store a locally uploaded media file for the ROM (editor upload button).
+
+    ``kind`` is one of cover/background/support/wheel/bezel/steamgrid/video
+    or ``screenshot`` (appended to the screenshots list)."""
+    if kind not in _UPLOAD_KINDS and kind != "screenshot":
+        raise HTTPException(status_code=400, detail="Unknown media kind")
+    rom = await rom_handler.get_with_platform(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+
+    from handler.metadata.rom_scrape_handler import _rom_media_dir, _resource_url
+    import time as _time
+
+    platform_slug = rom.platform.slug if rom.platform else "unknown"
+    media_dir = _rom_media_dir(platform_slug, rom_id)
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    if ext not in _UPLOAD_EXTS:
+        ext = "mp4" if kind == "video" else "png"
+
+    if kind == "screenshot":
+        idx = 0
+        while list(media_dir.glob(f"screenshot_{idx}.*")):
+            idx += 1
+        dest = media_dir / f"screenshot_{idx}.{ext}"
+    else:
+        for _old in media_dir.glob(f"{kind if kind != 'video' else 'video'}.*"):
+            _old.unlink(missing_ok=True)
+        dest = media_dir / f"{kind}.{ext}"
+
+    with dest.open("wb") as out:
+        while chunk := await file.read(1024 * 1024):
+            out.write(chunk)
+
+    url = _resource_url(platform_slug, rom_id, dest.name) + f"?v={int(_time.time())}"
+    if kind == "screenshot":
+        shots = list(rom.screenshots or [])
+        shots.append(url)
+        await rom_handler.update_metadata(rom_id, {"screenshots": shots})
+    else:
+        await rom_handler.update_metadata(rom_id, {_UPLOAD_KINDS[kind]: url})
+    return {"ok": True, "path": url}
 
 
 # ── ROM all-media (SS + IGDB combined) ────────────────────────────────────────
@@ -1332,21 +1487,29 @@ async def scrape_platform(
     background_tasks: BackgroundTasks,
     limit: int = 100000,
     force: bool = False,
+    mode: str | None = None,
 ) -> dict:
     """Trigger metadata scraping for all ROMs in a platform.
 
-    By default (``force=False``) only ROMs that have not been identified yet
-    (no cover_path AND no ss_id/igdb_id/launchbox_id) are queued, so repeat
-    clicks don't re-hammer the APIs for ROMs already scraped.  Pass
-    ``force=true`` to re-scrape everything.
+    Modes (``mode`` wins over the legacy ``force`` flag):
+    - ``new``     (default): only ROMs never identified (no cover AND no ids).
+    - ``missing``: every ROM with ANY gap (a missing wheel, description, ...)
+      is queued, and the scrape fills ONLY those gaps - existing fields and
+      media files stay untouched.
+    - ``force``  : re-scrape everything, overwriting existing data.
     """
     platform = await rom_platform_handler.get_by_slug(slug)
     if platform is None:
         raise HTTPException(status_code=404, detail="Platform not found")
 
+    m = mode or ("force" if force else "new")
     items, _ = await rom_handler.list_for_platform(platform.id, limit=limit)
-    if force:
+    fill_missing = False
+    if m == "force":
         rom_ids = [r.id for r in items]
+    elif m == "missing":
+        rom_ids = [r.id for r in items if _rom_has_gaps(r)]
+        fill_missing = True
     else:
         rom_ids = [
             r.id for r in items
@@ -1354,10 +1517,10 @@ async def scrape_platform(
         ]
 
     async def _run():
-        await scrape_roms_batch(rom_ids, platform)
+        await scrape_roms_batch(rom_ids, platform, fill_missing=fill_missing)
 
     background_tasks.add_task(_run)
-    return {"ok": True, "queued": len(rom_ids), "total": len(items)}
+    return {"ok": True, "queued": len(rom_ids), "total": len(items), "mode": m}
 
 
 class ScrapeRomBody(BaseModel):

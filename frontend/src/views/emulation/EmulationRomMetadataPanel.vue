@@ -228,7 +228,13 @@
 
             <!-- Manual URL -->
             <div class="mep-source-section">
-              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span></div>
+              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
+                <label class="mep-upload-btn-sm">
+                  {{ uploadingKind === 'cover' ? t('library.uploading') : t('meta.upload_file') }}
+                  <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('cover', $event)" />
+                </label>
+                <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('cover', '')">{{ t('meta.clear') }}</button>
+              </div>
               <div class="mep-field-row">
                 <input v-model="manualCoverUrl" class="mep-input" placeholder="https://… (cover image URL)" @keydown.enter="applyManualCover" />
                 <button class="mep-apply-btn" :disabled="!manualCoverUrl.trim()" @click="applyManualCover">{{ t('meta.apply') }}</button>
@@ -276,7 +282,13 @@
             </div>
 
             <div class="mep-source-section">
-              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span></div>
+              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
+                <label class="mep-upload-btn-sm">
+                  {{ uploadingKind === 'background' ? t('library.uploading') : t('meta.upload_file') }}
+                <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('background', $event)" />
+                </label>
+                <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('background', '')">{{ t('meta.clear') }}</button>
+              </div>
               <div class="mep-field-row">
                 <input v-model="selectedHero" class="mep-input" placeholder="https://… (hero/background image)" />
               </div>
@@ -343,9 +355,18 @@
               </div>
             </div>
 
-          </div>
 
-          <!-- ═══════════════════════════════════════════════════════════════════ -->
+            <div class="mep-source-section">
+              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
+                <label class="mep-upload-btn-sm">
+                  {{ uploadingKind === 'screenshot' ? t('library.uploading') : t('meta.upload_file') }}
+                  <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('screenshot', $event)" />
+                </label>
+              </div>
+            </div>
+
+          </div>
+<!-- ═══════════════════════════════════════════════════════════════════ -->
           <!-- SUPPORT TAB                                                        -->
           <!-- ═══════════════════════════════════════════════════════════════════ -->
           <div v-if="activeTab === 'support'" class="mep-tab-content">
@@ -388,7 +409,13 @@
             </div>
 
             <div class="mep-source-section">
-              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span></div>
+              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
+                <label class="mep-upload-btn-sm">
+                  {{ uploadingKind === 'support' ? t('library.uploading') : t('meta.upload_file') }}
+                <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('support', $event)" />
+                </label>
+                <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('support', '')">{{ t('meta.clear') }}</button>
+              </div>
               <div class="mep-field-row">
                 <input v-model="selectedSupport" class="mep-input" placeholder="https://…" />
               </div>
@@ -439,7 +466,13 @@
             </div>
 
             <div class="mep-source-section">
-              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span></div>
+              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
+                <label class="mep-upload-btn-sm">
+                  {{ uploadingKind === 'bezel' ? t('library.uploading') : t('meta.upload_file') }}
+                <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('bezel', $event)" />
+                </label>
+                <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('bezel', '')">{{ t('meta.clear') }}</button>
+              </div>
               <div class="mep-field-row">
                 <input v-model="selectedBezel" class="mep-input" placeholder="https://…" />
               </div>
@@ -495,7 +528,13 @@
             </div>
 
             <div class="mep-source-section">
-              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span></div>
+              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
+                <label class="mep-upload-btn-sm">
+                  {{ uploadingKind === 'wheel' ? t('library.uploading') : t('meta.upload_file') }}
+                <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('wheel', $event)" />
+                </label>
+                <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('wheel', '')">{{ t('meta.clear') }}</button>
+              </div>
               <div class="mep-field-row">
                 <input v-model="selectedWheel" class="mep-input" placeholder="https://…" />
               </div>
@@ -547,7 +586,13 @@
             </div>
 
             <div class="mep-source-section">
-              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span></div>
+              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
+                <label class="mep-upload-btn-sm">
+                  {{ uploadingKind === 'steamgrid' ? t('library.uploading') : t('meta.upload_file') }}
+                <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('steamgrid', $event)" />
+                </label>
+                <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('steamgrid', '')">{{ t('meta.clear') }}</button>
+              </div>
               <div class="mep-field-row">
                 <input v-model="selectedSteamGrid" class="mep-input" placeholder="https://…" />
               </div>
@@ -595,7 +640,13 @@
             </div>
 
             <div class="mep-source-section">
-              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span></div>
+              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
+                <label class="mep-upload-btn-sm">
+                  {{ uploadingKind === 'video' ? t('library.uploading') : t('meta.upload_file') }}
+                <input type="file" accept="video/mp4,video/webm" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('video', $event)" />
+                </label>
+                <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('video', '')">{{ t('meta.clear') }}</button>
+              </div>
               <div class="mep-field-row">
                 <input v-model="selectedVideo" class="mep-input" placeholder="https://… (video URL)" />
               </div>
@@ -607,6 +658,32 @@
           <!-- DESCRIPTION TAB                                                    -->
           <!-- ═══════════════════════════════════════════════════════════════════ -->
           <div v-if="activeTab === 'description'" class="mep-tab-content">
+
+            <!-- Wrong match? Search by TITLE right here - picking a result
+                 re-selects the game and reloads every source's description. -->
+            <div class="mep-source-section">
+              <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.search_ss_igdb_lb') }}</span></div>
+              <div class="mep-search-row">
+                <input v-model="ssQuery" class="mep-search-input" placeholder="Search games…" @keydown.enter="searchGames" />
+                <button class="mep-search-btn" :disabled="ssLoading" @click="searchGames">
+                  <div v-if="ssLoading" class="mep-spinner mep-spinner--sm" />
+                  {{ t('meta.search') }}
+                </button>
+              </div>
+              <div v-if="ssResults.length" class="mep-desc-results">
+                <button
+                  v-for="result in ssResults"
+                  :key="'d' + (result.ss_id || result.igdb_id || (result as any).launchbox_id || result.sgdb_id || '') + result.name"
+                  class="mep-desc-result"
+                  :class="{ selected: isResultSelected(result) }"
+                  @click="selectResult(result)"
+                >
+                  <img :src="sourceIcon(result.source)" width="12" height="12" alt="" @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')" />
+                  <span class="mep-desc-result-name">{{ result.name }}</span>
+                  <span v-if="result.year" class="mep-desc-result-year">{{ result.year }}</span>
+                </button>
+              </div>
+            </div>
 
             <div v-if="!selectedSsId && !selectedIgdbId && !selectedLaunchboxId" class="mep-empty-state-sm">{{ t('meta.select_game_desc') }}</div>
             <div v-else-if="mediaLoading" class="mep-loading"><div class="mep-spinner" /> {{ t('meta.loading_media') }}</div>
@@ -691,9 +768,58 @@
                   <label class="mep-field-label">{{ t('meta.release_year') }}</label>
                   <input v-model.number="editFields.release_year" class="mep-input" type="number" placeholder="YYYY" />
                 </div>
+              </div>
+
+              <div class="mep-form-section-label" style="margin-top:4px">{{ t('meta.rating') }}</div>
+
+              <div class="mep-form-row">
                 <div class="mep-field">
-                  <label class="mep-field-label">{{ t('meta.rating') }} <span class="mep-field-hint">(0–20)</span></label>
-                  <input v-model.number="editFields.rating" class="mep-input" type="number" min="0" max="20" step="0.1" />
+                  <label class="mep-field-label">ScreenScraper <span class="mep-field-hint">(0–20)</span></label>
+                  <input v-model.number="editFields.ss_score" class="mep-input" type="number" min="0" max="20" step="0.1" />
+                </div>
+                <div class="mep-field">
+                  <label class="mep-field-label">IGDB <span class="mep-field-hint">(0–100)</span></label>
+                  <input v-model.number="editFields.igdb_rating" class="mep-input" type="number" min="0" max="100" step="1" />
+                </div>
+                <div class="mep-field">
+                  <label class="mep-field-label">LaunchBox <span class="mep-field-hint">(0–10)</span></label>
+                  <input v-model.number="editFields.lb_rating" class="mep-input" type="number" min="0" max="10" step="0.1" />
+                </div>
+              </div>
+
+              <div class="mep-form-section-label" style="margin-top:4px">{{ t('meta.plugin_ratings') }}</div>
+              <div class="mep-form-row" style="flex-wrap:wrap; align-items:flex-end;">
+                <div v-for="r in pluginRatingRows" :key="r.key" class="mep-field" style="max-width:200px">
+                  <label class="mep-field-label" style="display:flex;align-items:center;gap:6px">
+                    <img :src="r.logo" width="14" height="14" alt="" @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')" />
+                    {{ r.name }} <span class="mep-field-hint">(0–10)</span>
+                    <button class="mep-clear-btn-sm" style="margin-left:auto" @click="removeRatingRow(r.key)">{{ t('meta.plugin_ratings_remove') }}</button>
+                  </label>
+                  <input v-model.number="r.value" class="mep-input" type="number" min="0" max="10" step="0.1" />
+                </div>
+                <div class="mep-field" style="max-width:200px">
+                  <label class="mep-field-label">{{ t('meta.plugin_ratings_add') }}</label>
+                  <div style="display:flex; gap:6px;">
+                    <input v-model="newRatingKey" class="mep-input" :placeholder="t('meta.plugin_ratings_key')" @keydown.enter="addRatingRow" />
+                    <button class="mep-search-btn" @click="addRatingRow">+</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mep-form-section-label" style="margin-top:4px">{{ t('detail.time_to_beat') }}</div>
+
+              <div class="mep-form-row">
+                <div class="mep-field">
+                  <label class="mep-field-label">{{ t('meta.ttb_main') }} <span class="mep-field-hint">(h)</span></label>
+                  <input v-model.number="editFields.hltb_main_h" class="mep-input" type="number" min="0" step="0.5" />
+                </div>
+                <div class="mep-field">
+                  <label class="mep-field-label">{{ t('meta.ttb_extra') }} <span class="mep-field-hint">(h)</span></label>
+                  <input v-model.number="editFields.hltb_extra_h" class="mep-input" type="number" min="0" step="0.5" />
+                </div>
+                <div class="mep-field">
+                  <label class="mep-field-label">{{ t('meta.ttb_complete') }} <span class="mep-field-hint">(h)</span></label>
+                  <input v-model.number="editFields.hltb_complete_h" class="mep-input" type="number" min="0" step="0.5" />
                 </div>
               </div>
 
@@ -754,7 +880,7 @@ import { useI18n } from '@/i18n'
 const { t } = useI18n()
 
 // ── Plugin metadata providers ─────────────────────────────────────────────────
-const metadataProviders = ref<{ id: string; name: string; logo_url: string }[]>([])
+const metadataProviders = ref<{ id: string; name: string; logo_url: string; ratings?: boolean }[]>([])
 
 function pluginLogoUrl(providerId: string): string {
   const mp = metadataProviders.value.find(p => p.id === providerId)
@@ -766,6 +892,7 @@ onMounted(async () => {
     const { data } = await client.get('/plugins/metadata/providers')
     metadataProviders.value = data || []
   } catch { /* no plugins */ }
+  buildPluginRatingRows()
 })
 
 type TabId = 'cover' | 'hero' | 'screenshots' | 'support' | 'bezel' | 'wheel' | 'steamgrid' | 'video' | 'description' | 'details'
@@ -789,6 +916,13 @@ interface RomDetail {
   languages: string[] | null
   tags: string[] | null
   rating: number | null
+  ss_score: number | null
+  igdb_rating: number | null
+  lb_rating: number | null
+  plugin_ratings: Record<string, { name?: string; rating?: number; logo_url?: string }> | null
+  hltb_main_s: number | null
+  hltb_extra_s: number | null
+  hltb_complete_s: number | null
   player_count: string | null
   cover_path: string | null
   background_path: string | null
@@ -931,18 +1065,57 @@ const editScreenshots = ref<string[]>([...(props.rom.screenshots || [])])
 const ssNewUrl = ref('')
 
 // ── Edit fields ────────────────────────────────────────────────────────────────
+// Seconds -> hours with one decimal, for the TTB inputs.
+const sToH = (s: number | null | undefined) => (s != null ? Math.round(s / 360) / 10 : (null as number | null))
+
 const editFields = ref({
   name:         props.rom.name || '',
   summary:      props.rom.summary || '',
   developer:    props.rom.developer || '',
   publisher:    props.rom.publisher || '',
   release_year: props.rom.release_year ?? (null as number | null),
-  rating:       props.rom.rating ?? (null as number | null),
+  // The real rating columns the app displays (the old single "rating" input
+  // wrote to the generic `rating` column nothing renders - misleading).
+  ss_score:     props.rom.ss_score ?? (null as number | null),
+  igdb_rating:  props.rom.igdb_rating ?? (null as number | null),
+  lb_rating:    props.rom.lb_rating ?? (null as number | null),
+  hltb_main_h:     sToH(props.rom.hltb_main_s),
+  hltb_extra_h:    sToH(props.rom.hltb_extra_s),
+  hltb_complete_h: sToH(props.rom.hltb_complete_s),
   genres:       (props.rom.genres    || []).join(', '),
   regions:      (props.rom.regions   || []).join(', '),
   languages:    (props.rom.languages || []).join(', '),
   player_count: props.rom.player_count || '',
 })
+
+// ── Plugin scraper ratings (0-10 per provider), like the games editor:
+// a row for every cached entry plus one for every provider that declares
+// numeric ratings (metadata_provider_ratings hook). ─────────────────────────
+const pluginRatingRows = ref<{ key: string; name: string; logo: string; value: number | null }[]>([])
+function buildPluginRatingRows() {
+  const rows: { key: string; name: string; logo: string; value: number | null }[] = []
+  for (const [k, e] of Object.entries(props.rom.plugin_ratings || {})) {
+    rows.push({ key: k, name: k.toUpperCase(), logo: e?.logo_url || pluginLogoUrl(k), value: e?.rating ?? null })
+  }
+  for (const p of metadataProviders.value) {
+    if (p.ratings === false) continue
+    const row = rows.find(r => r.key === p.id)
+    if (row) row.name = p.name || row.name
+    else rows.push({ key: p.id, name: p.name || p.id.toUpperCase(), logo: p.logo_url || pluginLogoUrl(p.id), value: null })
+  }
+  pluginRatingRows.value = rows
+}
+// The dict the current rows encode (cleared inputs drop their key).
+function pluginRatingsFromRows(): Record<string, { name?: string; rating?: number; logo_url?: string }> {
+  const out: Record<string, { name?: string; rating?: number; logo_url?: string }> = {}
+  for (const r of pluginRatingRows.value) {
+    const v = r.value
+    if (v == null || Number.isNaN(Number(v))) continue
+    const prev = (props.rom.plugin_ratings || {})[r.key] || {}
+    out[r.key] = { ...prev, rating: Number(v) }
+  }
+  return out
+}
 
 // ── Save state ─────────────────────────────────────────────────────────────────
 const saving    = ref(false)
@@ -1002,7 +1175,13 @@ const hasChanges = computed(() => {
   if (f.developer    !== (props.rom.developer    || '')) return true
   if (f.publisher    !== (props.rom.publisher    || '')) return true
   if (f.release_year !== (props.rom.release_year ?? null)) return true
-  if (f.rating       !== (props.rom.rating       ?? null)) return true
+  if (f.ss_score     !== (props.rom.ss_score     ?? null)) return true
+  if (f.igdb_rating  !== (props.rom.igdb_rating  ?? null)) return true
+  if (f.lb_rating    !== (props.rom.lb_rating    ?? null)) return true
+  if (f.hltb_main_h     !== sToH(props.rom.hltb_main_s))     return true
+  if (f.hltb_extra_h    !== sToH(props.rom.hltb_extra_s))    return true
+  if (f.hltb_complete_h !== sToH(props.rom.hltb_complete_s)) return true
+  if (JSON.stringify(pluginRatingsFromRows()) !== JSON.stringify(props.rom.plugin_ratings || {})) return true
   if (f.genres    !== (props.rom.genres    || []).join(', ')) return true
   if (f.regions   !== (props.rom.regions   || []).join(', ')) return true
   if (f.languages !== (props.rom.languages || []).join(', ')) return true
@@ -1122,12 +1301,68 @@ function moveSS(from: number, to: number) {
   arr.splice(to, 0, item)
 }
 
+// ── Local media upload + per-media clear (editor buttons) ────────────────────
+const uploadingKind = ref('')
+function setSelected(kind: string, v: string) {
+  if (kind === 'cover') selectedCover.value = v
+  else if (kind === 'background') selectedHero.value = v
+  else if (kind === 'support') selectedSupport.value = v
+  else if (kind === 'wheel') selectedWheel.value = v
+  else if (kind === 'bezel') selectedBezel.value = v
+  else if (kind === 'steamgrid') selectedSteamGrid.value = v
+  else if (kind === 'video') selectedVideo.value = v
+}
+async function onMediaFile(kind: string, e: Event) {
+  const input = e.target as HTMLInputElement
+  const f = input.files?.[0]
+  input.value = ''
+  if (!f) return
+  uploadingKind.value = kind
+  try {
+    const fd = new FormData()
+    fd.append('file', f)
+    const { data } = await client.post(`/roms/${props.rom.id}/media/${kind}/upload`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    // The upload endpoint persists immediately - mirror it in the editor state.
+    if (kind === 'screenshot') editScreenshots.value.push(data.path)
+    else setSelected(kind, data.path)
+  } catch (err: any) {
+    saveError.value = err?.response?.data?.detail || 'Upload failed'
+  } finally {
+    uploadingKind.value = ''
+  }
+}
+
+// ── Manual plugin-rating sources (mirrors the games editor) ───────────────
+const newRatingKey = ref('')
+function addRatingRow() {
+  const k = newRatingKey.value.trim().toLowerCase()
+  if (!k || pluginRatingRows.value.find(r => r.key === k)) return
+  pluginRatingRows.value.push({ key: k, name: k.toUpperCase(), logo: pluginLogoUrl(k), value: null })
+  newRatingKey.value = ''
+}
+function removeRatingRow(key: string) {
+  pluginRatingRows.value = pluginRatingRows.value.filter(r => r.key !== key)
+}
+
 // ── Apply details from a single source ────────────────────────────────────────
 function applyDetailSource(src: DetailSource) {
   if (src.developer)       editFields.value.developer    = src.developer
   if (src.publisher)       editFields.value.publisher    = src.publisher
   if (src.release_year)    editFields.value.release_year = src.release_year
-  if (src.rating != null)  editFields.value.rating       = src.rating
+  // Each source rates on its own scale - route the score to the matching
+  // column (SS /20, IGDB /100, LaunchBox /10, plugins /10).
+  if (src.rating != null) {
+    if (src.source === 'ss') editFields.value.ss_score = src.rating
+    else if (src.source === 'igdb') editFields.value.igdb_rating = src.rating
+    else if (src.source === 'launchbox' || src.source === 'lb') editFields.value.lb_rating = src.rating
+    else {
+      const row = pluginRatingRows.value.find(r => r.key === src.source)
+      if (row) row.value = src.rating
+      else pluginRatingRows.value.push({ key: src.source, name: src.source_name || src.source.toUpperCase(), logo: pluginLogoUrl(src.source), value: src.rating })
+    }
+  }
   if (src.genres?.length)  editFields.value.genres       = src.genres.join(', ')
   if (src.regions?.length) editFields.value.regions      = src.regions.join(', ')
   if (src.player_count)    editFields.value.player_count = src.player_count
@@ -1143,9 +1378,9 @@ async function save() {
 
     // Helper: remote URL → download via backend (*_url); local path → direct set (*_path)
     function mediaField(val: string, urlKey: string, pathKey: string, original: string) {
-      if (!val || val === original) return
-      if (val.startsWith('http')) payload[urlKey]  = val
-      else                        payload[pathKey] = val
+      if (val === original) return
+      if (val && val.startsWith('http')) payload[urlKey]  = val
+      else                               payload[pathKey] = val  // '' clears
     }
 
     mediaField(selectedCover.value,     'cover_url',      'cover_path',      props.rom.cover_path      || '')
@@ -1165,7 +1400,19 @@ async function save() {
     if (f.developer    !== (props.rom.developer    || '')) payload.developer    = f.developer
     if (f.publisher    !== (props.rom.publisher    || '')) payload.publisher    = f.publisher
     if (f.release_year !== (props.rom.release_year ?? null)) payload.release_year = f.release_year
-    if (f.rating       !== (props.rom.rating       ?? null)) payload.rating     = f.rating
+    // Ratings map to the REAL columns (the endpoint ignores nulls, so a
+    // cleared input simply keeps the stored value).
+    if (f.ss_score    != null && f.ss_score    !== (props.rom.ss_score    ?? null)) payload.ss_score    = f.ss_score
+    if (f.igdb_rating != null && f.igdb_rating !== (props.rom.igdb_rating ?? null)) payload.igdb_rating = f.igdb_rating
+    if (f.lb_rating   != null && f.lb_rating   !== (props.rom.lb_rating   ?? null)) payload.lb_rating   = f.lb_rating
+    const prNew = pluginRatingsFromRows()
+    if (JSON.stringify(prNew) !== JSON.stringify(props.rom.plugin_ratings || {})) payload.plugin_ratings = prNew
+    // TTB in hours -> seconds, sent only when the hour value actually moved
+    // (a straight h*3600 of the rounded display value would drift the store).
+    const h2s = (h: number | null) => (h == null ? null : Math.round(h * 3600))
+    if (f.hltb_main_h     != null && f.hltb_main_h     !== sToH(props.rom.hltb_main_s))     payload.hltb_main_s     = h2s(f.hltb_main_h)
+    if (f.hltb_extra_h    != null && f.hltb_extra_h    !== sToH(props.rom.hltb_extra_s))    payload.hltb_extra_s    = h2s(f.hltb_extra_h)
+    if (f.hltb_complete_h != null && f.hltb_complete_h !== sToH(props.rom.hltb_complete_s)) payload.hltb_complete_s = h2s(f.hltb_complete_h)
     if (f.genres    !== (props.rom.genres    || []).join(', ')) payload.genres    = parseArr(f.genres)
     if (f.regions   !== (props.rom.regions   || []).join(', ')) payload.regions   = parseArr(f.regions)
     if (f.languages !== (props.rom.languages || []).join(', ')) payload.languages = parseArr(f.languages)
@@ -1325,6 +1572,24 @@ async function save() {
 .mep-source-badge img { border-radius: 2px; width: 12px !important; height: 12px !important; }
 
 /* ── Small clear button ─────────────────────────────────────────────────────── */
+.mep-upload-btn-sm {
+  margin-left: auto;
+  padding: 3px 10px; border-radius: 6px; font-size: .72rem; cursor: pointer;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14);
+  color: rgba(255,255,255,.65);
+}
+.mep-upload-btn-sm:hover { border-color: rgba(255,255,255,.3); color: rgba(255,255,255,.85); }
+.mep-desc-results { display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow-y: auto; margin-top: 8px; }
+.mep-desc-result {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(255,255,255,.04); border: 1px solid transparent; border-radius: 6px;
+  padding: 5px 9px; font-size: .78rem; color: rgba(255,255,255,.75);
+  cursor: pointer; text-align: left; font-family: inherit;
+}
+.mep-desc-result:hover { border-color: rgba(255,255,255,.2); color: #fff; }
+.mep-desc-result.selected { border-color: var(--pl, #7c5cff); color: #fff; }
+.mep-desc-result-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mep-desc-result-year { color: rgba(255,255,255,.4); font-size: .72rem; }
 .mep-clear-btn-sm {
   background: none; border: 1px solid rgba(255,255,255,.12);
   color: rgba(255,255,255,.5); font-size: .65rem; padding: 2px 6px;

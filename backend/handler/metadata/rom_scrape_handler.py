@@ -104,6 +104,7 @@ async def scrape_rom(
     platform: RomPlatform,
     forced_ss_id: str | None = None,
     forced_launchbox_id: str | None = None,
+    fill_missing: bool = False,
 ) -> dict:
     """Scrape metadata for *rom* from all configured scrapers.
 
@@ -294,6 +295,8 @@ async def scrape_rom(
     ss_urls    = all_screenshots[:8]  # Combined SS + IGDB screenshots (max 8)
     merged.pop("extra_urls", None)  # no longer used - replaced by ES-style download below
 
+    if fill_missing and rom.cover_path:
+        cover_url = None  # keep the existing cover file untouched
     if cover_url:
         ext = cover_url.rsplit(".", 1)[-1].split("?")[0] or "jpg"
         dest = media_dir / f"cover.{ext}"
@@ -308,6 +311,8 @@ async def scrape_rom(
             if detected:
                 merged["cover_aspect"] = detected
 
+    if fill_missing and rom.background_path:
+        bg_url = None
     if bg_url:
         ext = bg_url.rsplit(".", 1)[-1].split("?")[0] or "jpg"
         dest = media_dir / f"background.{ext}"
@@ -315,6 +320,8 @@ async def scrape_rom(
         if saved:
             merged["background_path"] = _resource_url(platform.slug, rom.id, saved.name)
 
+    if fill_missing and (rom.screenshots or []):
+        ss_urls = []
     saved_ss: list[str] = []
     for idx, ss_url in enumerate(ss_urls[:6]):
         ext  = ss_url.rsplit(".", 1)[-1].split("?")[0] or "jpg"
@@ -350,7 +357,7 @@ async def scrape_rom(
         downloaded = 0
 
         # ── Wheel: wheel-hd (wor→ss→usa→eu) then wheel (same order) ─────────
-        if not merged.get("wheel_path"):
+        if not merged.get("wheel_path") and not (fill_missing and rom.wheel_path):
             _wheel_region_pref = ["wor", "ss", "usa", "eu"]
             wheels = all_media.get("wheels", [])
             wheel_best = None
@@ -377,6 +384,8 @@ async def scrape_rom(
         for cat, fname, col in _es_media:
             if merged.get(col):
                 continue
+            if fill_missing and getattr(rom, col, None):
+                continue
             items = all_media.get(cat, [])
             if not items:
                 continue
@@ -398,8 +407,8 @@ async def scrape_rom(
 
     # ── SteamGridDB fallback - grid cover + hero background ──────────────────
     # Runs when SS didn't provide steamgrid_path and/or background_path.
-    need_grid = not merged.get("steamgrid_path")
-    need_bg   = not merged.get("background_path")
+    need_grid = not merged.get("steamgrid_path") and not (fill_missing and rom.steamgrid_path)
+    need_bg   = not merged.get("background_path") and not (fill_missing and rom.background_path)
     if need_grid or need_bg:
         try:
             _sgdb_key = await config_handler.get("steamgriddb_api_key")
@@ -447,10 +456,17 @@ async def scrape_rom(
         except Exception as _e:
             logger.debug("[SGDB] ROM scrape fallback error for rom id=%d: %s", rom.id, _e)
 
+    # Fill-missing mode: keep every field the ROM already has - only the gaps
+    # (per FIELD, not per ROM) get the freshly scraped values.
+    if fill_missing:
+        def _empty(v) -> bool:
+            return v is None or v == "" or v == [] or v == {}
+        merged = {k: v for k, v in merged.items() if _empty(getattr(rom, k, None))}
+
     return merged
 
 
-async def scrape_roms_batch(rom_ids: list[int], platform: RomPlatform) -> dict:
+async def scrape_roms_batch(rom_ids: list[int], platform: RomPlatform, fill_missing: bool = False) -> dict:
     """Scrape a list of ROMs sequentially (rate-limit friendly).
 
     Returns { scraped, skipped, errors }.
@@ -462,7 +478,7 @@ async def scrape_roms_batch(rom_ids: list[int], platform: RomPlatform) -> dict:
             stats["skipped"] += 1
             continue
         try:
-            data = await scrape_rom(rom, platform)
+            data = await scrape_rom(rom, platform, fill_missing=fill_missing)
             if data:
                 await rom_handler.update_metadata(rom_id, data)
                 stats["scraped"] += 1

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -183,6 +183,24 @@ class RomHandler(DBBaseHandler):
             .where(~Rom.missing_from_fs)
             .order_by(Rom.id.desc())
             .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @begin_session
+    async def get_rated(self, *, session: AsyncSession = None) -> list[Rom]:
+        """Every non-missing ROM that carries at least one rating source."""
+        result = await session.execute(
+            select(Rom)
+            .options(selectinload(Rom.platform))
+            .where(
+                ~Rom.missing_from_fs,
+                or_(
+                    Rom.ss_score.is_not(None),
+                    Rom.igdb_rating.is_not(None),
+                    Rom.lb_rating.is_not(None),
+                    Rom.plugin_ratings.is_not(None),
+                ),
+            )
         )
         return list(result.scalars().all())
 

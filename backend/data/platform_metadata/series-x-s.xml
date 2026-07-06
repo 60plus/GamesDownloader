@@ -1,0 +1,59 @@
+<theme>
+    <variables>
+        <systemName>Xbox Series X|S</systemName>
+        <systemDescription>The Xbox Series X and Series S are fourth-generation Xbox home video game consoles developed by Microsoft, released on November 10, 2020. The Series X targets 4K gaming at up to 120 fps with 12 teraflops of GPU power, while the smaller, disc-less Series S targets 1440p. Both are built on custom AMD Zen 2 and RDNA 2 hardware with NVMe storage, offer Quick Resume for switching between several games instantly, and provide broad backward compatibility spanning four generations of Xbox consoles.</systemDescription>
+        <systemManufacturer>Microsoft</systemManufacturer>
+        <systemReleaseYear>2020</systemReleaseYear>
+        <systemReleaseDate>2020-11-10</systemReleaseDate>
+        <systemReleaseDateFormated>November 10, 2020</systemReleaseDateFormated>
+        <systemHardwareType>Console</systemHardwareType>
+        <systemCoverSize>243-340</systemCoverSize>
+        <systemColor>107C10</systemColor>
+        <systemColorPalette1>107C10</systemColorPalette1>
+        <systemColorPalette2>FFFFFF</systemColorPalette2>
+        <systemColorPalette3>3A3A3A</systemColorPalette3>
+        <systemColorPalette4>121212</systemColorPalette4>
+    </variables>
+    <language name="de_DE">
+        <variables>
+            <systemDescription>Die Xbox Series X und Series S sind Heimvideospielkonsolen der vierten Xbox-Generation von Microsoft, die am 10. November 2020 erschienen. Die Series X zielt mit 12 Teraflops GPU-Leistung auf 4K-Gaming mit bis zu 120 fps ab, während die kleinere Series S ohne Laufwerk auf 1440p ausgelegt ist. Beide basieren auf maßgeschneiderter AMD-Zen-2- und RDNA-2-Hardware mit NVMe-Speicher, bieten Quick Resume zum sofortigen Wechseln zwischen mehreren Spielen und eine umfangreiche Abwärtskompatibilität über vier Xbox-Generationen.</systemDescription>
+            <systemHardwareType>Konsole</systemHardwareType>
+        </variables>
+    </language>
+    <language name="es_ES">
+        <variables>
+            <systemDescription>Las Xbox Series X y Series S son videoconsolas de sobremesa de la cuarta generación de Xbox desarrolladas por Microsoft, lanzadas el 10 de noviembre de 2020. La Series X apunta a juegos en 4K de hasta 120 fps con 12 teraflops de potencia gráfica, mientras que la Series S, más pequeña y sin lector, apunta a 1440p. Ambas se basan en hardware AMD Zen 2 y RDNA 2 personalizado con almacenamiento NVMe, ofrecen Quick Resume para alternar entre varios juegos al instante y una amplia retrocompatibilidad que abarca cuatro generaciones de consolas Xbox.</systemDescription>
+            <systemHardwareType>Consola</systemHardwareType>
+        </variables>
+    </language>
+    <language name="fr_FR">
+        <variables>
+            <systemDescription>Les Xbox Series X et Series S sont des consoles de salon de la quatrième génération Xbox développées par Microsoft, sorties le 10 novembre 2020. La Series X vise le jeu en 4K jusqu'à 120 fps avec 12 téraflops de puissance graphique, tandis que la Series S, plus compacte et sans lecteur, vise le 1440p. Toutes deux reposent sur du matériel AMD Zen 2 et RDNA 2 personnalisé avec stockage NVMe, proposent Quick Resume pour basculer instantanément entre plusieurs jeux et offrent une large rétrocompatibilité couvrant quatre générations de consoles Xbox.</systemDescription>
+            <systemHardwareType>Console</systemHardwareType>
+        </variables>
+    </language>
+    <language name="it_IT">
+        <variables>
+            <systemDescription>Le Xbox Series X e Series S sono console casalinghe della quarta generazione Xbox sviluppate da Microsoft, pubblicate il 10 novembre 2020. La Series X punta al gaming in 4K fino a 120 fps con 12 teraflop di potenza grafica, mentre la più piccola Series S, priva di lettore, punta ai 1440p. Entrambe si basano su hardware AMD Zen 2 e RDNA 2 personalizzato con archiviazione NVMe, offrono Quick Resume per passare all'istante da un gioco all'altro e un'ampia retrocompatibilità che copre quattro generazioni di console Xbox.</systemDescription>
+            <systemHardwareType>Console</systemHardwareType>
+        </variables>
+    </language>
+    <language name="pl_PL">
+        <variables>
+            <systemDescription>Xbox Series X i Series S to stacjonarne konsole czwartej generacji Xbox opracowane przez Microsoft, wydane 10 listopada 2020 roku. Series X celuje w granie w 4K do 120 kl./s dzięki 12 teraflopom mocy graficznej, podczas gdy mniejsza, pozbawiona napędu Series S celuje w 1440p. Obie zbudowano na autorskim sprzęcie AMD Zen 2 i RDNA 2 z pamięcią NVMe, oferują funkcję Quick Resume do błyskawicznego przełączania się między kilkoma grami oraz szeroką wsteczną kompatybilność obejmującą cztery generacje konsol Xbox.</systemDescription>
+            <systemHardwareType>Konsola</systemHardwareType>
+        </variables>
+    </language>
+    <language name="pt_BR">
+        <variables>
+            <systemDescription>Os Xbox Series X e Series S são consoles de mesa da quarta geração do Xbox desenvolvidos pela Microsoft, lançados em 10 de novembro de 2020. O Series X mira jogos em 4K a até 120 fps com 12 teraflops de potência gráfica, enquanto o Series S, menor e sem leitor de discos, mira 1440p. Ambos são construídos sobre hardware AMD Zen 2 e RDNA 2 personalizado com armazenamento NVMe, oferecem o Quick Resume para alternar entre vários jogos instantaneamente e ampla retrocompatibilidade abrangendo quatro gerações de consoles Xbox.</systemDescription>
+            <systemHardwareType>Console</systemHardwareType>
+        </variables>
+    </language>
+    <language name="ru_RU">
+        <variables>
+            <systemDescription>Xbox Series X и Series S - домашние игровые консоли четвёртого поколения Xbox, разработанные Microsoft и выпущенные 10 ноября 2020 года. Series X нацелена на игры в 4K с частотой до 120 кадров в секунду благодаря графической мощности в 12 терафлопс, тогда как компактная Series S без дисковода рассчитана на 1440p. Обе построены на заказном железе AMD Zen 2 и RDNA 2 с накопителем NVMe, поддерживают функцию Quick Resume для мгновенного переключения между несколькими играми и широкую обратную совместимость, охватывающую четыре поколения консолей Xbox.</systemDescription>
+            <systemHardwareType>Консоль</systemHardwareType>
+        </variables>
+    </language>
+</theme>

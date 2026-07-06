@@ -1,0 +1,59 @@
+<theme>
+    <variables>
+        <systemName>PlayStation 5</systemName>
+        <systemDescription>The PlayStation 5 is a home video game console developed by Sony Interactive Entertainment, released on November 12, 2020. Built around a custom AMD Zen 2 CPU and RDNA 2 GPU paired with an ultra-fast NVMe SSD, it brought near-instant loading times, hardware ray tracing and the DualSense controller with adaptive triggers and haptic feedback. It is available in two versions: with an Ultra HD Blu-ray drive and as a fully digital edition.</systemDescription>
+        <systemManufacturer>Sony</systemManufacturer>
+        <systemReleaseYear>2020</systemReleaseYear>
+        <systemReleaseDate>2020-11-12</systemReleaseDate>
+        <systemReleaseDateFormated>November 12, 2020</systemReleaseDateFormated>
+        <systemHardwareType>Console</systemHardwareType>
+        <systemCoverSize>3-4</systemCoverSize>
+        <systemColor>0070D1</systemColor>
+        <systemColorPalette1>0070D1</systemColorPalette1>
+        <systemColorPalette2>FFFFFF</systemColorPalette2>
+        <systemColorPalette3>26262B</systemColorPalette3>
+        <systemColorPalette4>121212</systemColorPalette4>
+    </variables>
+    <language name="de_DE">
+        <variables>
+            <systemDescription>Die PlayStation 5 ist eine Heimvideospielkonsole von Sony Interactive Entertainment, die am 12. November 2020 erschien. Mit einer eigens entwickelten AMD-Zen-2-CPU, einer RDNA-2-GPU und einer extrem schnellen NVMe-SSD brachte sie nahezu sofortige Ladezeiten, Hardware-Raytracing und den DualSense-Controller mit adaptiven Triggern und haptischem Feedback. Sie ist in zwei Varianten erhältlich: mit Ultra-HD-Blu-ray-Laufwerk und als rein digitale Edition.</systemDescription>
+            <systemHardwareType>Konsole</systemHardwareType>
+        </variables>
+    </language>
+    <language name="es_ES">
+        <variables>
+            <systemDescription>La PlayStation 5 es una videoconsola de sobremesa desarrollada por Sony Interactive Entertainment, lanzada el 12 de noviembre de 2020. Construida en torno a una CPU AMD Zen 2 y una GPU RDNA 2 personalizadas junto a un SSD NVMe ultrarrápido, trajo tiempos de carga casi instantáneos, trazado de rayos por hardware y el mando DualSense con gatillos adaptativos y respuesta háptica. Está disponible en dos versiones: con lector Ultra HD Blu-ray y como edición totalmente digital.</systemDescription>
+            <systemHardwareType>Consola</systemHardwareType>
+        </variables>
+    </language>
+    <language name="fr_FR">
+        <variables>
+            <systemDescription>La PlayStation 5 est une console de salon développée par Sony Interactive Entertainment, sortie le 12 novembre 2020. Construite autour d'un CPU AMD Zen 2 et d'un GPU RDNA 2 personnalisés associés à un SSD NVMe ultra-rapide, elle a apporté des chargements quasi instantanés, le ray tracing matériel et la manette DualSense avec gâchettes adaptatives et retour haptique. Elle existe en deux versions : avec lecteur Ultra HD Blu-ray et en édition entièrement numérique.</systemDescription>
+            <systemHardwareType>Console</systemHardwareType>
+        </variables>
+    </language>
+    <language name="it_IT">
+        <variables>
+            <systemDescription>La PlayStation 5 è una console casalinga sviluppata da Sony Interactive Entertainment, pubblicata il 12 novembre 2020. Costruita attorno a una CPU AMD Zen 2 e una GPU RDNA 2 personalizzate abbinate a un velocissimo SSD NVMe, ha portato caricamenti quasi istantanei, ray tracing hardware e il controller DualSense con grilletti adattivi e feedback aptico. È disponibile in due versioni: con lettore Ultra HD Blu-ray e in edizione completamente digitale.</systemDescription>
+            <systemHardwareType>Console</systemHardwareType>
+        </variables>
+    </language>
+    <language name="pl_PL">
+        <variables>
+            <systemDescription>PlayStation 5 to stacjonarna konsola do gier opracowana przez Sony Interactive Entertainment, wydana 12 listopada 2020 roku. Zbudowana wokół autorskiego procesora AMD Zen 2 i układu graficznego RDNA 2 w połączeniu z ultraszybkim dyskiem NVMe SSD, przyniosła niemal natychmiastowe wczytywanie, sprzętowy ray tracing oraz kontroler DualSense z adaptacyjnymi spustami i haptycznymi wibracjami. Dostępna jest w dwóch wersjach: z napędem Ultra HD Blu-ray oraz jako edycja w pełni cyfrowa.</systemDescription>
+            <systemHardwareType>Konsola</systemHardwareType>
+        </variables>
+    </language>
+    <language name="pt_BR">
+        <variables>
+            <systemDescription>O PlayStation 5 é um console de videogame de mesa desenvolvido pela Sony Interactive Entertainment, lançado em 12 de novembro de 2020. Construído em torno de uma CPU AMD Zen 2 e uma GPU RDNA 2 personalizadas com um SSD NVMe ultrarrápido, trouxe carregamentos quase instantâneos, ray tracing por hardware e o controle DualSense com gatilhos adaptáveis e resposta háptica. Está disponível em duas versões: com leitor Ultra HD Blu-ray e como edição totalmente digital.</systemDescription>
+            <systemHardwareType>Console</systemHardwareType>
+        </variables>
+    </language>
+    <language name="ru_RU">
+        <variables>
+            <systemDescription>PlayStation 5 - домашняя игровая консоль, разработанная Sony Interactive Entertainment и выпущенная 12 ноября 2020 года. Построенная на заказном процессоре AMD Zen 2 и графике RDNA 2 в паре со сверхбыстрым накопителем NVMe SSD, она принесла почти мгновенную загрузку, аппаратную трассировку лучей и контроллер DualSense с адаптивными курками и тактильной отдачей. Выпускается в двух версиях: с приводом Ultra HD Blu-ray и в полностью цифровом издании.</systemDescription>
+            <systemHardwareType>Консоль</systemHardwareType>
+        </variables>
+    </language>
+</theme>
