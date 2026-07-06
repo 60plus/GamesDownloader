@@ -7,6 +7,26 @@
  */
 import DOMPurify from "dompurify";
 
+// Reverse-tabnabbing guard: any sanitized link opened in a new tab gets
+// rel="noopener noreferrer" so the opened page cannot reach back through
+// window.opener. Registered once; applies to every DOMPurify.sanitize call.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if ((node as Element).tagName === "A" && node.getAttribute("target") === "_blank") {
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
+
+/**
+ * Escape the HTML-significant characters so an untrusted string can be safely
+ * interpolated into trusted markup (e.g. a username inside a styled <strong>).
+ */
+export function escapeHtml(s: string | null | undefined): string {
+  if (!s) return "";
+  return s.replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string
+  ));
+}
+
 /** Allowed HTML tags for game descriptions. */
 const ALLOWED_TAGS = [
   "p", "br", "b", "strong", "i", "em", "u", "s", "strike",

@@ -139,7 +139,7 @@
                   <div class="sn-tpl-preview-bar" style="background:#7C3AED;width:3px" />
                   <div class="sn-tpl-preview-body">
                     <div class="sn-tpl-preview-title">Subject: {{ tplPreview(smtp.email_tpl_download_subject, 'Download Complete: {title}', sampleDl) }}</div>
-                    <div class="sn-tpl-preview-text" v-html="tplPreview(smtp.email_tpl_download_body, '&lt;p&gt;&lt;strong&gt;{title}&lt;/strong&gt; has finished downloading and is ready to play.&lt;/p&gt;', sampleDl)"></div>
+                    <div class="sn-tpl-preview-text" v-html="tplPreviewHtml(smtp.email_tpl_download_body, '&lt;p&gt;&lt;strong&gt;{title}&lt;/strong&gt; has finished downloading and is ready to play.&lt;/p&gt;', sampleDl)"></div>
                   </div>
                 </div>
               </div>
@@ -158,7 +158,7 @@
                   <div class="sn-tpl-preview-bar" style="background:#7C3AED;width:3px" />
                   <div class="sn-tpl-preview-body">
                     <div class="sn-tpl-preview-title">Subject: {{ tplPreview(smtp.email_tpl_sync_subject, 'GOG Library Synced', sampleSync) }}</div>
-                    <div class="sn-tpl-preview-text" v-html="tplPreview(smtp.email_tpl_sync_body, '&lt;p&gt;Your GOG library has been synchronized successfully.&lt;/p&gt;', sampleSync)"></div>
+                    <div class="sn-tpl-preview-text" v-html="tplPreviewHtml(smtp.email_tpl_sync_body, '&lt;p&gt;Your GOG library has been synchronized successfully.&lt;/p&gt;', sampleSync)"></div>
                   </div>
                 </div>
               </div>
@@ -177,7 +177,7 @@
                   <div class="sn-tpl-preview-bar" style="background:#3B82F6;width:3px" />
                   <div class="sn-tpl-preview-body">
                     <div class="sn-tpl-preview-title">Subject: {{ tplPreview(smtp.email_tpl_request_new_subject, 'New Game Request: {title}', sampleReqNew) }}</div>
-                    <div class="sn-tpl-preview-text" v-html="tplPreview(smtp.email_tpl_request_new_body, '&lt;p&gt;&lt;strong&gt;{username}&lt;/strong&gt; requested &lt;strong&gt;{title}&lt;/strong&gt;.&lt;/p&gt;&lt;p&gt;{description}&lt;/p&gt;', sampleReqNew)"></div>
+                    <div class="sn-tpl-preview-text" v-html="tplPreviewHtml(smtp.email_tpl_request_new_body, '&lt;p&gt;&lt;strong&gt;{username}&lt;/strong&gt; requested &lt;strong&gt;{title}&lt;/strong&gt;.&lt;/p&gt;&lt;p&gt;{description}&lt;/p&gt;', sampleReqNew)"></div>
                   </div>
                 </div>
               </div>
@@ -196,7 +196,7 @@
                   <div class="sn-tpl-preview-bar" :style="{ background: st.color, width: '3px' }" />
                   <div class="sn-tpl-preview-body">
                     <div class="sn-tpl-preview-title">Subject: {{ tplPreview((smtp as any)['email_tpl_request_' + st.key + '_subject'] || '', st.defaultSubject, st.sample) }}</div>
-                    <div class="sn-tpl-preview-text" v-html="tplPreview((smtp as any)['email_tpl_request_' + st.key + '_body'] || '', st.defaultBody, st.sample)"></div>
+                    <div class="sn-tpl-preview-text" v-html="tplPreviewHtml((smtp as any)['email_tpl_request_' + st.key + '_body'] || '', st.defaultBody, st.sample)"></div>
                   </div>
                 </div>
               </div>
@@ -470,6 +470,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import client from '@/services/api/client'
 import { useI18n } from '@/i18n'
+import { sanitizeHtml } from '@/utils/sanitize'
 
 const { t } = useI18n()
 
@@ -539,6 +540,11 @@ function tplPreview(custom: string, fallback: string, data: Record<string, strin
     text = text.replaceAll(`{${k}}`, v)
   }
   return text
+}
+// Sanitized variant for the v-html email-body previews: admin-authored HTML
+// keeps safe formatting (p/strong/...) but scripts/handlers are stripped.
+function tplPreviewHtml(custom: string, fallback: string, data: Record<string, string>): string {
+  return sanitizeHtml(tplPreview(custom, fallback, data))
 }
 const wh = reactive({
   enabled: false,

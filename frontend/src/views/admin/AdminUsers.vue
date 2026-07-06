@@ -212,7 +212,7 @@
             <button class="dlg-close" @click="showDeleteConfirm = false">×</button>
           </div>
           <div class="au-dlg-body">
-            <p style="font-size:13px;color:var(--muted)" v-html="t('users.delete_confirm', { name: '<strong style=\'color:var(--text)\'>' + (deleteTarget?.username || '') + '</strong>' })">
+            <p style="font-size:13px;color:var(--muted)" v-html="t('users.delete_confirm', { name: '<strong style=\'color:var(--text)\'>' + escapeHtml(deleteTarget?.username) + '</strong>' })">
             </p>
           </div>
           <div class="au-dlg-footer">
@@ -364,6 +364,7 @@ import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
 import { useDialog } from '@/composables/useDialog'
 import { useI18n } from '@/i18n'
+import { escapeHtml } from '@/utils/sanitize'
 
 const { t } = useI18n()
 
