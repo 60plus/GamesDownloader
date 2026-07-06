@@ -227,6 +227,98 @@ async def download_screenshots(game_id: int, urls: list[str], overwrite: bool = 
     return results
 
 
+_VIDEO_EXTS = (".mp4", ".webm")
+
+
+def _clear_video_dir(game_id: int) -> Path:
+    """Video directory for a game with any previous local copy removed."""
+    vdir = _game_dir(game_id) / "video"
+    vdir.mkdir(exist_ok=True)
+    for old in vdir.glob("video.*"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return vdir
+
+
+def _video_format(quality: str) -> str:
+    """yt-dlp format string for the requested quality, falling back down the
+    ladder (e.g. 1080 -> 720 -> 480 -> whatever is left) when the source has
+    no stream at that height. Merged streams need ffmpeg (in the image)."""
+    if quality == "best":
+        return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+    try:
+        want = int(quality)
+    except ValueError:
+        want = 1080
+    ladder = [h for h in (2160, 1440, 1080, 720, 480, 360) if h <= want]
+    parts: list[str] = []
+    for h in ladder:
+        parts.append(f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]")
+        parts.append(f"bestvideo[height<={h}]+bestaudio")
+        parts.append(f"best[height<={h}]")
+    parts.append("best")
+    return "/".join(parts)
+
+
+async def download_youtube_video(game_id: int, video_id: str, quality: str = "1080") -> str | None:
+    """Download a trailer to resources/library/{id}/video/video.{ext} via
+    yt-dlp so players serve it locally (same rule as covers: never hotlink).
+    Runs the blocking yt-dlp call in a thread; returns the local URL."""
+    import asyncio
+
+    def _dl() -> str | None:
+        from yt_dlp import YoutubeDL
+        vdir = _clear_video_dir(game_id)
+        opts = {
+            "format": _video_format(quality),
+            "merge_output_format": "mp4",
+            "outtmpl": str(vdir / "video.%(ext)s"),
+            "quiet": True,
+            "noprogress": True,
+            "noplaylist": True,
+        }
+        with YoutubeDL(opts) as ydl:
+            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+        for ext in _VIDEO_EXTS:
+            p = vdir / f"video{ext}"
+            if p.exists() and p.stat().st_size > 0:
+                return f"/resources/library/{game_id}/video/video{ext}?v={int(p.stat().st_mtime)}"
+        return None
+
+    try:
+        return await asyncio.to_thread(_dl)
+    except Exception as exc:
+        logger.warning("Trailer download failed game_id=%s video=%s: %s", game_id, video_id, exc)
+        return None
+
+
+async def save_uploaded_video(game_id: int, upload, ext: str, max_bytes: int) -> str | None:
+    """Stream an uploaded video file to the game's video dir (no full read
+    into memory). Returns the local URL, or None when the size cap is hit."""
+    vdir = _clear_video_dir(game_id)
+    dest = vdir / f"video{ext}"
+    total = 0
+    try:
+        with dest.open("wb") as out:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    out.close()
+                    dest.unlink(missing_ok=True)
+                    return None
+                out.write(chunk)
+        return f"/resources/library/{game_id}/video/video{ext}?v={int(dest.stat().st_mtime)}"
+    except Exception as exc:
+        logger.warning("Video upload failed game_id=%s: %s", game_id, exc)
+        dest.unlink(missing_ok=True)
+        return None
+
+
 async def download_collection_image(slug: str, url: str, kind: str = "cover") -> str | None:
     """Download a scraped collection image (cover/hero/logo) to
     resources/collection-covers/. Mirrors the manual cover-upload path so the
@@ -264,6 +356,12 @@ async def download_all_media(game_id: int, data: dict, overwrite: bool = False) 
         local = await download_cover(game_id, data["cover_path"], overwrite)
         if local:
             data["cover_path"] = local
+
+    # Keep the animated flag in sync with whatever cover this update leaves
+    # behind (multi-frame webp/gif); clearing the cover clears the flag too.
+    if "cover_path" in data:
+        from utils.images import detect_cover_animated
+        data["cover_animated"] = detect_cover_animated(data["cover_path"])
 
     if "background_path" in data and _is_external(data["background_path"]):
         local = await download_background(game_id, data["background_path"], overwrite)

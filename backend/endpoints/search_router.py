@@ -56,8 +56,15 @@ async def search_global(
 
     term = f"%{query}%"
 
+    # Per-game deny overrides apply to search too - a hidden game must not be
+    # discoverable through the navbar (admins bypass, same as the list views).
+    denied: set[int] = set()
+    if not is_admin and user is not None:
+        from handler.database.library_handler import LibraryHandler
+        denied = await LibraryHandler().get_denied_game_ids_for_user(user.id)
+
     emulation = await _search_emulation(term, limit)
-    library   = await _search_library(term, limit)
+    library   = await _search_library(term, limit, denied)
     # GOG library is admin-only on the Home view, mirror that here so a
     # non-admin token cannot use the global search to enumerate the admin's
     # private GOG list.
@@ -85,6 +92,8 @@ async def _search_emulation(term: str, limit: int, *, session=None) -> list[dict
     )
     result = await session.execute(stmt)
     rows = result.scalars().all()
+    # Same enrichment as /roms/recent so themes can render their rich tiles.
+    from endpoints.roms.roms_router import _rom_rating_agg
     return [
         {
             "id":                    rom.id,
@@ -92,6 +101,9 @@ async def _search_emulation(term: str, limit: int, *, session=None) -> list[dict
             "cover_path":            rom.cover_path,
             "cover_type":            rom.cover_type,
             "cover_aspect":          rom.cover_aspect,
+            "background_path":       rom.background_path,
+            "wheel_path":            rom.wheel_path,
+            "steamgrid_path":        rom.steamgrid_path,
             "platform_id":           rom.platform_id,
             "platform_slug":         rom.platform.slug if rom.platform else None,
             "platform_fs_slug":      rom.platform.fs_slug if rom.platform else None,
@@ -101,32 +113,58 @@ async def _search_emulation(term: str, limit: int, *, session=None) -> list[dict
             # the field in the response so the frontend type-check stays happy.
             "platform_cover_aspect": "3/4",
             "release_year":          rom.release_year,
+            "fs_size_bytes":         rom.fs_size_bytes,
+            "created_at":            rom.created_at.isoformat() if rom.created_at else None,
+            "player_count":          rom.player_count,
+            "genres":                (rom.genres or [])[:3],
+            "rating_agg":            _rom_rating_agg(rom),
         }
         for rom in rows
     ]
 
 
 @begin_session
-async def _search_library(term: str, limit: int, *, session=None) -> list[dict]:
+async def _search_library(term: str, limit: int, denied: set[int] | None = None,
+                          *, session=None) -> list[dict]:
     stmt = (
         select(LibraryGame)
-        .where(LibraryGame.title.ilike(term))
+        # Unpublished games are hidden from every list view - keep search
+        # consistent so an unpublished title cannot be enumerated here.
+        .where(LibraryGame.is_active == True,  # noqa: E712
+               LibraryGame.title.ilike(term))
         .order_by(LibraryGame.title.asc())
         .limit(limit)
     )
+    if denied:
+        stmt = stmt.where(LibraryGame.id.not_in(denied))
     result = await session.execute(stmt)
     rows = result.scalars().all()
-    return [
-        {
+    # GOG-published games keep most columns NULL on the library row and
+    # inherit from the GOG entry (same fallback the list views apply) -
+    # without it their covers and ratings come back empty here.
+    gog_ids = {g.gog_game_id for g in rows if g.gog_game_id}
+    gog_map: dict[int, GogGame] = {}
+    if gog_ids:
+        gres = await session.execute(select(GogGame).where(GogGame.id.in_(gog_ids)))
+        gog_map = {gg.id: gg for gg in gres.scalars().all()}
+    from endpoints.library.library_router import aggregate_rating, _merged_meta
+    out: list[dict] = []
+    for g in rows:
+        gg = gog_map.get(g.gog_game_id) if g.gog_game_id else None
+        rating = g.rating if g.rating is not None else (gg.rating if gg else None)
+        release = g.release_date.isoformat() if g.release_date else (gg.release_date if gg else None)
+        out.append({
             "id":              g.id,
             "title":           g.title,
             "slug":            g.slug,
-            "cover_path":      g.cover_path,
-            "background_path": g.background_path,
+            "cover_path":      g.cover_path or (gg and (gg.cover_path or gg.cover_url)) or None,
+            "background_path": g.background_path or (gg and (gg.background_path or gg.background_url)) or None,
             "source":          g.source,
-        }
-        for g in rows
-    ]
+            "release_date":    release,
+            "rating":          rating,
+            "rating_agg":      aggregate_rating(rating, _merged_meta(g, gg)),
+        })
+    return out
 
 
 @begin_session
@@ -139,13 +177,17 @@ async def _search_gog(term: str, limit: int, *, session=None) -> list[dict]:
     )
     result = await session.execute(stmt)
     rows = result.scalars().all()
+    from endpoints.library.library_router import aggregate_rating
     return [
         {
-            "id":         g.id,
-            "title":      g.title,
-            "slug":       g.slug,
-            "cover_path": g.cover_path,
-            "cover_url":  g.cover_url,
+            "id":           g.id,
+            "title":        g.title,
+            "slug":         g.slug,
+            "cover_path":   g.cover_path,
+            "cover_url":    g.cover_url,
+            "release_date": g.release_date,
+            "rating":       g.rating,
+            "rating_agg":   aggregate_rating(g.rating, g.meta_ratings),
         }
         for g in rows
     ]

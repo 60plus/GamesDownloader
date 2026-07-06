@@ -554,14 +554,23 @@
 
     <!-- ── Video modal ────────────────────────────────────────────────────── -->
     <Teleport to="body">
-      <div v-if="videoModalOpen && ytVideos[0]" class="gd-lb" @click.self="videoModalOpen = false" @keydown.esc="videoModalOpen = false">
+      <div v-if="videoModalOpen && (game?.video_path || ytVideos[0])" class="gd-lb" @click.self="videoModalOpen = false" @keydown.esc="videoModalOpen = false">
         <button class="gd-lb-close" @click="videoModalOpen = false">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
         </button>
         <div class="gd-video-frame">
+          <!-- Local copy plays natively; YouTube embed is the fallback -->
+          <video
+            v-if="game?.video_path"
+            :src="game.video_path"
+            controls
+            autoplay
+            style="position:absolute;inset:0;width:100%;height:100%;background:#000;"
+          />
           <iframe
+            v-else
             :src="`https://www.youtube.com/embed/${ytVideos[0].video_id}?autoplay=1`"
             frameborder="0"
             allow="autoplay; encrypted-media"
@@ -629,6 +638,7 @@ interface LibGame {
   background_path: string | null
   logo_path: string | null
   icon_path: string | null
+  video_path?: string | null
   genres: string[] | null
   tags: string[] | null
   features: string[] | null
@@ -844,11 +854,21 @@ const ytVideos = computed(() =>
 
 const carouselSlides = computed(() => {
   const slides: { type: 'image' | 'video'; src: string; videoId?: string }[] = []
-  for (const v of ytVideos.value.slice(0, 1)) {
-    const thumb = v.thumbnail_id
-      ? `https://img.youtube.com/vi/${v.thumbnail_id}/maxresdefault.jpg`
-      : `https://img.youtube.com/vi/${v.video_id}/maxresdefault.jpg`
-    slides.push({ type: 'video', src: thumb, videoId: v.video_id })
+  if (game.value?.video_path) {
+    // Local trailer copy takes precedence - thumb from the YT entry if any,
+    // otherwise the hero image.
+    const v = ytVideos.value[0]
+    const thumb = v
+      ? `https://img.youtube.com/vi/${v.thumbnail_id || v.video_id}/maxresdefault.jpg`
+      : (game.value.background_path || game.value.cover_path || '')
+    slides.push({ type: 'video', src: thumb, videoId: 'local' })
+  } else {
+    for (const v of ytVideos.value.slice(0, 1)) {
+      const thumb = v.thumbnail_id
+        ? `https://img.youtube.com/vi/${v.thumbnail_id}/maxresdefault.jpg`
+        : `https://img.youtube.com/vi/${v.video_id}/maxresdefault.jpg`
+      slides.push({ type: 'video', src: thumb, videoId: v.video_id })
+    }
   }
   for (const src of (game.value?.screenshots || [])) {
     slides.push({ type: 'image', src })

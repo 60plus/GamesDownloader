@@ -89,6 +89,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "connect-src 'self'; "
             "media-src 'self' blob:; "
             "worker-src 'self' blob:; "
-            "frame-src 'self'"
+            # YouTube allowed for the trailer embeds (game detail / home
+            # players). frame-src governs what WE may embed, so this does not
+            # loosen who may frame the app (that stays frame-ancestors/XFO).
+            "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com"
         )
         return response

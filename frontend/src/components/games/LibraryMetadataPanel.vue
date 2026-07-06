@@ -397,6 +397,42 @@
               </div>
             </div>
 
+            <!-- Local copy: download the trailer to the server or upload a
+                 file. Stored like covers and served from /resources; players
+                 prefer it over YouTube when present. The endpoints live on the
+                 games library id space, so the section hides in GOG context
+                 (published GOG games get the copy via the shared write-through). -->
+            <div v-if="libraryKind === 'games'" class="mep-source-section">
+              <div class="mep-source-header">
+                <span class="mep-source-name">{{ t('meta.local_video') }}</span>
+              </div>
+              <div v-if="localVideoPath" class="mep-video-preview">
+                <video :src="localVideoPath" class="mep-video-thumb" controls preload="metadata" />
+                <div class="mep-video-info">
+                  <span class="mep-video-yt-id">{{ t('meta.local_video_present') }}</span>
+                  <button class="mep-clear-btn" style="margin-top:8px" @click="removeLocalVideo">✕ {{ t('meta.remove_video') }}</button>
+                </div>
+              </div>
+              <div v-else class="mep-empty-state-sm">{{ t('meta.no_local_video') }}</div>
+              <div class="mep-search-row" style="margin-top:14px">
+                <select v-model="videoQuality" class="mep-search-input" style="flex:0 0 110px" :title="t('meta.video_quality')">
+                  <option value="best">Best</option>
+                  <option value="2160">2160p</option>
+                  <option value="1440">1440p</option>
+                  <option value="1080">1080p</option>
+                  <option value="720">720p</option>
+                  <option value="480">480p</option>
+                </select>
+                <button class="mep-search-btn" :disabled="!editVideoId || videoDownloading" @click="downloadLocalVideo">
+                  {{ videoDownloading ? t('meta.video_downloading') : t('meta.video_download') }}
+                </button>
+                <label class="mep-search-btn" style="cursor:pointer">
+                  {{ videoUploading ? t('meta.video_downloading') : t('meta.video_upload') }}
+                  <input type="file" accept="video/mp4,video/webm" style="display:none" :disabled="videoUploading" @change="onLocalVideoFile" />
+                </label>
+              </div>
+            </div>
+
             <!-- Unified video search -->
             <div class="mep-source-section">
               <div class="mep-source-header">
@@ -599,6 +635,17 @@
                 </div>
               </div>
 
+              <div class="mep-form-row">
+                <div class="mep-field">
+                  <label class="mep-field-label">{{ t('meta.ttb_main') }} <span class="mep-field-hint">(h)</span></label>
+                  <input v-model.number="editFields.hltb_main_h" class="mep-input" type="number" min="0" step="0.1" placeholder="e.g. 20.5" />
+                </div>
+                <div class="mep-field">
+                  <label class="mep-field-label">{{ t('meta.ttb_complete') }} <span class="mep-field-hint">(h)</span></label>
+                  <input v-model.number="editFields.hltb_complete_h" class="mep-input" type="number" min="0" step="0.1" placeholder="e.g. 51" />
+                </div>
+              </div>
+
               <div class="mep-form-section-label" style="margin-top:4px;">{{ t('meta.external_ratings') }}</div>
 
               <div class="mep-form-row">
@@ -619,6 +666,17 @@
                   />
                 </div>
               </div>
+
+              <template v-if="pluginRatingRows.length">
+                <div class="mep-form-section-label" style="margin-top:4px;">{{ t('meta.plugin_ratings') }}</div>
+
+                <div class="mep-form-row" style="flex-wrap:wrap;">
+                  <div v-for="r in pluginRatingRows" :key="r.key" class="mep-field">
+                    <label class="mep-field-label">{{ r.key.toUpperCase() }} <span class="mep-field-hint">(0–10)</span></label>
+                    <input v-model.number="r.value" class="mep-input" type="number" min="0" max="10" step="0.1" placeholder="e.g. 8.5" />
+                  </div>
+                </div>
+              </template>
 
               <div class="mep-form-section-label" style="margin-top:4px;">{{ t('meta.platform_languages') }}</div>
 
@@ -859,11 +917,14 @@ interface LibGame {
   logo_url?: string | null
   icon_path: string | null
   icon_url?: string | null
+  video_path?: string | null
   developer: string | null
   publisher: string | null
   release_date: string | null
   rating: number | null
   meta_ratings: Record<string, number> | null
+  hltb_main_s?: number | null
+  hltb_complete_s?: number | null
   description: string | null
   description_short: string | null
   genres: string[] | null
@@ -1003,7 +1064,10 @@ function _mountPluginTab() {
 }
 
 watch([activeTab, pluginTabHost], () => nextTick(_mountPluginTab))
-onUnmounted(() => { if (_pluginCleanup) { try { _pluginCleanup() } catch { /* ignore */ } } })
+onUnmounted(() => {
+  if (_pluginCleanup) { try { _pluginCleanup() } catch { /* ignore */ } }
+  _stopVideoPoll()
+})
 
 // ── Cover selection ────────────────────────────────────────────────────────────
 const selectedCover         = ref(props.game.cover_path || props.game.cover_url || '')
@@ -1151,6 +1215,72 @@ const vidSearchQuery  = ref(props.game.title)
 const vidSearchLoading = ref(false)
 const vidSearched      = ref(false)
 const vidSearchResults = ref<{ video_id: string; provider: string; thumb: string; label: string; author: string }[]>([])
+
+// ── Local trailer copy (downloaded via yt-dlp or uploaded; served from
+// /resources like covers - players prefer it over YouTube when present) ──────
+const localVideoPath   = ref<string>(props.game.video_path || '')
+const videoDownloading = ref(false)
+const videoUploading   = ref(false)
+const videoQuality     = ref('1080')
+let _videoPoll: ReturnType<typeof setInterval> | null = null
+
+function _stopVideoPoll() {
+  if (_videoPoll) clearInterval(_videoPoll)
+  _videoPoll = null
+  videoDownloading.value = false
+}
+
+async function downloadLocalVideo() {
+  if (!editVideoId.value || videoDownloading.value) return
+  videoDownloading.value = true
+  try {
+    await client.post(`${baseApi.value}/${props.game.id}/video/download`, { video_id: editVideoId.value, quality: videoQuality.value })
+  } catch {
+    videoDownloading.value = false
+    return
+  }
+  // yt-dlp runs server-side in the background - poll until video_path shows up
+  let tries = 0
+  _videoPoll = setInterval(async () => {
+    tries++
+    try {
+      const r = await client.get(`${baseApi.value}/${props.game.id}`)
+      const vp = r.data?.video_path
+      if (vp && vp !== props.game.video_path) {
+        localVideoPath.value = vp
+        _stopVideoPoll()
+        emit('saved', { video_path: vp })
+      }
+    } catch { /* transient */ }
+    if (tries > 60) _stopVideoPoll()   // give up after ~5 min
+  }, 5000)
+}
+
+async function onLocalVideoFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file || videoUploading.value) return
+  videoUploading.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+    const r = await client.post(`${baseApi.value}/${props.game.id}/video/upload`, fd)
+    if (r.data?.video_path) {
+      localVideoPath.value = r.data.video_path
+      emit('saved', { video_path: r.data.video_path })
+    }
+  } catch { /* size / format rejected */ }
+  videoUploading.value = false
+}
+
+async function removeLocalVideo() {
+  try {
+    await client.patch(`${baseApi.value}/${props.game.id}`, { video_path: null })
+    localVideoPath.value = ''
+    emit('saved', { video_path: null })
+  } catch { /* permission */ }
+}
 
 // ── Details search (developer / publisher / OS / languages / rating) ──────────
 interface DetailSource {
@@ -1385,6 +1515,8 @@ const editFields = ref({
   publisher:         props.game.publisher         || '',
   release_date:      props.game.release_date      || '',
   rating:            props.game.rating            ?? (null as number | null),
+  hltb_main_h:       props.game.hltb_main_s     != null ? Math.round(props.game.hltb_main_s / 360) / 10 : (null as number | null),
+  hltb_complete_h:   props.game.hltb_complete_s != null ? Math.round(props.game.hltb_complete_s / 360) / 10 : (null as number | null),
   meta_rawg:         props.game.meta_ratings?.['rawg']  ?? (null as number | null),
   meta_igdb:         props.game.meta_ratings?.['igdb']  ?? (null as number | null),
   meta_steam:        props.game.meta_ratings?.['steam'] ?? (null as number | null),
@@ -1398,6 +1530,36 @@ const editFields = ref({
   features:          (props.game.features || []).join(', '),
   languages:         Object.keys(props.game.languages || {}).join(', '),
 })
+
+// Plugin scraper scores: every numeric meta_ratings key besides the built-in
+// sources (0-10 convention). Non-numeric keys (plugin bookkeeping) are
+// preserved untouched on save. Rows appear automatically: stored keys first,
+// then every installed metadata PROVIDER plugin (its provider id is the
+// meta_ratings key), each with a fillable score like GOG/RAWG/IGDB. Badge
+// plugins (e.g. Steam Deck) implement no provider hooks and stay out.
+const EXT_RATING_KEYS = ['rawg', 'igdb', 'steam', 'metacritic']
+const pluginRatingRows = ref<{ key: string; value: number | null }[]>(
+  Object.entries(props.game.meta_ratings || {})
+    .filter(([k, v]) => !EXT_RATING_KEYS.includes(k) && typeof v === 'number')
+    .map(([k, v]) => ({ key: k, value: v as number }))
+)
+let origPluginRows = JSON.stringify(pluginRatingRows.value)
+async function loadRatingProviders() {
+  try {
+    const { data } = await client.get('/plugins/metadata/providers')
+    const appended: { key: string; value: null }[] = []
+    for (const p of (Array.isArray(data) ? data : [])) {
+      const key = String(p.id || '')
+      if (p.ratings === false) continue // badge-style provider, no numeric score
+      if (!key || EXT_RATING_KEYS.includes(key) || pluginRatingRows.value.some(r => r.key === key)) continue
+      pluginRatingRows.value.push({ key, value: null })
+      appended.push({ key, value: null })
+    }
+    // The auto-added empty rows are pristine, not edits.
+    origPluginRows = JSON.stringify([...JSON.parse(origPluginRows), ...appended])
+  } catch { /* providers unavailable - stored keys still show */ }
+}
+loadRatingProviders()
 
 // ── Save state ────────────────────────────────────────────────────────────────
 const saving    = ref(false)
@@ -1462,9 +1624,12 @@ const hasChanges = computed(() => {
   if (f.description       !== (props.game.description       || '')) return true
   if (f.description_short !== (props.game.description_short || '')) return true
   if (f.rating     !== (props.game.rating                     ?? null)) return true
+  if (f.hltb_main_h     !== (props.game.hltb_main_s     != null ? Math.round(props.game.hltb_main_s / 360) / 10 : null)) return true
+  if (f.hltb_complete_h !== (props.game.hltb_complete_s != null ? Math.round(props.game.hltb_complete_s / 360) / 10 : null)) return true
   if (f.meta_rawg  !== (props.game.meta_ratings?.['rawg']  ?? null)) return true
   if (f.meta_igdb  !== (props.game.meta_ratings?.['igdb']  ?? null)) return true
   if (f.meta_steam !== (props.game.meta_ratings?.['steam'] ?? null)) return true
+  if (JSON.stringify(pluginRatingRows.value) !== origPluginRows) return true
   if (f.os_windows        !== (props.game.os_windows  ?? false)) return true
   if (f.os_mac            !== (props.game.os_mac      ?? false)) return true
   if (f.os_linux          !== (props.game.os_linux    ?? false)) return true
@@ -1945,15 +2110,36 @@ async function save() {
     if (f.description       !== (props.game.description       || '')) payload.description       = f.description
     if (f.description_short !== (props.game.description_short || '')) payload.description_short = f.description_short
     if (f.rating !== (props.game.rating ?? null)) payload.rating = f.rating
+    // Time to beat: edited in hours, stored in seconds - only send when the
+    // hour value actually changed so an untouched field never drifts.
+    const origMainH = props.game.hltb_main_s     != null ? Math.round(props.game.hltb_main_s / 360) / 10 : null
+    const origCompH = props.game.hltb_complete_s != null ? Math.round(props.game.hltb_complete_s / 360) / 10 : null
+    if (f.hltb_main_h !== origMainH)
+      payload.hltb_main_s = typeof f.hltb_main_h === 'number' && isFinite(f.hltb_main_h) ? Math.round(f.hltb_main_h * 3600) : null
+    if (f.hltb_complete_h !== origCompH)
+      payload.hltb_complete_s = typeof f.hltb_complete_h === 'number' && isFinite(f.hltb_complete_h) ? Math.round(f.hltb_complete_h * 3600) : null
     // meta_ratings: build merged object only when any sub-field changed
     const mrOrig = props.game.meta_ratings || {}
+    const pluginRowsChanged = JSON.stringify(pluginRatingRows.value) !== origPluginRows
     if (f.meta_rawg  !== (mrOrig['rawg']  ?? null)
      || f.meta_igdb  !== (mrOrig['igdb']  ?? null)
-     || f.meta_steam !== (mrOrig['steam'] ?? null)) {
+     || f.meta_steam !== (mrOrig['steam'] ?? null)
+     || pluginRowsChanged) {
       const mr: Record<string, number> = { ...mrOrig }
       if (f.meta_rawg  != null) mr['rawg']  = f.meta_rawg;  else delete mr['rawg']
       if (f.meta_igdb  != null) mr['igdb']  = f.meta_igdb;  else delete mr['igdb']
       if (f.meta_steam != null) mr['steam'] = f.meta_steam; else delete mr['steam']
+      if (pluginRowsChanged) {
+        // Replace the numeric plugin keys with the edited rows; anything
+        // non-numeric (plugin bookkeeping objects/strings) stays as-is.
+        for (const [k, v] of Object.entries(mrOrig)) {
+          if (!EXT_RATING_KEYS.includes(k) && typeof v === 'number') delete mr[k]
+        }
+        for (const r of pluginRatingRows.value) {
+          // v-model.number yields '' for a cleared field - only real numbers persist
+          if (r.key && typeof r.value === 'number' && isFinite(r.value)) mr[r.key] = r.value
+        }
+      }
       payload.meta_ratings = mr
     }
     if (f.os_windows !== (props.game.os_windows ?? false)) payload.os_windows = f.os_windows

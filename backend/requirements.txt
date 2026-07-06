@@ -46,6 +46,8 @@ beautifulsoup4>=4.12.0
 
 # Image processing (cover aspect-ratio detection)
 Pillow>=10.0.0
+# Trailer download to local storage (metadata editor video tab)
+yt-dlp>=2024.10.0
 
 # ClamAV integration (communicates with clamd Unix socket)
 clamd>=1.0.2

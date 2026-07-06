@@ -196,8 +196,18 @@ class GogSyncHandler(DBBaseHandler):
         return list(result.scalars().all())
 
     @begin_session
-    async def get_all_deduped(self, *, session: AsyncSession = None) -> list[GogGame]:
-        """Return one row per gog_id, preferring admin copy (owner_user_id IS NULL)."""
+    async def get_all_deduped(
+        self,
+        *,
+        sort: str = "title_asc",
+        limit: int = 0,
+        search: str | None = None,
+        session: AsyncSession = None,
+    ) -> list[GogGame]:
+        """Return one row per gog_id, preferring admin copy (owner_user_id IS NULL).
+        Optional sort (title_asc/title_desc/rating_desc/created_desc), search
+        (title ILIKE) and limit (0 = all) for the storefront rails - defaults
+        keep the original full alphabetic list."""
         from sqlalchemy import func, case, literal_column
         subq = (
             select(
@@ -211,12 +221,25 @@ class GogSyncHandler(DBBaseHandler):
                 ).label("rn"),
             ).subquery()
         )
-        result = await session.execute(
+        stmt = (
             select(GogGame)
             .join(subq, GogGame.id == subq.c.id)
             .where(subq.c.rn == 1)
-            .order_by(GogGame.title)
         )
+        if search:
+            stmt = stmt.where(GogGame.title.ilike(f"%{search}%"))
+        if sort == "title_desc":
+            stmt = stmt.order_by(GogGame.title.desc())
+        elif sort == "rating_desc":
+            # MariaDB has no NULLS LAST - IS NULL first pushes unrated rows down
+            stmt = stmt.order_by(GogGame.rating.is_(None), GogGame.rating.desc(), GogGame.title)
+        elif sort == "created_desc":
+            stmt = stmt.order_by(GogGame.id.desc())
+        else:
+            stmt = stmt.order_by(GogGame.title)
+        if limit > 0:
+            stmt = stmt.limit(limit)
+        result = await session.execute(stmt)
         return list(result.scalars().all())
 
     @begin_session

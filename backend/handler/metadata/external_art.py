@@ -169,6 +169,11 @@ async def search_cover_options(
                     for item in r2.json().get("data", []):
                         mime  = item.get("mime", "")
                         is_anim = mime in _SGDB_ANIMATED_MIMES
+                        # webm is a video container: <img> cannot play it and the
+                        # media downloader would save it with an image extension,
+                        # leaving a broken cover - only offer webp/gif animations.
+                        if mime == "video/webm":
+                            continue
                         if animated == "only" and not is_anim:
                             continue
                         if animated == "exclude" and is_anim:

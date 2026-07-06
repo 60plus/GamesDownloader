@@ -43,6 +43,9 @@ class LibraryGame(Base):
 
     # ── Media ─────────────────────────────────────────────────────────────────
     cover_path:      Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # True = multi-frame cover (animated webp/gif). Nullable so a NULL falls
+    # back to the linked GogGame the same way cover_path does.
+    cover_animated:  Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     background_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     logo_path:       Mapped[str | None] = mapped_column(String(512), nullable=True)
     icon_path:       Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -66,6 +69,9 @@ class LibraryGame(Base):
     requirements: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     screenshots:  Mapped[list | None] = mapped_column(JSON, nullable=True)
     videos:       Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Local trailer copy served from /resources (downloaded or uploaded);
+    # players prefer it over the external providers in `videos`.
+    video_path:   Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     # ── HLTB ──────────────────────────────────────────────────────────────────
     hltb_main_s:     Mapped[int | None] = mapped_column(Integer, nullable=True)

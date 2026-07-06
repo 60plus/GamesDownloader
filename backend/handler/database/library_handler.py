@@ -46,6 +46,22 @@ class LibraryHandler(DBBaseHandler):
             ))
         return stmt
 
+    @staticmethod
+    def _apply_sort(stmt, sort: str):
+        """Server-side sort. MariaDB has no NULLS LAST, so nullable sort keys
+        order by IS NULL first to push the unrated / undated rows to the end."""
+        if sort == "title_desc":
+            return stmt.order_by(LibraryGame.title.desc())
+        if sort == "rating_desc":
+            return stmt.order_by(LibraryGame.rating.is_(None),
+                                 LibraryGame.rating.desc(), LibraryGame.title)
+        if sort == "release_desc":
+            return stmt.order_by(LibraryGame.release_date.is_(None),
+                                 LibraryGame.release_date.desc(), LibraryGame.title)
+        if sort == "created_desc":
+            return stmt.order_by(LibraryGame.id.desc())
+        return stmt.order_by(LibraryGame.title)
+
     @begin_session
     async def get_all_active(
         self,
@@ -55,12 +71,54 @@ class LibraryHandler(DBBaseHandler):
         offset: int = 0,
         in_default_only: bool = False,
         library_id: int | None = None,
+        sort: str = "title_asc",
         session: AsyncSession = None,
     ) -> Sequence[LibraryGame]:
         stmt = self._active_filters(select(LibraryGame), search, in_default_only, library_id)
-        stmt = stmt.order_by(LibraryGame.title).limit(limit).offset(offset)
+        stmt = self._apply_sort(stmt, sort).limit(limit).offset(offset)
         result = await session.execute(stmt)
         return result.scalars().all()
+
+    @begin_session
+    async def get_by_ids(
+        self, ids: list[int], *, session: AsyncSession = None
+    ) -> Sequence[LibraryGame]:
+        """Full rows for an explicit id list, returned in the given order -
+        lets callers rank games on the slim home-meta rows (e.g. by the
+        aggregate rating) and then load only the winners."""
+        if not ids:
+            return []
+        stmt = select(LibraryGame).where(LibraryGame.id.in_(ids))
+        rows = (await session.execute(stmt)).scalars().all()
+        order = {gid: i for i, gid in enumerate(ids)}
+        return sorted(rows, key=lambda g: order.get(g.id, len(order)))
+
+    @begin_session
+    async def get_popular(
+        self, limit: int = 12, *, session: AsyncSession = None
+    ) -> list[tuple[LibraryGame, int]]:
+        """Active default-library games ordered by all-time download count.
+        Returns (game, download_count) pairs - the storefront 'popular' rail."""
+        counts = (
+            select(
+                DownloadStat.library_game_id.label("gid"),
+                func.count().label("dl"),
+            )
+            .group_by(DownloadStat.library_game_id)
+            .subquery()
+        )
+        stmt = (
+            select(LibraryGame, counts.c.dl)
+            .join(counts, LibraryGame.id == counts.c.gid)
+            .where(
+                LibraryGame.is_active == True,  # noqa: E712
+                LibraryGame.in_default_library == True,  # noqa: E712
+            )
+            .order_by(counts.c.dl.desc(), LibraryGame.title)
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return [(row[0], row[1]) for row in result.all()]
 
     @begin_session
     async def count_active(
@@ -75,6 +133,32 @@ class LibraryHandler(DBBaseHandler):
                                     search, in_default_only, library_id)
         result = await session.execute(stmt)
         return result.scalar_one()
+
+    @begin_session
+    async def get_home_meta(self, *, session: AsyncSession = None) -> list:
+        """Slim per-game metadata rows for the WHOLE default library - feeds
+        the home aggregations (genre tiles, trailer pool) without loading the
+        files relationship or the heavy media columns of every game."""
+        stmt = select(
+            LibraryGame.id,
+            LibraryGame.gog_game_id,
+            LibraryGame.source,
+            LibraryGame.title,
+            LibraryGame.description_short,
+            LibraryGame.cover_path,
+            LibraryGame.background_path,
+            LibraryGame.genres,
+            LibraryGame.rating,
+            LibraryGame.meta_ratings,
+            LibraryGame.hltb_main_s,
+            LibraryGame.video_path,
+            LibraryGame.videos,
+        ).where(
+            LibraryGame.is_active == True,  # noqa: E712
+            LibraryGame.in_default_library == True,  # noqa: E712
+        )
+        result = await session.execute(stmt)
+        return list(result.all())
 
     # ── Files ─────────────────────────────────────────────────────────────────
 

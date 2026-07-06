@@ -16,7 +16,7 @@ v1 is manual / admin-curated. Covers default to an auto-stack of member covers
 
 from __future__ import annotations
 
-from sqlalchemy import Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from models.base import Base
@@ -43,6 +43,8 @@ class Collection(Base):
     # Custom uploaded / scraped cover. When NULL the UI renders an auto-stack of
     # the member covers (newest -> oldest).
     cover_path:  Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # True = multi-frame cover (animated webp/gif); NULL = not checked yet
+    cover_animated: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # Scraped / picked hero (detail backdrop) and logo (clearlogo), like a game.
     # NULL hero -> a random member hero is used as the backdrop; NULL logo -> none.
     hero_path:   Mapped[str | None] = mapped_column(String(512), nullable=True)

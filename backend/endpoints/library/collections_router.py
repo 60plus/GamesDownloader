@@ -92,6 +92,7 @@ def _collection_brief(c, library_slug: str | None = None) -> dict:
         "description":       c.description,
         "description_short": c.description_short,
         "cover_path":  c.cover_path,
+        "cover_animated": bool(c.cover_animated),
         "hero_path":   c.hero_path,
         "logo_path":   c.logo_path,
         "start_year":  c.start_year,
@@ -171,6 +172,7 @@ def _agg_meta(coll, *, covers: list[str], ratings: list[float], years: list[int]
         "description":       coll.description,
         "description_short": coll.description_short,
         "cover_path":    coll.cover_path,
+        "cover_animated": bool(coll.cover_animated),
         "hero_path":     coll.hero_path,
         "logo_path":     coll.logo_path,
         "member_covers": covers[:_STACK_COVERS],
@@ -481,6 +483,11 @@ async def update_collection(request: Request, slug: str, body: CollectionUpdateB
             if _local:
                 fields[_key] = _local
 
+    # Keep the animated flag in sync with the cover this update leaves behind.
+    if "cover_path" in fields:
+        from utils.images import detect_cover_animated
+        fields["cover_animated"] = detect_cover_animated(fields["cover_path"])
+
     coll = await collection_handler.update(slug, **fields)
     if coll is None:
         raise HTTPException(status_code=404, detail="Collection not found")
@@ -527,7 +534,11 @@ async def _upload_collection_image(slug: str, file: UploadFile, kind: str) -> di
         fh.write(content)
 
     url = f"/resources/collection-covers/{stem}{ext}?v={int(os.path.getmtime(dest))}"
-    coll = await collection_handler.update(slug, **{f"{kind}_path": url})
+    updates = {f"{kind}_path": url}
+    if kind == "cover":
+        from utils.images import is_animated_image
+        updates["cover_animated"] = is_animated_image(dest)
+    coll = await collection_handler.update(slug, **updates)
     return _collection_brief(coll, await _library_slug_of(coll))
 
 

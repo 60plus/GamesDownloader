@@ -55,6 +55,10 @@ class GogGame(Base):
 
     # Media - local paths (downloaded, relative to RESOURCES_PATH)
     cover_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # True = multi-frame cover (animated webp/gif); NULL = not checked yet
+    cover_animated: Mapped[bool | None] = mapped_column(nullable=True)
+    # Local trailer copy (shared write-through from the library editor)
+    video_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     background_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     icon_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     logo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)      # transparent logo from SteamGridDB

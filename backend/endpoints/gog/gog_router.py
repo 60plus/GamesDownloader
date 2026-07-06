@@ -76,6 +76,7 @@ def _sanitize_search(term: str) -> str:
 
 def _game_dict(g, owner_username: str | None = None) -> dict:
     """Serialise a GogGame ORM object to a dict for API responses."""
+    from endpoints.library.library_router import aggregate_rating
     d = {
         "id":                g.id,
         "gog_id":            g.gog_id,
@@ -84,6 +85,7 @@ def _game_dict(g, owner_username: str | None = None) -> dict:
         "owner_user_id":     g.owner_user_id,
         "cover_url":         g.cover_url,
         "cover_path":        g.cover_path,
+        "cover_animated":    bool(g.cover_animated),
         "background_url":    g.background_url,
         "background_path":   g.background_path,
         "icon_url":          g.icon_url,
@@ -96,12 +98,14 @@ def _game_dict(g, owner_username: str | None = None) -> dict:
         "genres":            g.genres or [],
         "tags":              g.tags or [],
         "rating":            g.rating,
+        "rating_agg":        aggregate_rating(g.rating, g.meta_ratings),
         "summary":           g.summary,
         "description":       g.description,
         "description_short": g.description_short,
         "features":          g.features or [],
         "languages":         g.languages or {},
         "videos":            g.videos or [],
+        "video_path":        g.video_path,
         "screenshots":       g.screenshots or [],
         "os_windows":        g.os_windows,
         "os_mac":            g.os_mac,
@@ -164,7 +168,14 @@ async def disconnect(request: Request) -> dict:
 # ── Library ───────────────────────────────────────────────────────────────────
 
 @gog_router.get("/library/games")
-async def get_library(request: Request) -> list:
+async def get_library(
+    request: Request,
+    sort: str = "",
+    limit: int = 0,
+    search: str = "",
+) -> list:
+    """sort: title_asc (default) | title_desc | rating_desc | created_desc;
+    limit 0 = all. Defaults keep the original full alphabetic response."""
     _require_scope(request, Scope.GOG_READ)
     # Per-user access control: a restricted GOG library returns empty for users
     # not on the allowlist (admins bypass).
@@ -173,7 +184,9 @@ async def get_library(request: Request) -> list:
     if _gog is not None and not await _reg.user_can_access(getattr(request.state, "user", None), _gog):
         return []
     from handler.gog.gog_sync_handler import gog_sync_handler
-    games = await gog_sync_handler.get_all_deduped()
+    games = await gog_sync_handler.get_all_deduped(
+        sort=sort or "title_asc", limit=max(0, limit), search=search.strip() or None,
+    )
     # Build user_id -> username map for games with owners
     owner_ids = {g.owner_user_id for g in games if g.owner_user_id is not None}
     username_map: dict[int | None, str] = {}
@@ -396,6 +409,9 @@ async def update_game_metadata(game_id: int, req: GameMetadataUpdate, request: R
                     path = await dl_func(gog_id, media_urls[url_field], overwrite=True)
                     if path:
                         update[path_field] = path
+            if "cover_path" in update:
+                from utils.images import detect_cover_animated
+                update["cover_animated"] = detect_cover_animated(update["cover_path"])
             if update:
                 await gog_sync_handler.update_fields(game_id, update)
 

@@ -323,7 +323,7 @@
 
   <!-- ── Upload modal (simple redirect to existing upload flow) ─────────────── -->
   <Teleport to="body">
-    <div v-if="uploadModal" class="gl-modal-backdrop" @mousedown.self="uploadModal = false">
+    <div v-if="uploadModal" class="gl-modal-backdrop" @mousedown.self="closeUploadModal">
       <div class="gl-modal">
         <div class="gl-modal-header">
           <span class="gl-modal-title">{{ t('upload.title') }}</span>
@@ -357,21 +357,42 @@
               </select>
             </div>
           </div>
-          <div class="gl-field">
+          <!-- Source tabs: a local file, or a direct link the SERVER downloads -->
+          <div class="gl-tabs">
+            <button :class="['gl-tab', { 'gl-tab--active': uTab === 'file' }]" @click="uTab = 'file'">{{ t('upload.tab_file') }}</button>
+            <button :class="['gl-tab', { 'gl-tab--active': uTab === 'url' }]" @click="uTab = 'url'">{{ t('upload.tab_url') }}</button>
+          </div>
+
+          <div v-if="uTab === 'file'" class="gl-field">
             <label class="gl-label">{{ t('upload.file') }}</label>
             <input type="file" class="gl-input gl-input--file" ref="uploadFileInput" @change="onUploadFileChange" />
             <div v-if="uForm.fileName" class="gl-file-name">{{ uForm.fileName }} ({{ uForm.fileSize }})</div>
           </div>
+          <div v-else class="gl-field">
+            <label class="gl-label">{{ t('upload.url_label') }}</label>
+            <input v-model="uForm.url" type="text" class="gl-input" placeholder="https://…" :disabled="uUrlJobId !== null" />
+          </div>
+
           <div v-if="uProgress !== null" class="gl-progress-wrap">
-            <div class="gl-progress-bar" :style="{ width: uProgress + '%' }" />
-            <span class="gl-progress-label">{{ uProgress }}%</span>
+            <div class="gl-progress-bar" :style="{ width: Math.max(uProgress, 0) + '%' }" />
+            <span class="gl-progress-label">{{ uProgress >= 0 ? uProgress + '%' : fmtBytes(uUrlReceived) }}</span>
+          </div>
+          <div v-if="uUrlJobId !== null && !uSuccess" class="gl-tp-meta" style="margin-top:6px">
+            <span class="gl-tp-status">{{ t('upload.url_downloading') }}</span>
+            <span v-if="uUrlSpeed" class="gl-tp-speed">{{ fmtSpeed(uUrlSpeed) }}</span>
           </div>
           <div v-if="uError"   class="gl-error">{{ uError }}</div>
           <div v-if="uSuccess" class="gl-success">{{ uSuccess }}</div>
         </div>
         <div class="gl-modal-footer">
-          <button class="gl-btn gl-btn--ghost" @click="uploadModal = false">{{ t('common.cancel') }}</button>
-          <button class="gl-btn gl-btn--primary" :disabled="uUploading || !uForm.title.trim() || !uForm.file" @click="submitUpload">
+          <button class="gl-btn gl-btn--ghost" @click="closeUploadModal">
+            {{ uUrlJobId !== null && !uSuccess ? t('torrent.close_bg') : t('common.cancel') }}
+          </button>
+          <button
+            class="gl-btn gl-btn--primary"
+            :disabled="uUploading || uUrlJobId !== null || !uForm.title.trim() || (uTab === 'file' ? !uForm.file : !uForm.url.trim())"
+            @click="submitUpload"
+          >
             <span v-if="uUploading" class="gl-spinner" />
             {{ t('upload.upload') }}
           </button>
@@ -771,15 +792,61 @@ const uSuccess       = ref('')
 const uProgress      = ref<number | null>(null)
 const uploadFileInput = ref<HTMLInputElement>()
 
-const uForm = ref({ title: '', os: 'windows', file_type: 'game', file: null as File | null, fileName: '', fileSize: '' })
+// URL-source state (the server downloads in the background, progress over socket)
+const uTab         = ref<'file' | 'url'>('file')
+const uUrlJobId    = ref<number | null>(null)
+const uUrlSpeed    = ref(0)
+const uUrlReceived = ref(0)
+
+const uForm = ref({ title: '', os: 'windows', file_type: 'game', file: null as File | null, fileName: '', fileSize: '', url: '' })
 
 function openUploadModal() {
   addMenuOpen.value = false
   uError.value = ''
   uSuccess.value = ''
   uProgress.value = null
-  uForm.value = { title: '', os: 'windows', file_type: 'game', file: null, fileName: '', fileSize: '' }
+  uTab.value = 'file'
+  uUrlJobId.value = null
+  uUrlSpeed.value = 0
+  uUrlReceived.value = 0
+  uForm.value = { title: '', os: 'windows', file_type: 'game', file: null, fileName: '', fileSize: '', url: '' }
   uploadModal.value = true
+}
+
+function closeUploadModal() {
+  _stopUrlUploadListeners()
+  uploadModal.value = false
+}
+
+function _stopUrlUploadListeners() {
+  socketStore.socket?.off('upload:url_progress', _onUrlUploadProgress)
+  socketStore.socket?.off('upload:url_complete', _onUrlUploadComplete)
+  socketStore.socket?.off('upload:url_error',    _onUrlUploadError)
+}
+
+function _onUrlUploadProgress(data: any) {
+  if (data.id !== uUrlJobId.value) return
+  uProgress.value    = data.percent >= 0 ? Math.round(data.percent) : -1
+  uUrlSpeed.value    = data.speed    ?? 0
+  uUrlReceived.value = data.received ?? 0
+}
+
+function _onUrlUploadComplete(data: any) {
+  if (data.id !== uUrlJobId.value) return
+  _stopUrlUploadListeners()
+  uProgress.value = 100
+  uSuccess.value = t('upload.success')
+  uUrlJobId.value = null
+  fetchGames()
+  setTimeout(() => { uploadModal.value = false }, 2000)
+}
+
+function _onUrlUploadError(data: any) {
+  if (data.id !== uUrlJobId.value) return
+  _stopUrlUploadListeners()
+  uError.value = data.error || t('upload.failed')
+  uUrlJobId.value = null
+  uProgress.value = null
 }
 
 function fmtBytes(b: number): string {
@@ -808,7 +875,22 @@ async function submitUpload() {
     const gameRes = await client.post('/library/games', { title: uForm.value.title.trim() })
     const gameId = gameRes.data.id
 
-    // Step 2: upload file to it
+    if (uTab.value === 'url') {
+      // Step 2 (URL): the server downloads in the background - follow along
+      // over the socket like the torrent flow does.
+      const res = await client.post(`/library/games/${gameId}/upload-url`, {
+        url:       uForm.value.url.trim(),
+        os:        uForm.value.os,
+        file_type: uForm.value.file_type,
+      })
+      uUrlJobId.value = res.data.id
+      socketStore.socket?.on('upload:url_progress', _onUrlUploadProgress)
+      socketStore.socket?.on('upload:url_complete', _onUrlUploadComplete)
+      socketStore.socket?.on('upload:url_error',    _onUrlUploadError)
+      return
+    }
+
+    // Step 2 (file): upload file to it
     const fd = new FormData()
     fd.append('os',        uForm.value.os)
     fd.append('file_type', uForm.value.file_type)
@@ -852,6 +934,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  _stopUrlUploadListeners()
   document.removeEventListener('mousedown', _closeAddMenu)
   _stopTorrentListeners()
 })

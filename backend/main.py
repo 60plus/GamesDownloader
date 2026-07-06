@@ -144,6 +144,13 @@ async def _init_db() -> None:
         # Collections: scraped/picked hero (backdrop) + logo (clearlogo).
         ("collections",    "hero_path",           "VARCHAR(512) NULL"),
         ("collections",    "logo_path",           "VARCHAR(512) NULL"),
+        # Animated-cover flag (multi-frame webp/gif); NULL = not checked yet.
+        ("library_games",  "cover_animated",      "TINYINT(1) NULL"),
+        ("gog_games",      "cover_animated",      "TINYINT(1) NULL"),
+        ("collections",    "cover_animated",      "TINYINT(1) NULL"),
+        # Local trailer copy (downloaded via yt-dlp or uploaded in the editor).
+        ("library_games",  "video_path",          "VARCHAR(512) NULL"),
+        ("gog_games",      "video_path",          "VARCHAR(1024) NULL"),
     ]
     async with async_engine.begin() as conn:
         for table, column, col_ddl in _COLUMN_MIGRATIONS:
@@ -347,6 +354,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from handler.metadata import launchbox_handler as _lb
     asyncio.create_task(_lb._ensure_index())
 
+    # One-shot: flag animated covers saved before the cover_animated column existed
+    from utils.images import backfill_cover_animated as _cover_backfill
+    asyncio.create_task(_cover_backfill())
+
     # ClamAV scheduled auto-update loop (sleeps 90 s before first check)
     from handler.clamav import clamav_handler as _clamav
     _clamav_task = asyncio.create_task(_clamav.auto_update_loop())
@@ -473,11 +484,13 @@ from endpoints.library.library_router import library_router
 from endpoints.library.upload_router import upload_router
 from endpoints.library.libraries_router import router as libraries_router
 from endpoints.library.collections_router import router as collections_router
+from endpoints.library.home_router import router as home_router
 
 app.include_router(library_router, prefix="/api")
 app.include_router(upload_router,  prefix="/api")
 app.include_router(libraries_router)
 app.include_router(collections_router)
+app.include_router(home_router)
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 from endpoints.settings.settings_router import settings_router

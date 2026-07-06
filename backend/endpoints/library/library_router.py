@@ -208,6 +208,8 @@ class GameUpdateBody(BaseModel):
     requirements: dict | None = None
     rating: float | None = None
     meta_ratings: dict | None = None
+    hltb_main_s: int | None = None
+    hltb_complete_s: int | None = None
     release_date: str | None = None
     cover_url: str | None = None
     background_url: str | None = None
@@ -215,6 +217,7 @@ class GameUpdateBody(BaseModel):
     icon_url: str | None = None
     screenshots: list | None = None
     videos: list | None = None
+    video_path: str | None = None
     os_windows: bool | None = None
     os_mac: bool | None = None
     os_linux: bool | None = None
@@ -242,6 +245,126 @@ class FileCreateBody(BaseModel):
 class GameAccessBody(BaseModel):
     game_id: int
     access: str  # "deny" | "allow"
+
+
+def _cover_animated_of(game: LibraryGame, gog_game=None) -> bool | None:
+    """The animated flag follows the cover the reader actually sees: the local
+    LibraryGame cover when set, otherwise the linked GogGame's."""
+    if game.cover_path is not None:
+        return game.cover_animated
+    if gog_game is not None:
+        return getattr(gog_game, "cover_animated", None)
+    return None
+
+
+# Known meta_ratings scales: RAWG 0-5, IGDB 0-100, Metacritic 0-10 (stored
+# under the "steam" key, legacy "metacritic" key would be 0-100).
+_RATING_SCALES = {"rawg": 1.0, "igdb": 20.0, "steam": 2.0, "metacritic": 20.0}
+
+
+def aggregate_rating(rating, meta_ratings) -> float | None:
+    """One blended 0-5 star score: the base rating (GOG, already 0-5) averaged
+    with every available meta_ratings source. Known sources divide by their
+    scale; unknown ones fall back to the magnitude rule the collections
+    auto-average uses (<=5 as-is, <=10 halved, else /20)."""
+    vals: list[float] = []
+    if rating:
+        try:
+            vals.append(min(5.0, float(rating)))
+        except (TypeError, ValueError):
+            pass
+    for key, raw in (meta_ratings or {}).items():
+        if not raw:
+            continue
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        scale = _RATING_SCALES.get(key)
+        if scale is None:
+            # Plugin scrapers follow the 0-10 convention (themes render their
+            # meta_ratings keys /10); anything above 10 reads as a 0-100 score.
+            scale = 20.0 if v > 10 else 2.0
+        vals.append(min(5.0, v / scale))
+    return round(sum(vals) / len(vals), 1) if vals else None
+
+
+def _merged_meta(game, gog_game) -> dict | None:
+    """meta_ratings is a per-source bag, so MERGE the GOG fallback with the
+    library row instead of the all-or-nothing column fallback: a plugin that
+    caches its data in library_games.meta_ratings (e.g. Steam Deck badges)
+    must not shadow the GOG-side rawg/igdb/steam scores."""
+    merged = dict(getattr(gog_game, "meta_ratings", None) or {}) if gog_game is not None else {}
+    merged.update(getattr(game, "meta_ratings", None) or {})
+    return merged or None
+
+
+def _game_to_tile(game: LibraryGame, gog_game=None, *, with_media: bool = False) -> dict:
+    """Slim storefront tile (?fields=tile): everything a rail card / hover card
+    header needs, without the heavy files / screenshots / requirements payload
+    of _game_to_dict. `with_media` adds a screenshot + video sample for the
+    featured hero slides."""
+    g = gog_game
+
+    def _fb(field: str, default=None):
+        val = getattr(game, field, None)
+        if val is not None:
+            return val
+        if g is not None:
+            return getattr(g, field, default)
+        return default
+
+    rd = _fb("release_date")
+    avail = [f for f in game.files if f.is_available]
+    tile = {
+        "id":                game.id,
+        "gog_game_id":       game.gog_game_id,
+        "source":            game.source,
+        "title":             game.title,
+        "slug":              game.slug,
+        "description_short": _fb("description_short"),
+        "developer":         _fb("developer"),
+        "publisher":         _fb("publisher"),
+        "release_date":      str(rd) if rd else None,
+        "cover_path":        _fb("cover_path"),
+        "cover_animated":    bool(_cover_animated_of(game, g)),
+        "background_path":   _fb("background_path"),
+        "logo_path":         _fb("logo_path"),
+        "icon_path":         _fb("icon_path"),
+        "video_path":        _fb("video_path"),
+        "genres":            _fb("genres"),
+        "languages":         _fb("languages"),
+        "rating":            _fb("rating"),
+        "rating_agg":        aggregate_rating(_fb("rating"), _merged_meta(game, g)),
+        "meta_ratings":      _merged_meta(game, g),
+        "os_windows":        _fb("os_windows", False),
+        "os_mac":            _fb("os_mac", False),
+        "os_linux":          _fb("os_linux", False),
+        "hltb_main_s":       game.hltb_main_s,
+        "hltb_complete_s":   game.hltb_complete_s,
+        "is_active":         game.is_active,
+        "file_count":        len(avail),
+        "size_bytes":        sum(f.size_bytes or 0 for f in avail),
+        "created_at":        game.created_at.isoformat() if game.created_at else None,
+    }
+    if with_media:
+        tile["screenshots"] = (_fb("screenshots") or [])[:4]
+        tile["videos"]      = (_fb("videos") or [])[:1]
+    return tile
+
+
+async def _gog_fallback_map(games) -> dict[int, object]:
+    """Batch-load the linked GogGame rows for source='gog' games (metadata
+    fallback) - the same pattern the list endpoint uses inline."""
+    from handler.database.session import async_session_factory as _asf
+    from models.gog_game import GogGame as _GG
+    from sqlalchemy import select as _sel
+    gog_ids = {g.gog_game_id for g in games if g.source == "gog" and g.gog_game_id}
+    if not gog_ids:
+        return {}
+    async with _asf() as _s:
+        rows = (await _s.execute(_sel(_GG).where(_GG.id.in_(gog_ids)))).scalars().all()
+        return {gg.id: gg for gg in rows}
 
 
 def _game_to_dict(game: LibraryGame, owner_username: str | None = None, gog_game=None) -> dict:
@@ -274,6 +397,7 @@ def _game_to_dict(game: LibraryGame, owner_username: str | None = None, gog_game
         "publisher":         _fb("publisher"),
         "release_date":      str(rd) if rd else None,
         "cover_path":        _fb("cover_path"),
+        "cover_animated":    bool(_cover_animated_of(game, g)),
         "background_path":   _fb("background_path"),
         "logo_path":         _fb("logo_path"),
         "icon_path":         _fb("icon_path"),
@@ -281,7 +405,8 @@ def _game_to_dict(game: LibraryGame, owner_username: str | None = None, gog_game
         "tags":              _fb("tags"),
         "features":          _fb("features"),
         "rating":            _fb("rating"),
-        "meta_ratings":      _fb("meta_ratings"),
+        "rating_agg":        aggregate_rating(_fb("rating"), _merged_meta(game, g)),
+        "meta_ratings":      _merged_meta(game, g),
         "os_windows":        _fb("os_windows", False),
         "os_mac":            _fb("os_mac", False),
         "os_linux":          _fb("os_linux", False),
@@ -289,6 +414,7 @@ def _game_to_dict(game: LibraryGame, owner_username: str | None = None, gog_game
         "requirements":      _fb("requirements"),
         "screenshots":       _fb("screenshots"),
         "videos":            _fb("videos"),
+        "video_path":        _fb("video_path"),
         "hltb_main_s":       game.hltb_main_s,
         "hltb_complete_s":   game.hltb_complete_s,
         "is_active":         game.is_active,
@@ -326,10 +452,16 @@ async def list_library_games(
     limit: int = 100,
     offset: int = 0,
     library: str = "",
+    sort: str = "",
+    fields: str = "",
 ) -> dict:
+    """sort: title_asc (default) | title_desc | rating_desc | release_desc |
+    created_desc. fields=tile returns the slim storefront tile per item
+    instead of the full game dict (no files / screenshots / requirements)."""
     from models.user import Role
     user = request.state.user
     is_admin = user.role == Role.ADMIN
+    sort = sort or "title_asc"
 
     from handler.database.library_registry_handler import library_registry_handler
     # `library` empty / "games" => the built-in library (games flagged
@@ -343,10 +475,10 @@ async def list_library_games(
     if library and library != "games":
         if _target is None:
             return {"items": [], "total": 0, "limit": limit, "offset": offset}
-        games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset, library_id=_target.id)
+        games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset, library_id=_target.id, sort=sort)
         total = await _lib.count_active(search=search or None, library_id=_target.id)
     else:
-        games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset, in_default_only=True)
+        games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset, in_default_only=True, sort=sort)
         total = await _lib.count_active(search=search or None, in_default_only=True)
 
     # For non-admins, filter out per-game denied games and adjust total accordingly
@@ -355,6 +487,16 @@ async def list_library_games(
         if denied:
             games = [g for g in games if g.id not in denied]
             total = max(0, total - len(denied))
+
+    # Slim tile projection: no owner lookup (tiles do not carry owner_username)
+    if fields == "tile":
+        gog_map = await _gog_fallback_map(games)
+        return {
+            "items":  [_game_to_tile(g, gog_map.get(g.gog_game_id)) for g in games],
+            "total":  total,
+            "limit":  limit,
+            "offset": offset,
+        }
 
     # Resolve owner usernames for published games
     pub_ids = {g.published_by for g in games if g.published_by}
@@ -449,6 +591,29 @@ async def get_library_game_by_gog_id(request: Request, gog_game_id: int) -> dict
     return _game_to_dict(game)
 
 
+# ── Games - popular (storefront rail) ─────────────────────────────────────────
+
+@protected_route(library_router.get, "/popular", scopes=[Scope.LIBRARY_READ])
+async def popular_library_games(request: Request, limit: int = 12) -> list[dict]:
+    """Most-downloaded active games as slim tiles - the only download-count
+    signal available to non-admins (/library/stats stays admin-only)."""
+    from models.user import Role
+    user = request.state.user
+    limit = max(1, min(limit, 48))
+    # Over-fetch a little so per-game denies do not shorten the rail.
+    pairs = await _lib.get_popular(limit=limit + 16)
+    if user.role != Role.ADMIN:
+        denied = await _lib.get_denied_game_ids_for_user(user.id)
+        if denied:
+            pairs = [(g, c) for g, c in pairs if g.id not in denied]
+    pairs = pairs[:limit]
+    gog_map = await _gog_fallback_map([g for g, _ in pairs])
+    return [
+        {**_game_to_tile(g, gog_map.get(g.gog_game_id)), "downloads": c}
+        for g, c in pairs
+    ]
+
+
 # ── Games - create / update / delete ─────────────────────────────────────────
 
 @protected_route(library_router.post, "/games", scopes=[Scope.LIBRARY_UPLOAD])
@@ -482,9 +647,9 @@ async def create_library_game(request: Request, body: GameCreateBody) -> dict:
 # stay on the LibraryGame and are NOT synced (they legitimately differ).
 _GOG_SHARED_META = (
     "description", "description_short", "developer", "publisher", "release_date",
-    "cover_path", "background_path", "logo_path", "icon_path",
+    "cover_path", "cover_animated", "background_path", "logo_path", "icon_path",
     "genres", "tags", "features", "rating", "meta_ratings",
-    "languages", "requirements", "screenshots", "videos",
+    "languages", "requirements", "screenshots", "videos", "video_path",
 )
 _GOG_SHARED_OS = ("os_windows", "os_mac", "os_linux")
 
@@ -612,6 +777,83 @@ async def delete_library_game(
 
     await _lib.delete(game)
     return {"ok": True, "files_deleted": removed}
+
+
+# ── Local trailer copy (download via yt-dlp / upload) ─────────────────────────
+
+from fastapi import File as _File, UploadFile as _UploadFile
+
+_VIDEO_UPLOAD_EXTS = {".mp4", ".webm"}
+_MAX_VIDEO_BYTES = 1024 * 1024 * 1024  # 1 GB
+_YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,16}$")
+
+
+class VideoDownloadBody(BaseModel):
+    video_id: str
+    # "best" | "2160" | "1440" | "1080" | "720" | "480" | "360" - yt-dlp falls
+    # back down the ladder when the source has no stream at that height.
+    quality: str = "1080"
+
+
+async def _set_video_path(game: LibraryGame, url: str | None) -> None:
+    """Write video_path with the same GOG write-through the PATCH endpoint
+    uses: the shared copy lives on the GogGame, the LibraryGame falls back."""
+    if game.source == "gog" and game.gog_game_id:
+        from handler.gog.gog_sync_handler import gog_sync_handler
+        await gog_sync_handler.update_fields(game.gog_game_id, {"video_path": url})
+        await _lib.update(game, {"video_path": None})
+    else:
+        await _lib.update(game, {"video_path": url})
+
+
+@protected_route(library_router.post, "/games/{game_id}/video/download", scopes=[Scope.LIBRARY_WRITE])
+async def download_game_video(
+    request: Request, game_id: int, body: VideoDownloadBody, bg: BackgroundTasks,
+) -> dict:
+    """Fetch the game's trailer to local storage in the background (yt-dlp).
+    The editor polls the game detail until video_path shows up."""
+    game = await _lib.get_by_id(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if not _YT_ID_RE.match(body.video_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid video id")
+
+    quality = body.quality if body.quality in {"best", "2160", "1440", "1080", "720", "480", "360"} else "1080"
+
+    async def _task() -> None:
+        from handler.library.media_handler import download_youtube_video
+        url = await download_youtube_video(game_id, body.video_id, quality)
+        if url:
+            fresh = await _lib.get_by_id(game_id)
+            if fresh:
+                await _set_video_path(fresh, url)
+
+    bg.add_task(_task)
+    return {"started": True}
+
+
+@protected_route(library_router.post, "/games/{game_id}/video/upload", scopes=[Scope.LIBRARY_WRITE])
+async def upload_game_video(
+    request: Request, game_id: int, file: _UploadFile = _File(...),
+) -> dict:
+    """Store an uploaded trailer (mp4/webm, max 1 GB) as the local copy."""
+    game = await _lib.get_by_id(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in _VIDEO_UPLOAD_EXTS:
+        raise HTTPException(status_code=400, detail="Unsupported format. Allowed: .mp4, .webm")
+    from handler.library.media_handler import save_uploaded_video
+    url = await save_uploaded_video(game_id, file, ext, _MAX_VIDEO_BYTES)
+    if not url:
+        raise HTTPException(status_code=413, detail="Video too large (max 1 GB)")
+    await _set_video_path(game, url)
+    updated = await _lib.get_by_id(game_id)
+    gog_game = None
+    if updated.source == "gog" and updated.gog_game_id:
+        gog_map = await _gog_fallback_map([updated])
+        gog_game = gog_map.get(updated.gog_game_id)
+    return _game_to_dict(updated, gog_game=gog_game)
 
 
 # ── Cover / media image search ────────────────────────────────────────────────
