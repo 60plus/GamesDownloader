@@ -42,7 +42,7 @@ Every area below has a dedicated page in the [Wiki](https://github.com/60plus/Ga
 
 ### Libraries
 - **GOG** account sync with queued downloads, pause/resume/retry, checksum verification, and per-platform packaging. Multi-user: everyone can connect their own GOG account, with owner tracking and deduplication.
-- **Custom games** uploaded through the browser or added by magnet / `.torrent`, organised by OS, type, version, and language.
+- **Custom games** uploaded through the browser (a local file or a direct URL) or added by magnet / `.torrent`, each landing in whichever library you are viewing, organised by OS, type, version, and language.
 - **ROM library** scanned per platform, matched by hash (CRC32 / MD5 / SHA1 from inside `.zip` / `.7z`) for spot-on results.
 - Full detail: [Library](https://github.com/60plus/GamesDownloader/wiki/Library) · [GOG Integration](https://github.com/60plus/GamesDownloader/wiki/GOG-Integration) · [ROMs & Emulation](https://github.com/60plus/GamesDownloader/wiki/ROMs-and-Emulation)
 
