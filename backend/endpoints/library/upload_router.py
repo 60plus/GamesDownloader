@@ -55,8 +55,15 @@ def _rel_from_abs(abs_path: str) -> str:
     return os.path.relpath(abs_path, BASE_PATH)
 
 
-def _dest_dir_for(game_title: str, os_platform: str, file_type: str) -> Path:
-    """Resolve (and create) the CUSTOM library folder for an upload."""
+def _dest_dir_for(
+    game_title: str, os_platform: str, file_type: str, storage_folder: str = "CUSTOM",
+) -> Path:
+    """Resolve (and create) the on-disk folder for an upload.
+
+    `storage_folder` is the library's folder under GAMES_PATH: "CUSTOM" for the
+    built-in Games library, or a custom library's own folder (e.g. "kids-games").
+    Files land in <storage_folder>/<title>/<os>/.
+    """
     folder_map = {
         "windows": "windows",
         "mac":     "mac",
@@ -70,11 +77,24 @@ def _dest_dir_for(game_title: str, os_platform: str, file_type: str) -> Path:
         sub = "dlc"
     safe_title = _sanitize(game_title)
     if sub == ".":
-        dest_dir = Path(GAMES_PATH) / "CUSTOM" / safe_title
+        dest_dir = Path(GAMES_PATH) / storage_folder / safe_title
     else:
-        dest_dir = Path(GAMES_PATH) / "CUSTOM" / safe_title / sub
+        dest_dir = Path(GAMES_PATH) / storage_folder / safe_title / sub
     dest_dir.mkdir(parents=True, exist_ok=True)
     return dest_dir
+
+
+async def _resolve_storage_folder(game_id: int) -> str:
+    """Pick the on-disk folder for a game's uploads: if the game belongs to a
+    folder-backed custom library, use that library's folder; otherwise "CUSTOM"
+    (the built-in Games library)."""
+    from handler.database.library_registry_handler import library_registry_handler
+    member_ids = set(await library_registry_handler.get_member_library_ids(game_id))
+    if member_ids:
+        for lib in await library_registry_handler.get_all():
+            if lib.id in member_ids and lib.kind == "custom_lib" and lib.storage_folder:
+                return lib.storage_folder
+    return "CUSTOM"
 
 
 async def _max_upload_bytes() -> int:
@@ -183,7 +203,9 @@ async def upload_game_file(
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    dest_dir = _dest_dir_for(game.title, os_platform, file_type)
+    dest_dir = _dest_dir_for(
+        game.title, os_platform, file_type, await _resolve_storage_folder(game_id),
+    )
 
     filename = Path(file.filename or "upload.bin").name
     # Reject filenames that contain traversal sequences after stripping the directory component
@@ -363,7 +385,9 @@ async def upload_game_file_from_url(request: Request, game_id: int, body: Upload
         raise HTTPException(status_code=400, detail=str(exc))
 
     filename = _safe_filename(parsed.path)
-    dest_dir = _dest_dir_for(game.title, body.os, body.file_type)
+    dest_dir = _dest_dir_for(
+        game.title, body.os, body.file_type, await _resolve_storage_folder(game_id),
+    )
     max_bytes = await _max_upload_bytes()
     actor = (request.state.user.username
              if getattr(request.state, "user", None) else None)

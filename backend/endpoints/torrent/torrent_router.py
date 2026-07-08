@@ -60,6 +60,7 @@ def _fmt_download(td) -> dict:
         "eta":             td.eta,
         "error_msg":       td.error_msg,
         "game_id":         td.game_id,
+        "library":         td.library,
         "created_by":      td.created_by,
         "created_at":      td.created_at.isoformat() if td.created_at else None,
         "completed_at":    td.completed_at.isoformat() if td.completed_at else None,
@@ -98,6 +99,8 @@ class AddTorrentByUrl(BaseModel):
     url:   str
     title: str
     os:    str = "windows"
+    # Optional target library slug; NULL / "games" => built-in Games library.
+    library: str | None = None
 
 
 @protected_route(torrent_router.post, "/download/url", scopes=[Scope.LIBRARY_UPLOAD])
@@ -115,6 +118,7 @@ async def add_torrent_url(request: Request, body: AddTorrentByUrl) -> dict:
         request, body.title, body.os, download_dir,
         transmission_id=info.get("id"),
         info_hash=info.get("hashString"),
+        library=body.library,
     )
     return _fmt_download(td)
 
@@ -124,6 +128,7 @@ async def add_torrent_file(
     request: Request,
     title:   str = Form(...),
     target_os: str = Form("windows"),
+    library: str = Form(None),
     file:    UploadFile = File(...),
 ) -> dict:
     """Upload a .torrent file and add it to Transmission."""
@@ -152,14 +157,18 @@ async def add_torrent_file(
         request, title, target_os, download_dir,
         transmission_id=info.get("id"),
         info_hash=info.get("hashString"),
+        library=library,
     )
     return _fmt_download(td)
 
 
-async def _create_torrent_download(request, title, os_name, download_dir, *, transmission_id, info_hash):
+async def _create_torrent_download(request, title, os_name, download_dir, *, transmission_id, info_hash, library=None):
     from handler.database.session import async_session_factory
     from models.torrent_download import TorrentDownload
     username = request.state.user.username if request.state.user else "admin"
+    target_lib = (library or "").strip() or None
+    if target_lib == "games":
+        target_lib = None  # built-in Games library is the default (CUSTOM)
     async with async_session_factory() as db:
         td = TorrentDownload(
             title=title,
@@ -169,6 +178,7 @@ async def _create_torrent_download(request, title, os_name, download_dir, *, tra
             info_hash=info_hash,
             status="downloading",
             created_by=username,
+            library=target_lib,
         )
         db.add(td)
         await db.commit()

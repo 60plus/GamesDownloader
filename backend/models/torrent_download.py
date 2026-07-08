@@ -25,6 +25,10 @@ class TorrentDownload(Base):
     # "downloading" | "complete" | "error" | "removed"
     title:           Mapped[str]        = mapped_column(String(512))
     os:              Mapped[str]        = mapped_column(String(16), default="windows")
+    # Target library slug the finished download should land in. NULL / "games"
+    # => built-in Games library (CUSTOM folder); a folder-backed custom library
+    # slug routes the files into that library's folder + membership.
+    library:         Mapped[str | None] = mapped_column(String(128), nullable=True)
     download_dir:    Mapped[str]        = mapped_column(String(1024))
     percent_done:    Mapped[float]      = mapped_column(Float, default=0.0)
     total_size:      Mapped[int]        = mapped_column(BigInteger, default=0)

@@ -475,11 +475,20 @@
               </select>
             </div>
           </div>
-          <div class="cl-field">
+          <div class="cl-tabs" style="margin-bottom:8px">
+            <button :class="['cl-tab', { 'cl-tab--active': uTab === 'file' }]" @click="uTab = 'file'">{{ t('upload.tab_file') }}</button>
+            <button :class="['cl-tab', { 'cl-tab--active': uTab === 'url' }]" @click="uTab = 'url'">{{ t('upload.tab_url') }}</button>
+          </div>
+          <div v-if="uTab === 'file'" class="cl-field">
             <label class="cl-label">{{ t('upload.file') }}</label>
             <input type="file" class="cl-input cl-input--file" ref="uploadFileInput" @change="onUploadFileChange" />
             <div v-if="uForm.fileName" class="cl-file-name">{{ uForm.fileName }} ({{ uForm.fileSize }})</div>
           </div>
+          <div v-else class="cl-field">
+            <label class="cl-label">{{ t('upload.url_label') }}</label>
+            <input v-model="uForm.url" type="text" class="cl-input" placeholder="https://…" :disabled="uUrlJobId !== null" />
+          </div>
+          <div v-if="uUrlJobId !== null" class="cl-msg">{{ t('upload.url_downloading') }}</div>
           <div v-if="uProgress !== null" class="cl-progress-wrap">
             <div class="cl-progress-bar" :style="{ width: uProgress + '%' }" />
             <span class="cl-progress-label">{{ uProgress }}%</span>
@@ -489,7 +498,7 @@
         </div>
         <div class="cl-modal-footer">
           <button class="cl-btn cl-btn--ghost" @click="uploadModal = false">{{ t('common.cancel') }}</button>
-          <button class="cl-btn cl-btn--primary" :disabled="uUploading || !uForm.title.trim() || !uForm.file" @click="submitUpload">
+          <button class="cl-btn cl-btn--primary" :disabled="uUploading || uUrlJobId !== null || !uForm.title.trim() || (uTab === 'file' ? !uForm.file : !uForm.url.trim())" @click="submitUpload">
             <span v-if="uUploading" class="cl-spinner" />
             {{ t('upload.upload') }}
           </button>
@@ -666,6 +675,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useLibrariesStore } from '@/stores/libraries'
 import { useSocketStore } from '@/stores/socket'
 import client from '@/services/api/client'
+import * as libActions from '@/lib/libraryActions'
 import AmbientBackground from '@/components/common/AmbientBackground.vue'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import ClassicGameDetail from './ClassicGameDetail.vue'
@@ -1061,7 +1071,9 @@ async function scanCustomLibrary() {
   const next = new Set(syncing.value); next.add(id); syncing.value = next
   pushLog('Scanning Games library (CUSTOM folder)…')
   try {
-    const { data } = await client.post('/library/scan')
+    // In a custom library scan only its folder; in the built-in Games library
+    // scan CUSTOM plus every folder-backed custom library.
+    const data = await libActions.scan(activeLib.value)
     await fetchGames()
     detailRefreshTick.value++
     pushLog(`Scan complete. Created: ${data.created}, updated: ${data.updated}. ${data.errors?.length ? data.errors.join(', ') : ''}`)
@@ -1338,18 +1350,44 @@ function doLogout() {
 // ── Upload modal ────────────────────────────────────────────────────────────────
 
 const uploadModal    = ref(false)
+const uTab           = ref<'file' | 'url'>('file')
 const uUploading     = ref(false)
 const uError         = ref('')
 const uSuccess       = ref('')
 const uProgress      = ref<number | null>(null)
+const uUrlJobId      = ref<number | null>(null)
 const uploadFileInput = ref<HTMLInputElement>()
-const uForm = ref({ title: '', os: 'windows', file_type: 'game', file: null as File | null, fileName: '', fileSize: '' })
+const uForm = ref({ title: '', os: 'windows', file_type: 'game', file: null as File | null, fileName: '', fileSize: '', url: '' })
 
 function openUploadModal() {
   menuOpen.value = false
+  _stopUrlUploadListeners()
+  uTab.value = 'file'; uUrlJobId.value = null
   uError.value = ''; uSuccess.value = ''; uProgress.value = null
-  uForm.value = { title: '', os: 'windows', file_type: 'game', file: null, fileName: '', fileSize: '' }
+  uForm.value = { title: '', os: 'windows', file_type: 'game', file: null, fileName: '', fileSize: '', url: '' }
   uploadModal.value = true
+}
+
+function _stopUrlUploadListeners() {
+  socketStore.socket?.off('upload:url_progress', _onUrlUploadProgress)
+  socketStore.socket?.off('upload:url_complete', _onUrlUploadComplete)
+  socketStore.socket?.off('upload:url_error',    _onUrlUploadError)
+}
+function _onUrlUploadProgress(data: any) {
+  if (data.id !== uUrlJobId.value) return
+  uProgress.value = data.percent >= 0 ? Math.round(data.percent) : -1
+}
+function _onUrlUploadComplete(data: any) {
+  if (data.id !== uUrlJobId.value) return
+  _stopUrlUploadListeners()
+  uProgress.value = 100; uSuccess.value = t('upload.success'); uUrlJobId.value = null
+  fetchGames()
+  setTimeout(() => { uploadModal.value = false }, 2000)
+}
+function _onUrlUploadError(data: any) {
+  if (data.id !== uUrlJobId.value) return
+  _stopUrlUploadListeners()
+  uError.value = data.error || t('upload.failed'); uUrlJobId.value = null; uProgress.value = null
 }
 
 function _fmtBytes(b: number): string {
@@ -1369,15 +1407,28 @@ function onUploadFileChange(e: Event) {
 async function submitUpload() {
   uError.value = ''; uSuccess.value = ''; uProgress.value = 0; uUploading.value = true
   try {
-    const gameRes = await client.post('/library/games', { title: uForm.value.title.trim() })
-    const gameId = gameRes.data.id
-    const fd = new FormData()
-    fd.append('os', uForm.value.os)
-    fd.append('file_type', uForm.value.file_type)
-    fd.append('file', uForm.value.file as File)
-    await client.post(`/library/games/${gameId}/upload`, fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      onUploadProgress: (ev) => { if (ev.total) uProgress.value = Math.round(ev.loaded / ev.total * 100) },
+    // Target the active custom library so the game and its files land there.
+    const game = await libActions.createGame({
+      title:   uForm.value.title.trim(),
+      library: activeLib.value,
+    })
+    if (uTab.value === 'url') {
+      // Server downloads in the background - follow progress over the socket.
+      const res = await libActions.uploadFromUrl(game.id, {
+        url:      uForm.value.url.trim(),
+        os:       uForm.value.os,
+        fileType: uForm.value.file_type,
+      })
+      uUrlJobId.value = res.id
+      socketStore.socket?.on('upload:url_progress', _onUrlUploadProgress)
+      socketStore.socket?.on('upload:url_complete', _onUrlUploadComplete)
+      socketStore.socket?.on('upload:url_error',    _onUrlUploadError)
+      return
+    }
+    await libActions.uploadFile(game.id, uForm.value.file as File, {
+      os:       uForm.value.os,
+      fileType: uForm.value.file_type,
+      onProgress: (percent) => { uProgress.value = percent },
     })
     uSuccess.value = t('upload.success')
     await fetchGames()
@@ -1463,18 +1514,19 @@ function fmtEta(secs: number): string {
 async function submitTorrent() {
   tError.value = ''; tAdding.value = true
   try {
-    let res: any
-    if (tTab.value === 'url') {
-      res = await client.post('/torrents/download/url', { url: tForm.value.url.trim(), title: tForm.value.title.trim(), os: tForm.value.os })
-    } else {
-      const fd = new FormData()
-      fd.append('title', tForm.value.title.trim())
-      fd.append('target_os', tForm.value.os)
-      fd.append('file', tForm.value.file as File)
-      res = await client.post('/torrents/download/file', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
-    }
-    tDownloadId.value = res.data.id
-    tDlPercent.value  = res.data.percent ?? 0
+    // The finished download lands in the active custom library (folder +
+    // membership) or the built-in Games library.
+    const dl = tTab.value === 'url'
+      ? await libActions.addTorrent({
+          source: tForm.value.url.trim(), title: tForm.value.title.trim(),
+          os: tForm.value.os, library: activeLib.value,
+        })
+      : await libActions.addTorrent({
+          source: tForm.value.file as File, title: tForm.value.title.trim(),
+          os: tForm.value.os, library: activeLib.value, isFile: true,
+        })
+    tDownloadId.value = dl.id
+    tDlPercent.value  = dl.percent ?? 0
     socketStore.socket?.on('torrent:download_progress', _onTorrentProgress)
     socketStore.socket?.on('torrent:download_complete', _onTorrentComplete)
     socketStore.socket?.on('torrent:download_error',    _onTorrentError)
@@ -1613,6 +1665,7 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('click', onClickOutside)
   _stopTorrentListeners()
+  _stopUrlUploadListeners()
 })
 </script>
 

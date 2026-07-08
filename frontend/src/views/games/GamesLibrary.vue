@@ -427,6 +427,7 @@ import { useLibrariesStore } from '@/stores/libraries'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
+import * as libActions from '@/lib/libraryActions'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import GameRequestDialog from '@/components/GameRequestDialog.vue'
 import GameListRow from '@/components/games/GameListRow.vue'
@@ -549,7 +550,9 @@ async function scanLibrary() {
   scanning.value = true
   scanMsg.value = ''
   try {
-    const { data } = await client.post('/library/scan')
+    // In a custom library view scan only that library's folder; in the built-in
+    // Games view (no slug) scan CUSTOM plus every folder-backed custom library.
+    const data = await libActions.scan(librarySlug.value)
     scanMsg.value = `Done - ${data.created} new, ${data.updated} updated`
     if (data.errors?.length) scanMsg.value += `, ${data.errors.length} error(s)`
     await fetchGames()
@@ -756,22 +759,24 @@ async function submitTorrent() {
   tError.value = ''
   tAdding.value = true
   try {
-    let res: any
-    if (tTab.value === 'url') {
-      res = await client.post('/torrents/download/url', {
-        url:   tForm.value.url.trim(),
-        title: tForm.value.title.trim(),
-        os:    tForm.value.os,
-      })
-    } else {
-      const fd = new FormData()
-      fd.append('title', tForm.value.title.trim())
-      fd.append('target_os', tForm.value.os)
-      fd.append('file', tForm.value.file as File)
-      res = await client.post('/torrents/download/file', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
-    }
-    tDownloadId.value = res.data.id
-    tDlPercent.value  = res.data.percent ?? 0
+    // In a custom library view the finished download lands in that library
+    // (folder + membership); otherwise the built-in Games library.
+    const dl = tTab.value === 'url'
+      ? await libActions.addTorrent({
+          source:  tForm.value.url.trim(),
+          title:   tForm.value.title.trim(),
+          os:      tForm.value.os,
+          library: librarySlug.value,
+        })
+      : await libActions.addTorrent({
+          source:  tForm.value.file as File,
+          title:   tForm.value.title.trim(),
+          os:      tForm.value.os,
+          library: librarySlug.value,
+          isFile:  true,
+        })
+    tDownloadId.value = dl.id
+    tDlPercent.value  = dl.percent ?? 0
     // Attach socket listeners for live progress
     socketStore.socket?.on('torrent:download_progress', _onTorrentProgress)
     socketStore.socket?.on('torrent:download_complete', _onTorrentComplete)
@@ -871,19 +876,23 @@ async function submitUpload() {
   uProgress.value = 0
   uUploading.value = true
   try {
-    // Step 1: create game entry
-    const gameRes = await client.post('/library/games', { title: uForm.value.title.trim() })
-    const gameId = gameRes.data.id
+    // Step 1: create game entry. In a custom library view, target that library so
+    // the game (and its uploaded files) land there instead of the Games library.
+    const game = await libActions.createGame({
+      title:   uForm.value.title.trim(),
+      library: librarySlug.value,
+    })
+    const gameId = game.id
 
     if (uTab.value === 'url') {
       // Step 2 (URL): the server downloads in the background - follow along
       // over the socket like the torrent flow does.
-      const res = await client.post(`/library/games/${gameId}/upload-url`, {
-        url:       uForm.value.url.trim(),
-        os:        uForm.value.os,
-        file_type: uForm.value.file_type,
+      const res = await libActions.uploadFromUrl(gameId, {
+        url:      uForm.value.url.trim(),
+        os:       uForm.value.os,
+        fileType: uForm.value.file_type,
       })
-      uUrlJobId.value = res.data.id
+      uUrlJobId.value = res.id
       socketStore.socket?.on('upload:url_progress', _onUrlUploadProgress)
       socketStore.socket?.on('upload:url_complete', _onUrlUploadComplete)
       socketStore.socket?.on('upload:url_error',    _onUrlUploadError)
@@ -891,15 +900,10 @@ async function submitUpload() {
     }
 
     // Step 2 (file): upload file to it
-    const fd = new FormData()
-    fd.append('os',        uForm.value.os)
-    fd.append('file_type', uForm.value.file_type)
-    fd.append('file',      uForm.value.file as File)
-    await client.post(`/library/games/${gameId}/upload`, fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      onUploadProgress: (ev) => {
-        if (ev.total) uProgress.value = Math.round(ev.loaded / ev.total * 100)
-      },
+    await libActions.uploadFile(gameId, uForm.value.file as File, {
+      os:       uForm.value.os,
+      fileType: uForm.value.file_type,
+      onProgress: (percent) => { uProgress.value = percent },
     })
     uSuccess.value = t('upload.success')
     await fetchGames()

@@ -194,6 +194,10 @@ class GameCreateBody(BaseModel):
     publisher: str | None = None
     genres: list | None = None
     tags: list | None = None
+    # Optional target library slug. When it is a folder-backed custom library the
+    # game is added to it (membership) and kept out of the default Games library,
+    # so it shows only where the admin created it.
+    library: str | None = None
 
 class GameUpdateBody(BaseModel):
     title: str | None = None
@@ -638,6 +642,18 @@ async def create_library_game(request: Request, body: GameCreateBody) -> dict:
         is_active=True,
     )
     game = await _lib.create(game)
+
+    # Target a user-created custom library: add membership and keep it out of the
+    # default Games library so it appears only in that library. The admin can still
+    # add it to other libraries afterwards via the metadata editor's membership list.
+    target_slug = (body.library or "").strip()
+    if target_slug and target_slug != "games":
+        from handler.database.library_registry_handler import library_registry_handler
+        target = await library_registry_handler.get_by_slug(target_slug)
+        if target is not None and target.kind == "custom_lib":
+            await library_registry_handler.set_memberships(game.id, [target.id])
+            await _lib.update(game, {"in_default_library": False})
+
     return _game_to_dict(game)
 
 
@@ -1333,36 +1349,30 @@ async def unpublish_gog_game(request: Request, gog_game_id: int) -> dict:
 
 # ── Scan CUSTOM folder ────────────────────────────────────────────────────────
 
-@protected_route(library_router.post, "/scan", scopes=[Scope.LIBRARY_ADMIN])
-async def scan_custom_library(request: Request) -> dict:
-    """Scan /data/games/CUSTOM/ and create LibraryGame entries for new folders.
+async def _scan_one_folder(root: Path, user_id: int, target_lib) -> tuple[int, int, list[str]]:
+    """Scan a single library folder and create/update LibraryGames.
 
-    Supports two directory layouts simultaneously:
-
-    Title-first (classic):
-        CUSTOM/{Title}/                  → game title from folder name
-        CUSTOM/{Title}/{os}/files        → OS detected from subfolder
-        CUSTOM/{Title}/files             → os="all" (flat)
-
-    OS-first (new):
-        CUSTOM/{os}/{Title}/             → OS detected from top folder, title from sub-folder
-        CUSTOM/{os}/{Title}/{type}/files → type from innermost folder (extra/dlc)
-        CUSTOM/{extra|dlc}/{Title}/files → file_type forced, os="all"
-
-    Games with the same slug from both layouts are merged into one LibraryGame.
+    `target_lib` is the Library the folder belongs to. Layout is detected per game
+    folder (title-first or OS-first, same rules as the CUSTOM folder). For a
+    folder-backed custom library the scanned games get a membership row and, when
+    newly created, are kept out of the default Games library; for the built-in
+    Games library (kind "custom") they stay in the default library as before.
+    Dedup is by slug, so a game present in several folders is one LibraryGame with
+    several memberships.
     """
-    custom_root = Path(GAMES_PATH) / "CUSTOM"
-    custom_root.mkdir(parents=True, exist_ok=True)
+    from handler.database.library_registry_handler import library_registry_handler
+    is_custom_lib = target_lib is not None and target_lib.kind == "custom_lib"
 
+    root.mkdir(parents=True, exist_ok=True)
     created = 0
     updated = 0
     errors: list[str] = []
 
-    # Collect (title, game_dir, force_os, force_type) tuples for all games found
-    # using both layout strategies so we can merge by slug.
+    # Collect (title, game_dir, force_os, force_type) tuples using both layout
+    # strategies so we can merge by slug.
     pending: dict[str, dict] = {}  # slug → {title, dirs: [(path, force_os, force_type)]}
 
-    for top_dir in sorted(custom_root.iterdir()):
+    for top_dir in sorted(root.iterdir()):
         if not top_dir.is_dir():
             continue
 
@@ -1373,46 +1383,52 @@ async def scan_custom_library(request: Request) -> dict:
         is_ty_cont = top_name.lower() in _TYPE_CONTAINER_NAMES
 
         if is_os_cont or is_ty_cont:
-            # ── OS-first layout ───────────────────────────────────────────────
-            # top_dir is a container (windows/, mac/, linux/, extras/, dlc/).
-            # Its subdirectories are game titles.
+            # OS-first layout: top_dir is a container (windows/, extras/, ...),
+            # its subdirectories are game titles.
             force_os   = top_os   if is_os_cont else None
             force_type = top_type if is_ty_cont else None
-
             for game_dir in sorted(top_dir.iterdir()):
                 if not game_dir.is_dir():
                     continue
                 title = game_dir.name
                 slug  = _slugify(title)
-                if slug not in pending:
-                    pending[slug] = {"title": title, "dirs": []}
+                pending.setdefault(slug, {"title": title, "dirs": []})
                 pending[slug]["dirs"].append((str(game_dir), force_os, force_type))
         else:
-            # ── Title-first layout ────────────────────────────────────────────
+            # Title-first layout.
             title = top_name
             slug  = _slugify(title)
-            if slug not in pending:
-                pending[slug] = {"title": title, "dirs": []}
+            pending.setdefault(slug, {"title": title, "dirs": []})
             pending[slug]["dirs"].append((str(top_dir), None, None))
 
-    # Process each unique game slug
     for slug, info in sorted(pending.items()):
         title = info["title"]
         try:
             existing = await _lib.get_by_slug(slug)
-
             if not existing:
                 lib_game = LibraryGame(
                     source="custom",
                     title=title,
                     slug=slug,
                     is_active=True,
-                    published_by=request.state.user.id,
+                    published_by=user_id,
+                    # New games scanned into a custom library live only there.
+                    in_default_library=not is_custom_lib,
                 )
                 lib_game = await _lib.create(lib_game)
                 created += 1
             else:
                 lib_game = existing
+                updated += 1
+
+            # Membership for a custom library: add without disturbing existing
+            # memberships (one game can belong to several libraries).
+            if is_custom_lib:
+                member_ids = await library_registry_handler.get_member_library_ids(lib_game.id)
+                if target_lib.id not in member_ids:
+                    await library_registry_handler.set_memberships(
+                        lib_game.id, member_ids + [target_lib.id],
+                    )
 
             # Collect all new files from every directory associated with this slug
             all_new_files: list[LibraryFile] = []
@@ -1429,18 +1445,12 @@ async def scan_custom_library(request: Request) -> dict:
 
             existing_files = await _lib.get_files_for_game(lib_game.id)
             existing_paths = {f.file_path for f in existing_files}
-
             for f in all_new_files:
                 if f.file_path not in existing_paths:
                     await _lib.create_file(f)
 
             # Update OS flags on the game record based on discovered files
             all_files = await _lib.get_files_for_game(lib_game.id)
-            os_flags: dict[str, bool] = {}
-            for f in all_files:
-                if f.is_available and f.os in ("windows", "mac", "linux"):
-                    os_flags[f"os_{f.os}" if f.os != "mac" else "os_mac"] = True
-            # Normalise key: "os_mac" stays, "os_windows"/"os_linux" already correct
             flag_map = {
                 "os_windows": any(f.is_available and f.os == "windows" for f in all_files),
                 "os_mac":     any(f.is_available and f.os == "mac"     for f in all_files),
@@ -1458,13 +1468,54 @@ async def scan_custom_library(request: Request) -> dict:
                 if ef.source == "custom" and not os.path.exists(_abs_path(ef.file_path)):
                     await _lib.update_file(ef, {"is_available": False})
 
-            updated += 1
-
         except Exception as exc:
             logger.exception("Scan error for '%s': %s", title, exc)
             errors.append(f"{title}: {exc}")
 
-    return {"created": created, "updated": updated, "errors": errors}
+    return created, updated, errors
+
+
+@protected_route(library_router.post, "/scan", scopes=[Scope.LIBRARY_ADMIN])
+async def scan_custom_library(request: Request, library: str | None = None) -> dict:
+    """Scan library folders and create/update LibraryGames.
+
+    Without `library`: scans the built-in Games folder (CUSTOM) plus every
+    folder-backed custom library, assigning each folder's games to the right
+    library. With `library=<slug>`: scans only that library's folder.
+
+    Each library folder supports both layouts simultaneously:
+      - Title-first: {Title}/ , {Title}/{os}/files , {Title}/files (os="all")
+      - OS-first:    {os}/{Title}/... , {extra|dlc}/{Title}/files
+    """
+    from handler.database.library_registry_handler import library_registry_handler
+    user_id = request.state.user.id
+
+    targets: list = []
+    if library:
+        lib = await library_registry_handler.get_by_slug(library)
+        if lib is None or not lib.storage_folder:
+            raise HTTPException(status_code=400, detail="Library has no scan folder")
+        targets.append(lib)
+    else:
+        # Folder-backed libraries only: built-in Games (CUSTOM) + custom_lib.
+        # GOG has its own sync pipeline and is never file-scanned here.
+        for lib in await library_registry_handler.get_all():
+            if lib.storage_folder and lib.kind in ("custom", "custom_lib"):
+                targets.append(lib)
+
+    created = 0
+    updated = 0
+    errors: list[str] = []
+    per_library: list[dict] = []
+    for lib in targets:
+        root = Path(GAMES_PATH) / lib.storage_folder
+        c, u, e = await _scan_one_folder(root, user_id, lib)
+        created += c
+        updated += u
+        errors.extend(e)
+        per_library.append({"slug": lib.slug, "name": lib.name, "created": c, "updated": u})
+
+    return {"created": created, "updated": updated, "errors": errors, "libraries": per_library}
 
 
 # ── Scrape metadata ────────────────────────────────────────────────────────────

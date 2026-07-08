@@ -24,6 +24,7 @@ import { useLibrariesStore } from "./stores/libraries";
 import { useCollectionsStore } from "./stores/collections";
 import { useNotificationStore } from "./stores/notifications";
 import { LIBRARY_ICONS, LIBRARY_ICON_NAMES, libraryIconMarkup } from "./lib/libraryIcons";
+import libraryActions from "./lib/libraryActions";
 import client from "./services/api/client";
 
 import DownloadManager from "./components/gog/DownloadManager.vue";
@@ -213,6 +214,19 @@ function createSafeSocketStore() {
     /** Route for a container library's collection grid. */
     libraryRoute: (librarySlug: string) => useCollectionsStore().libraryRoute(librarySlug),
   },
+  // Unified, library-aware "add content" API. A theme keeps its own dialogs but
+  // calls these instead of raw api.post(), so create-game / upload-file /
+  // upload-from-url / add-torrent / scan all honour the current library (folder
+  // + membership) with no per-theme logic. The URL-upload and torrent calls run
+  // server-side and report progress over socket.io - use __GD__.events.on(...)
+  // to follow "upload:url_*" / "torrent:download_*" keyed on the returned id.
+  //   library.createGame({title, library})            -> game (has .id)
+  //   library.uploadFile(gameId, file, {os, fileType, onProgress})
+  //   library.uploadFromUrl(gameId, {url, os, fileType}) -> {id, filename}
+  //   library.addTorrent({source, title, os, library, isFile}) -> download
+  //   library.scan(librarySlug?)                       -> {created, updated, ...}
+  //   library.addByUpload({library, title, file, os, fileType, onProgress}) -> game
+  library: libraryActions,
   composables: {
     useCouchNav,
     couchNavPaused,

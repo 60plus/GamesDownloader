@@ -175,8 +175,34 @@ async def _update_download(torrent_id: int, values: dict) -> None:
         await db.commit()
 
 
+async def _resolve_target_library(td):
+    """Resolve the finished torrent's destination.
+
+    Returns (storage_folder, target_lib_id) where:
+      - a folder-backed custom library (kind "custom_lib" with a storage_folder)
+        routes files into that folder and yields its id for a membership row;
+      - anything else (no library, "games", GOG, emulation, or a folder-less lib)
+        falls back to the built-in Games library (CUSTOM), target_lib_id=None.
+    """
+    slug = (getattr(td, "library", None) or "").strip()
+    if not slug or slug == "games":
+        return "CUSTOM", None
+    try:
+        from handler.database.library_registry_handler import library_registry_handler
+        lib = await library_registry_handler.get_by_slug(slug)
+    except Exception as exc:
+        logger.warning("Torrent target library lookup failed for '%s': %s", slug, exc)
+        return "CUSTOM", None
+    if lib is not None and lib.kind == "custom_lib" and lib.storage_folder:
+        return lib.storage_folder, lib.id
+    return "CUSTOM", None
+
+
 async def _auto_register_game(td) -> int | None:
-    """Scan download_dir, move files to /data/games/CUSTOM/{slug}/, register as LibraryGame."""
+    """Scan download_dir, move files to /data/games/{storage_folder}/{slug}/,
+    register as LibraryGame. When the download targets a folder-backed custom
+    library, files land in that library's folder and the game is added to it
+    (membership) instead of the default Games library."""
     from handler.database.session import async_session_factory
     from models.library_game import LibraryGame
     from models.library_file import LibraryFile
@@ -197,6 +223,10 @@ async def _auto_register_game(td) -> int | None:
     if not files_found:
         return None
 
+    # Resolve destination library (folder + optional membership target).
+    storage_folder, target_lib_id = await _resolve_target_library(td)
+    is_custom_lib = target_lib_id is not None
+
     # Slugify title
     title = td.title or "Unknown Game"
     slug_base = re.sub(r"[^a-z0-9]+", "-",
@@ -214,14 +244,14 @@ async def _auto_register_game(td) -> int | None:
             slug = f"{slug_base}-{n}"
             n += 1
 
-        # Move files from torrent download dir → /data/games/CUSTOM/{slug}/
-        custom_dir = os.path.join(BASE_PATH, "games", "CUSTOM", slug)
-        os.makedirs(custom_dir, exist_ok=True)
+        # Move files from torrent download dir → /data/games/{storage_folder}/{slug}/
+        dest_root = os.path.join(BASE_PATH, "games", storage_folder, slug)
+        os.makedirs(dest_root, exist_ok=True)
 
         moved_files = []
         for fpath in files_found:
             rel_in_dl = os.path.relpath(fpath, download_dir)
-            dest = os.path.join(custom_dir, rel_in_dl)
+            dest = os.path.join(dest_root, rel_in_dl)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             shutil.move(fpath, dest)
             moved_files.append(dest)
@@ -239,6 +269,8 @@ async def _auto_register_game(td) -> int | None:
             source="torrent",
             is_active=True,
             published_by=None,
+            # A game routed into a custom library lives only there by default.
+            in_default_library=not is_custom_lib,
         )
         db.add(game)
         await db.flush()
@@ -259,5 +291,20 @@ async def _auto_register_game(td) -> int | None:
             db.add(lib_file)
 
         await db.commit()
-        logger.info("Auto-registered game '%s' (id=%d) from torrent → CUSTOM/%s", title, game.id, slug)
-        return game.id
+        game_id = game.id
+
+    # Membership is written through the registry handler (its own session), so
+    # it must happen after the game row is committed above.
+    if is_custom_lib:
+        try:
+            from handler.database.library_registry_handler import library_registry_handler
+            await library_registry_handler.set_memberships(game_id, [target_lib_id])
+        except Exception as exc:
+            logger.warning("Torrent membership assignment failed for game %d: %s", game_id, exc)
+
+    logger.info(
+        "Auto-registered game '%s' (id=%d) from torrent → %s/%s%s",
+        title, game_id, storage_folder, slug,
+        " (custom library)" if is_custom_lib else "",
+    )
+    return game_id

@@ -151,6 +151,8 @@ async def _init_db() -> None:
         # Local trailer copy (downloaded via yt-dlp or uploaded in the editor).
         ("library_games",  "video_path",          "VARCHAR(512) NULL"),
         ("gog_games",      "video_path",          "VARCHAR(1024) NULL"),
+        # Torrent downloads can target a custom library (folder + membership).
+        ("torrent_downloads", "library",          "VARCHAR(128) NULL"),
     ]
     async with async_engine.begin() as conn:
         for table, column, col_ddl in _COLUMN_MIGRATIONS:
