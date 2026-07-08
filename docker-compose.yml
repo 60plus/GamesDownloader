@@ -1,7 +1,7 @@
 # GamesDownloader - Docker Compose
 #
-# All data stored under GD_BASE_DIR (default: /APPS/GamesDownloader)
-# Set GD_BASE_DIR in .env to change base path.
+# All data stored under GD_BASE_DIR (default: "." = a ./data folder next to this file).
+# Set GD_BASE_DIR in .env to point at another disk, e.g. /opt/gamesdownloader.
 
 services:
 
@@ -26,25 +26,21 @@ services:
       - GD_AUTH_SECRET_KEY=${GD_AUTH_SECRET_KEY:-change-me-in-production}
       - GD_BASE_PATH=/data
       - GD_DEBUG=${GD_DEBUG:-false}
-      - IGDB_CLIENT_ID=${IGDB_CLIENT_ID:-}
-      - IGDB_CLIENT_SECRET=${IGDB_CLIENT_SECRET:-}
-      - STEAMGRIDDB_API_KEY=${STEAMGRIDDB_API_KEY:-}
-      - RAWG_API_KEY=${RAWG_API_KEY:-}
-      - SCREENSCRAPER_USERNAME=${SCREENSCRAPER_USERNAME:-}
-      - SCREENSCRAPER_PASSWORD=${SCREENSCRAPER_PASSWORD:-}
-      - RA_API_KEY=${RA_API_KEY:-}
+      # Scraper credentials (IGDB, RAWG, ScreenScraper, SteamGridDB, RetroAchievements)
+      # are configured in the app UI (Settings -> Metadata) and stored encrypted at rest,
+      # NOT via environment variables.
     ports:
       - "${GD_PORT:-8080}:8080"
       - "${TR_WEBUI_PORT:-9091}:9091"
       - "${TR_PEER_PORT:-51413}:51413"
       - "${TR_PEER_PORT:-51413}:51413/udp"
     volumes:
-      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/games:/data/games
-      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/downloads:/data/downloads
-      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/resources:/data/resources
-      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/config:/data/config
-      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/plugins:/data/plugins
-      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/clamav:/data/clamav
+      - ${GD_BASE_DIR:-.}/data/games:/data/games
+      - ${GD_BASE_DIR:-.}/data/downloads:/data/downloads
+      - ${GD_BASE_DIR:-.}/data/resources:/data/resources
+      - ${GD_BASE_DIR:-.}/data/config:/data/config
+      - ${GD_BASE_DIR:-.}/data/plugins:/data/plugins
+      - ${GD_BASE_DIR:-.}/data/clamav:/data/clamav
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -77,7 +73,7 @@ services:
       - MARIADB_USER=${DB_USER:-gd}
       - MARIADB_PASSWORD=${DB_PASSWD:-gd}
     volumes:
-      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/db:/var/lib/mysql
+      - ${GD_BASE_DIR:-.}/data/db:/var/lib/mysql
     healthcheck:
       test: ["CMD-SHELL", "mariadb -u${DB_USER:-gd} -p${DB_PASSWD:-gd} ${DB_NAME:-gamesdownloader} -e 'SELECT 1'"]
       interval: 10s
@@ -92,7 +88,7 @@ services:
     restart: unless-stopped
     command: valkey-server --requirepass ${REDIS_PASSWORD:-gd_redis_2026}
     volumes:
-      - ${GD_BASE_DIR:-/APPS/GamesDownloader}/data/redis:/data
+      - ${GD_BASE_DIR:-.}/data/redis:/data
     healthcheck:
       test: ["CMD", "valkey-cli", "-a", "${REDIS_PASSWORD:-gd_redis_2026}", "ping"]
       interval: 10s
