@@ -8,6 +8,7 @@ extra env var is needed.  Fernet is symmetric AES-128-CBC + HMAC-SHA256.
 from __future__ import annotations
 
 import base64
+from functools import lru_cache
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +24,13 @@ from decorators.database import begin_session
 _SALT = b"gd3-config-salt-v1"   # static salt is fine - key material comes from secret
 
 
+@lru_cache(maxsize=1)
 def _get_fernet() -> Fernet:
+    # Key material (AUTH_SECRET_KEY) and salt are fixed for the process lifetime,
+    # so the derived Fernet is always identical. Deriving it costs 100k PBKDF2
+    # rounds (~tens of ms); memoising turns N derivations into one, which matters
+    # on scrape hot-paths that decrypt scraper credentials per item.
+    # If the secret is ever swapped in tests, call _get_fernet.cache_clear().
     from config import AUTH_SECRET_KEY
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
