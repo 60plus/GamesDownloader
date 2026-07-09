@@ -10,11 +10,13 @@ from pydantic import BaseModel
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.database.session_handler import session_handler
+from handler.database.users_handler import UsersHandler
 from handler.config.config_handler import config_handler
 from config import REFRESH_TOKEN_EXPIRE_DAYS
 from models.user import Role
 
 router = APIRouter(prefix="/api/settings/security/sessions", tags=["sessions"])
+_users = UsersHandler()
 
 
 class SessionOut(BaseModel):
@@ -135,3 +137,14 @@ async def revoke_all_my_sessions(request: Request) -> None:
     """Revoke all sessions for the current user (logout everywhere)."""
     user = request.state.user
     await session_handler.revoke_all_for_user(user.username)
+
+
+@protected_route(router.delete, "/user/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_all_sessions_for_user(request: Request, user_id: int) -> None:
+    """Admin: revoke every active session of a target account (force logout)."""
+    if request.state.user.role != Role.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin only")
+    target = await _users.get_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    await session_handler.revoke_all_for_user(target.username)

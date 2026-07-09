@@ -118,6 +118,12 @@
             <!-- Actions -->
             <td>
               <div class="au-row-actions">
+                <button class="au-icon-btn" @click="openLimits(u)" :title="t('users.limits_title')">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                </button>
+                <button class="au-icon-btn au-icon-btn--warn" @click="confirmRevokeSessions(u)" :title="t('users.revoke_sessions_title')">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                </button>
                 <button class="au-icon-btn" @click="openResetPwd(u)" :title="t('users.reset_password')">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                 </button>
@@ -197,6 +203,33 @@
             <button class="au-submit-btn" :disabled="resetting" @click="doResetPwd">
               <div v-if="resetting" class="btn-spinner" />
               <span v-else>{{ t('users.set_password') }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ══ Per-user limits dialog ═════════════════════════════════════════════ -->
+    <Teleport to="body">
+      <div v-if="showLimits" class="au-overlay" @click.self="showLimits = false">
+        <div class="au-dialog glass">
+          <div class="au-dlg-header">
+            <span>{{ t('users.limits_dialog', { name: limitsUser?.username || '' }) }}</span>
+            <button class="dlg-close" @click="showLimits = false">×</button>
+          </div>
+          <div class="au-dlg-body">
+            <label class="au-label">{{ t('users.limit_upload') }}</label>
+            <input v-model.number="limitUploadGb" class="au-input" type="number" min="0" :placeholder="t('users.limit_global_ph')" />
+            <label class="au-label">{{ t('users.limit_quota') }}</label>
+            <input v-model.number="limitQuotaMb" class="au-input" type="number" min="0" :placeholder="t('users.limit_global_ph')" />
+            <div class="field-hint" style="margin-top:8px;font-size:12px;color:var(--muted)">{{ t('users.limit_hint') }}</div>
+          </div>
+          <div v-if="limitsError" class="au-dlg-error">{{ limitsError }}</div>
+          <div class="au-dlg-footer">
+            <button class="au-ghost-btn" @click="showLimits = false">{{ t('common.cancel') }}</button>
+            <button class="au-submit-btn" :disabled="limitsSaving" @click="saveUserLimits">
+              <div v-if="limitsSaving" class="btn-spinner" />
+              <span v-else>{{ t('common.save') }}</span>
             </button>
           </div>
         </div>
@@ -375,7 +408,7 @@ interface UserRecord {
   role: string
   enabled: boolean
   avatar_path: string | null
-  permissions: Record<string, boolean> | null
+  permissions: Record<string, boolean | number> | null
   created_at: string
   totp_enabled?: boolean
 }
@@ -509,7 +542,7 @@ async function togglePerm(u: UserRecord, key: string) {
   else if (current === false)  next = true    // deny → explicitly allow
   else                         next = null    // grant → back to role-default (remove key)
 
-  const newPerms: Record<string, boolean | null> = { ...(u.permissions ?? {}) }
+  const newPerms: Record<string, boolean | number | null> = { ...(u.permissions ?? {}) }
   if (next === null) delete newPerms[key]
   else newPerms[key] = next
 
@@ -556,6 +589,64 @@ async function doCreate() {
     createError.value = e?.response?.data?.detail || 'Failed to create user'
   } finally {
     creating.value = false
+  }
+}
+
+// ── Per-user limits (upload size + save quota; blank = use global default) ──────
+
+const _GBU = 1024 ** 3
+const _MBU = 1024 * 1024
+const showLimits   = ref(false)
+const limitsUser   = ref<UserRecord | null>(null)
+const limitUploadGb = ref(0)
+const limitQuotaMb  = ref(0)
+const limitsSaving = ref(false)
+const limitsError  = ref('')
+
+function openLimits(u: UserRecord) {
+  limitsUser.value = u
+  const p = u.permissions || {}
+  limitUploadGb.value = p.max_upload_bytes ? Math.round(Number(p.max_upload_bytes) / _GBU) : 0
+  limitQuotaMb.value  = p.saves_quota_bytes ? Math.round(Number(p.saves_quota_bytes) / _MBU) : 0
+  limitsError.value = ''
+  showLimits.value = true
+}
+
+async function saveUserLimits() {
+  if (!limitsUser.value) return
+  limitsSaving.value = true; limitsError.value = ''
+  try {
+    const perms: Record<string, boolean | number> = { ...(limitsUser.value.permissions ?? {}) }
+    if (limitUploadGb.value && limitUploadGb.value > 0) perms.max_upload_bytes = Math.round(limitUploadGb.value) * _GBU
+    else delete perms.max_upload_bytes
+    if (limitQuotaMb.value && limitQuotaMb.value > 0) perms.saves_quota_bytes = Math.round(limitQuotaMb.value) * _MBU
+    else delete perms.saves_quota_bytes
+    await client.patch(`/users/${limitsUser.value.id}`, { permissions: perms })
+    limitsUser.value.permissions = perms
+    showLimits.value = false
+  } catch (e: any) {
+    limitsError.value = e?.response?.data?.detail || t('users.limits_save_failed')
+  } finally {
+    limitsSaving.value = false
+  }
+}
+
+// ── Revoke all sessions of a user (admin, force logout everywhere) ──────────────
+
+async function confirmRevokeSessions(u: UserRecord) {
+  const isSelf = u.id === myId.value
+  const msg = isSelf
+    ? t('users.revoke_sessions_self')
+    : t('users.revoke_sessions_confirm', { name: u.username })
+  if (!await gdConfirm(msg, {
+    title: t('users.revoke_sessions_title'), danger: true, confirmText: t('users.revoke_sessions_btn'),
+  })) return
+  try {
+    await client.delete(`/settings/security/sessions/user/${u.id}`)
+    await loadSessions()   // reflect the force-logout in the Active Sessions table
+    await gdAlert(t('users.revoke_sessions_done', { name: u.username }), { title: t('users.revoke_sessions_title') })
+  } catch (e: any) {
+    await gdAlert(e?.response?.data?.detail || t('users.revoke_sessions_failed'), { title: t('common.error'), danger: true })
   }
 }
 

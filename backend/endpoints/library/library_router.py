@@ -170,8 +170,15 @@ def _scan_folder_files(
     return files
 
 
-def _check_user_can_access(request: Request, game: LibraryGame) -> None:
-    """Raise 403 if current user is denied access to this game."""
+async def _check_user_can_access(request: Request, game: LibraryGame) -> None:
+    """Raise 401/404 if the current user may not see this game.
+
+    The single gate every game-detail / file route must call. It enforces
+    authentication, hides inactive games, and applies the per-game deny list
+    (UserGameAccess). Admins bypass every check. Keeping the deny check here -
+    rather than duplicated inline per route - is what keeps per-game access
+    consistent across the primary route, the GOG-id lookup, and file listing.
+    """
     user = request.state.user
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -180,6 +187,11 @@ def _check_user_can_access(request: Request, game: LibraryGame) -> None:
     if user.role == Role.ADMIN:
         return
     if not game.is_active:
+        raise HTTPException(status_code=404, detail="Game not found")
+    # Per-game access: a denied non-admin is treated as if the game does not
+    # exist (404, matching the primary route), so nothing about the title leaks.
+    access = await _lib.get_game_access(user.id, game.id)
+    if access and access.access == "deny":
         raise HTTPException(status_code=404, detail="Game not found")
 
 
@@ -548,14 +560,7 @@ async def get_library_game(request: Request, game_id: int) -> dict:
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-    _check_user_can_access(request, game)
-    # Check per-game access
-    from models.user import Role
-    user = request.state.user
-    if user.role != Role.ADMIN:
-        access = await _lib.get_game_access(user.id, game_id)
-        if access and access.access == "deny":
-            raise HTTPException(status_code=404, detail="Game not found")
+    await _check_user_can_access(request, game)
     owner_name = None
     if game.published_by:
         from handler.database.session import async_session_factory as _asf
@@ -591,7 +596,7 @@ async def get_library_game_by_gog_id(request: Request, gog_game_id: int) -> dict
     game = await _lib.get_by_gog_game_id(gog_game_id)
     if not game or not game.is_active:
         raise HTTPException(status_code=404, detail="Not published")
-    _check_user_can_access(request, game)
+    await _check_user_can_access(request, game)
     return _game_to_dict(game)
 
 
@@ -1689,6 +1694,9 @@ async def library_game_meta_sources(
         game = await session.get(LibraryGame, game_id)
         if not game:
             raise HTTPException(status_code=404, detail="Game not found")
+    # Same per-game gate as the detail/file routes: a denied non-admin must not
+    # be able to probe a hidden game's existence or trigger external fetches.
+    await _check_user_can_access(request, game)
 
     search_term = q or game.title or ""
     result: dict = {"source": source, "found": False}
@@ -1963,6 +1971,7 @@ async def list_game_files(request: Request, game_id: int) -> list:
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    await _check_user_can_access(request, game)
     files = await _lib.get_files_for_game(game_id)
     return [_file_to_dict(f) for f in files]
 
@@ -2259,3 +2268,45 @@ async def set_user_game_access(request: Request, user_id: int, body: GameAccessB
 async def delete_user_game_access(request: Request, user_id: int, game_id: int) -> dict:
     await _lib.delete_game_access(user_id, game_id)
     return {"ok": True}
+
+
+# Game-centric view of the per-game deny list, so the admin can restrict a single
+# game to a set of users from the game itself (blocks the chosen users - e.g. keep
+# a title out of a child's account). Admins always keep access regardless.
+class GameAccessUsersBody(BaseModel):
+    denied_user_ids: list[int] = []
+
+
+@protected_route(library_router.get, "/games/{game_id}/access", scopes=[Scope.USERS_WRITE])
+async def get_game_access(request: Request, game_id: int) -> dict:
+    from handler.database.session import async_session_factory
+    from models.user_game_access import UserGameAccess
+    from sqlalchemy import select
+    async with async_session_factory() as db:
+        rows = (await db.execute(
+            select(UserGameAccess.user_id).where(
+                UserGameAccess.library_game_id == game_id,
+                UserGameAccess.access == "deny",
+            )
+        )).scalars().all()
+    return {"game_id": game_id, "denied_user_ids": list(rows)}
+
+
+@protected_route(library_router.put, "/games/{game_id}/access", scopes=[Scope.USERS_WRITE])
+async def set_game_access(request: Request, game_id: int, body: GameAccessUsersBody) -> dict:
+    """Replace the deny list for a game (block the given users from it)."""
+    from handler.database.session import async_session_factory
+    from models.user_game_access import UserGameAccess
+    from sqlalchemy import delete as _delete
+    ids = {int(u) for u in body.denied_user_ids}
+    async with async_session_factory() as db:
+        await db.execute(
+            _delete(UserGameAccess).where(
+                UserGameAccess.library_game_id == game_id,
+                UserGameAccess.access == "deny",
+            )
+        )
+        for uid in ids:
+            db.add(UserGameAccess(user_id=uid, library_game_id=game_id, access="deny"))
+        await db.commit()
+    return {"game_id": game_id, "denied_user_ids": sorted(ids)}

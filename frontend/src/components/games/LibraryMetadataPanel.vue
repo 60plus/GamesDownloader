@@ -749,6 +749,23 @@
                 </div>
               </template>
 
+              <!-- Per-game access (admin only): allow-list presentation. Every
+                   user is ticked (has access) by default; un-ticking removes
+                   their access - e.g. keep a title out of a child's account. -->
+              <template v-if="libraryKind === 'games' && isAdmin">
+                <div class="mep-form-section-label" style="margin-top:4px;">{{ t('meta.access') }}</div>
+                <div class="mep-field">
+                  <label class="mep-field-label"><span class="mep-field-hint">{{ t('meta.access_hint') }}</span></label>
+                  <div style="display:flex;flex-direction:column;gap:9px;margin-top:4px;">
+                    <label v-for="u in accessUsers" :key="u.id" style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
+                      <input type="checkbox" :value="u.id" v-model="allowedUserIds" />
+                      <span>{{ u.username }} <span class="mep-field-hint">({{ u.role }})</span></span>
+                    </label>
+                    <span v-if="!accessUsers.length" class="mep-field-hint">{{ t('meta.access_no_users') }}</span>
+                  </div>
+                </div>
+              </template>
+
             </div>
           </div>
 
@@ -895,6 +912,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useLibrariesStore } from '@/stores/libraries'
+import { useAuthStore } from '@/stores/auth'
 import { useCollectionsStore } from '@/stores/collections'
 import client from '@/services/api/client'
 import TranslateButton from '@/components/common/TranslateButton.vue'
@@ -1009,6 +1027,41 @@ async function loadGameCollections() {
   } catch { /* ignore - leave empty */ }
   _snapshotGameCollections()
 }
+// ── Per-game access (admin: control which users can see this game) ────────────
+// Allow-list presentation: every non-admin user is ticked (has access) by
+// default; un-ticking a user removes their access to this game (e.g. keep a
+// title out of a child's account). Stored server-side as a deny list; admins
+// always keep access.
+const _authStore = useAuthStore()
+const isAdmin = computed(() => _authStore.user?.role === 'admin')
+const accessUsers = ref<{ id: number; username: string; role: string }[]>([])
+const allowedUserIds = ref<number[]>([])   // ticked = has access
+const initialAllowed = ref<number[]>([])
+const accessChanged = computed(() =>
+  [...allowedUserIds.value].sort().join(',') !== [...initialAllowed.value].sort().join(','),
+)
+// Deny list sent to the server = every listed (non-admin) user who is NOT ticked.
+const deniedUserIds = computed(() =>
+  accessUsers.value.map(u => u.id).filter(id => !allowedUserIds.value.includes(id)),
+)
+function _snapshotAccess() { initialAllowed.value = [...allowedUserIds.value] }
+async function loadGameAccess() {
+  if (!isAdmin.value) return
+  try {
+    const [ar, ur] = await Promise.all([
+      client.get(`/library/games/${props.game.id}/access`),
+      client.get('/users'),
+    ])
+    const denied: number[] = Array.isArray(ar.data?.denied_user_ids) ? ar.data.denied_user_ids : []
+    accessUsers.value = (Array.isArray(ur.data) ? ur.data : [])
+      .filter((u: any) => u.role !== 'admin')   // admins always have access
+      .map((u: any) => ({ id: u.id, username: u.username, role: u.role }))
+    // Everyone starts ticked (has access) except those on the deny list.
+    allowedUserIds.value = accessUsers.value.map(u => u.id).filter(id => !denied.includes(id))
+  } catch { /* ignore */ }
+  _snapshotAccess()
+}
+
 const pluginTabs = computed<MetadataTab[]>(() =>
   getMetadataTabs().filter(tb => !tb.library || tb.library === 'all' || tb.library === libraryKind.value)
 )
@@ -1612,6 +1665,7 @@ const hasChanges = computed(() => {
   if (pluginDirty.value) return true
   if (libraryKind.value === 'games' && membershipChanged.value) return true
   if (libraryKind.value === 'games' && gameCollectionsChanged.value) return true
+  if (libraryKind.value === 'games' && isAdmin.value && accessChanged.value) return true
   if (pendingRequirements.value !== null) return true
   if (selectedCover.value      !== (props.game.cover_path      || '')) return true
   if (selectedBackground.value !== (props.game.background_path || props.game.background_url || '')) return true
@@ -2209,6 +2263,12 @@ async function save() {
       })
       _snapshotGameCollections()
     }
+    if (libraryKind.value === 'games' && isAdmin.value && accessChanged.value) {
+      await client.put(`/library/games/${props.game.id}/access`, {
+        denied_user_ids: deniedUserIds.value,
+      })
+      _snapshotAccess()
+    }
     pluginDirty.value = false
     saveOk.value = true
     emit('saved', payload)
@@ -2230,7 +2290,7 @@ function pluginLogoUrl(providerId: string): string {
 }
 
 onMounted(async () => {
-  if (libraryKind.value === 'games') { loadMemberships(); loadGameCollections() }
+  if (libraryKind.value === 'games') { loadMemberships(); loadGameCollections(); loadGameAccess() }
   try {
     const { data } = await client.get('/plugins/metadata/providers')
     metadataProviders.value = data || []
