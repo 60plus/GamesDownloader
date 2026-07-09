@@ -88,17 +88,27 @@ async def _scan_or_reject(file_path: Path, *, username: str | None) -> None:
         logger.exception("ClamAV scan failed for %s; allowing upload", file_path)
 
 
-async def _quota_limit() -> int:
+async def _quota_limit(user=None) -> int:
+    """Effective save quota: a per-user override (User.permissions
+    ["saves_quota_bytes"], set in Settings > Users) wins; otherwise the global
+    default from Settings > Downloads (config "saves_quota_bytes"); otherwise 100 MB."""
+    perm = (getattr(user, "permissions", None) or {}).get("saves_quota_bytes")
+    try:
+        if perm and int(perm) > 0:
+            return int(perm)
+    except (ValueError, TypeError):
+        pass
     raw = await config_handler.get("saves_quota_bytes")
     try:
-        return int(raw) if raw else _DEFAULT_QUOTA
+        v = int(raw) if raw else 0
+        return v if v > 0 else _DEFAULT_QUOTA
     except ValueError:
         return _DEFAULT_QUOTA
 
 
-async def _check_quota(user_id: int, extra: int) -> None:
-    limit = await _quota_limit()
-    used = await save_state_handler.get_user_total_size(user_id)
+async def _check_quota(user, extra: int) -> None:
+    limit = await _quota_limit(user)
+    used = await save_state_handler.get_user_total_size(user.id)
     if used + extra > limit:
         raise HTTPException(
             status_code=413,
@@ -163,7 +173,7 @@ async def _get_rom_or_404(rom_id: int):
 async def get_quota(request: Request) -> dict:
     user_id = request.state.user.id
     used  = await save_state_handler.get_user_total_size(user_id)
-    limit = await _quota_limit()
+    limit = await _quota_limit(request.state.user)
     return {"used_bytes": used, "limit_bytes": limit}
 
 
@@ -174,7 +184,7 @@ async def my_data(request: Request) -> dict:
     states = await save_state_handler.list_all_states_for_user(user_id)
     saves  = await save_state_handler.list_all_saves_for_user(user_id)
     used   = await save_state_handler.get_user_total_size(user_id)
-    limit  = await _quota_limit()
+    limit  = await _quota_limit(request.state.user)
     return {
         "states":      [_state_dict(s) for s in states],
         "saves":       [_save_dict(s)  for s in saves],
@@ -231,7 +241,7 @@ async def upload_state(
         raise HTTPException(status_code=400, detail="Empty state file")
     if len(data) > _MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="State file too large (max 64 MB)")
-    await _check_quota(user_id, len(data))
+    await _check_quota(request.state.user, len(data))
 
     platform_slug = rom.platform.fs_slug if rom.platform else "unknown"
     save_dir = _states_dir(platform_slug, rom_id, user_id)
@@ -320,7 +330,7 @@ async def upload_save(
         raise HTTPException(status_code=400, detail="Empty save file")
     if len(data) > _MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="Save file too large (max 64 MB)")
-    await _check_quota(user_id, len(data))
+    await _check_quota(request.state.user, len(data))
 
     content_hash  = hashlib.md5(data).hexdigest()
     platform_slug = rom.platform.fs_slug if rom.platform else "unknown"

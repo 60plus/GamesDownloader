@@ -97,12 +97,21 @@ async def _resolve_storage_folder(game_id: int) -> str:
     return "CUSTOM"
 
 
-async def _max_upload_bytes() -> int:
-    """Configurable upload size limit (default 50 GB)."""
+async def _max_upload_bytes(user=None) -> int:
+    """Effective upload size limit: a per-user override (User.permissions
+    ["max_upload_bytes"], set in Settings > Users) wins; otherwise the global
+    default from Settings > Downloads (config "max_upload_bytes"); otherwise 50 GB."""
+    perm = (getattr(user, "permissions", None) or {}).get("max_upload_bytes")
+    try:
+        if perm and int(perm) > 0:
+            return int(perm)
+    except (ValueError, TypeError):
+        pass
     from handler.config.config_handler import config_handler as _cfg
     _raw_max = await _cfg.get("max_upload_bytes")
     try:
-        return int(_raw_max) if _raw_max else 50 * 1024 ** 3
+        v = int(_raw_max) if _raw_max else 0
+        return v if v > 0 else 50 * 1024 ** 3
     except ValueError:
         return 50 * 1024 ** 3
 
@@ -213,7 +222,7 @@ async def upload_game_file(
         raise HTTPException(status_code=400, detail="Invalid filename")
     dest_path = dest_dir / filename
 
-    max_bytes = await _max_upload_bytes()
+    max_bytes = await _max_upload_bytes(getattr(request.state, "user", None))
 
     # Write file with size guard - abort and remove partial file if limit exceeded
     size = 0
@@ -388,7 +397,7 @@ async def upload_game_file_from_url(request: Request, game_id: int, body: Upload
     dest_dir = _dest_dir_for(
         game.title, body.os, body.file_type, await _resolve_storage_folder(game_id),
     )
-    max_bytes = await _max_upload_bytes()
+    max_bytes = await _max_upload_bytes(getattr(request.state, "user", None))
     actor = (request.state.user.username
              if getattr(request.state, "user", None) else None)
 

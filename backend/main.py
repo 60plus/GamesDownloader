@@ -513,6 +513,7 @@ from endpoints.settings.sessions_router import router as sessions_router
 from endpoints.settings.email_router import router as email_router
 from endpoints.settings.download_tokens_router import router as download_tokens_router
 from endpoints.settings.speed_limit_router import router as speed_limit_router
+from endpoints.settings.download_limits_router import router as download_limits_router
 from endpoints.settings.packaging_router import router as packaging_router
 from endpoints.settings.security_report_router import router as security_report_router
 from endpoints.settings.sso_settings_router import router as sso_settings_router
@@ -530,6 +531,7 @@ app.include_router(sessions_router)
 app.include_router(email_router)
 app.include_router(download_tokens_router)
 app.include_router(speed_limit_router)
+app.include_router(download_limits_router)
 app.include_router(packaging_router)
 app.include_router(security_report_router)
 app.include_router(sso_settings_router)

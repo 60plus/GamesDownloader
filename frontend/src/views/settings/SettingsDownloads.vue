@@ -257,6 +257,70 @@
       </div><!-- /v-show speed -->
     </div>
 
+    <!-- ── Section: Limits ───────────────────────────────────────────────────── -->
+    <div class="sd-section">
+      <div class="sd-section-title sd-section-title--collapsible" @click="toggleSection('limits')">
+        <span>{{ t('dllimits.title') }}</span>
+        <svg class="sd-chevron" :class="{ 'sd-chevron--open': !collapsed.limits }"
+          width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+
+      <div v-show="!collapsed.limits">
+        <div v-if="limitsLoading" class="sd-loading"><span class="spinner" /> {{ t('common.loading') }}</div>
+        <template v-else>
+          <div class="sd-pkg-desc">{{ t('dllimits.description') }}</div>
+
+          <div class="field-group"
+            @mouseenter="setHint(t('dllimits.max_upload'), t('dllimits.max_upload_hint'))"
+            @mouseleave="clearHint()">
+            <label class="field-label">{{ t('dllimits.max_upload') }}</label>
+            <div class="field-hint">{{ t('dllimits.max_upload_hint') }}</div>
+            <div class="sd-speed-input-row">
+              <input v-model.number="limits.upload_gb" type="number" min="1" step="1" class="field-input sd-speed-input" />
+              <span class="sd-speed-equiv">GB</span>
+            </div>
+          </div>
+
+          <div class="field-group"
+            @mouseenter="setHint(t('dllimits.save_quota'), t('dllimits.save_quota_hint'))"
+            @mouseleave="clearHint()">
+            <label class="field-label">{{ t('dllimits.save_quota') }}</label>
+            <div class="field-hint">{{ t('dllimits.save_quota_hint') }}</div>
+            <div class="sd-speed-input-row">
+              <input v-model.number="limits.quota_mb" type="number" min="1" step="1" class="field-input sd-speed-input" />
+              <span class="sd-speed-equiv">MB</span>
+            </div>
+          </div>
+
+          <div class="sd-tr-row"
+            @mouseenter="setHint(t('dllimits.gog_auto'), t('dllimits.gog_auto_hint'))"
+            @mouseleave="clearHint()">
+            <div>
+              <div class="field-label">{{ t('dllimits.gog_auto') }}</div>
+              <div class="field-hint">{{ t('dllimits.gog_auto_hint') }}</div>
+            </div>
+            <label class="sd-toggle">
+              <input type="checkbox" v-model="limits.gog_auto_publish" />
+              <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
+            </label>
+          </div>
+
+          <div class="field-hint" style="margin-top:6px">{{ t('dllimits.per_user_note') }}</div>
+
+          <div v-if="limitsError" class="field-server-error">{{ limitsError }}</div>
+          <div v-if="limitsSaved" class="field-ok">{{ t('dllimits.saved') }}</div>
+          <div class="sd-actions">
+            <button class="action-btn action-btn--primary" :disabled="limitsSaving" @click="saveLimits">
+              <span v-if="limitsSaving" class="spinner" />
+              {{ t('common.save') }}
+            </button>
+          </div>
+        </template>
+      </div><!-- /v-show limits -->
+    </div>
+
     <!-- ── Section: Packaging ────────────────────────────────────────────────── -->
     <div class="sd-section">
       <div class="sd-section-title sd-section-title--collapsible" @click="toggleSection('packaging')">
@@ -787,6 +851,46 @@ async function saveSpeed() {
   }
 }
 
+// ── Limits (global upload size, save quota, GOG auto-adopt) ────────────────────
+// UI in GB / MB; backend stores bytes. Per-user overrides live in Settings > Users.
+
+const _GB = 1024 ** 3
+const _MB = 1024 * 1024
+const limits = reactive({ upload_gb: 50, quota_mb: 100, gog_auto_publish: true })
+const limitsLoading = ref(true)
+const limitsSaving  = ref(false)
+const limitsSaved   = ref(false)
+const limitsError   = ref('')
+
+async function loadLimits() {
+  limitsLoading.value = true
+  try {
+    const { data } = await client.get('/settings/downloads/limits')
+    limits.upload_gb = Math.max(1, Math.round((data.max_upload_bytes ?? 50 * _GB) / _GB))
+    limits.quota_mb  = Math.max(1, Math.round((data.saves_quota_bytes ?? 100 * _MB) / _MB))
+    limits.gog_auto_publish = data.gog_auto_publish_downloaded !== false
+  } catch { /* ignore */ } finally {
+    limitsLoading.value = false
+  }
+}
+
+async function saveLimits() {
+  limitsSaving.value = true; limitsSaved.value = false; limitsError.value = ''
+  try {
+    await client.post('/settings/downloads/limits', {
+      max_upload_bytes:  Math.max(1, Math.round(limits.upload_gb)) * _GB,
+      saves_quota_bytes: Math.max(1, Math.round(limits.quota_mb)) * _MB,
+      gog_auto_publish_downloaded: limits.gog_auto_publish,
+    })
+    limitsSaved.value = true
+    setTimeout(() => { limitsSaved.value = false }, 3000)
+  } catch (e: any) {
+    limitsError.value = e?.response?.data?.detail || t('dllimits.save_failed')
+  } finally {
+    limitsSaving.value = false
+  }
+}
+
 // ── Transmission ──────────────────────────────────────────────────────────────
 
 interface TransmissionConfig {
@@ -909,7 +1013,7 @@ function toggleSection(key: string) {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 onMounted(async () => {
-  await Promise.all([loadTokens(), loadFiles(), loadSpeed(), loadPackaging(), loadTransmission()])
+  await Promise.all([loadTokens(), loadFiles(), loadSpeed(), loadLimits(), loadPackaging(), loadTransmission()])
 })
 </script>
 
