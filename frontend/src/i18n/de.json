@@ -1751,7 +1751,7 @@
   "packaging.saved": "Verpackungseinstellungen gespeichert",
   "packaging.save_failed": "Verpackungseinstellungen konnten nicht gespeichert werden",
   "packaging.package_now": "Jetzt verpacken",
-  "packaging.package_now_hint": "Die heruntergeladenen Dateien dieses Spiels zu einem Archiv pro Plattform bündeln",
+  "packaging.package_now_hint": "Wahle aus, was gebundelt wird - jede Auswahl wird ein eigener Download.",
   "packaging.packaging": "Verpacken...",
   "packaging.started": "Verpackung gestartet - das Archiv erscheint in der Bibliothek, sobald es fertig ist",
   "packaging.failed": "Verpackung fehlgeschlagen",
@@ -1792,5 +1792,9 @@
   "users.revoke_sessions_failed": "Sitzungen konnten nicht widerrufen werden.",
   "meta.access": "Zugriff",
   "meta.access_hint": "Haken entfernen, um einem Nutzer den Zugriff zu entziehen",
-  "meta.access_no_users": "Keine weiteren Nutzer zum Einschranken."
+  "meta.access_no_users": "Keine weiteren Nutzer zum Einschranken.",
+  "packaging.include_extras": "Extras und DLC ebenfalls packen",
+  "packaging.include_extras_hint": "Bundelt auch die Extras- und DLC-Ordner des Spiels in eigene Archive, nicht nur die OS-Installer.",
+  "packaging.single_archive": "Alles in ein Archiv packen",
+  "packaging.group_game": "Spiel"
 }

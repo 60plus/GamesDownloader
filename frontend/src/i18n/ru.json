@@ -1751,7 +1751,7 @@
   "packaging.saved": "Настройки упаковки сохранены",
   "packaging.save_failed": "Не удалось сохранить настройки упаковки",
   "packaging.package_now": "Упаковать сейчас",
-  "packaging.package_now_hint": "Объединить загруженные файлы этой игры в один архив на платформу",
+  "packaging.package_now_hint": "Выберите, что упаковать - каждый выбор станет отдельной загрузкой.",
   "packaging.packaging": "Упаковка...",
   "packaging.started": "Упаковка начата - архив появится в библиотеке, когда будет готов",
   "packaging.failed": "Ошибка упаковки",
@@ -1792,5 +1792,9 @@
   "users.revoke_sessions_failed": "Не удалось отозвать сессии.",
   "meta.access": "Доступ",
   "meta.access_hint": "снимите отметку, чтобы убрать доступ",
-  "meta.access_no_users": "Нет других пользователей для ограничения."
+  "meta.access_no_users": "Нет других пользователей для ограничения.",
+  "packaging.include_extras": "Упаковывать также extras и DLC",
+  "packaging.include_extras_hint": "Объединяет папки extras и DLC игры в отдельные архивы, а не только установщики ОС.",
+  "packaging.single_archive": "Упаковать всё в один архив",
+  "packaging.group_game": "Игра"
 }

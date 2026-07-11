@@ -45,6 +45,7 @@ PLATFORMS: tuple[str, ...] = ("windows", "mac", "linux")
 # Config keys
 KEY_ENABLED          = "gog_zip_per_platform"      # bool - master switch
 KEY_DELETE_ORIGINALS = "gog_zip_delete_originals"  # bool - remove loose files after zipping
+KEY_INCLUDE_EXTRAS   = "gog_zip_include_extras"     # bool - also auto-package extras/dlc folders
 
 # Job states that mean "this file is not finished yet".
 _PENDING_STATES = ("pending", "queued", "downloading", "paused")
@@ -71,6 +72,12 @@ async def delete_originals_enabled() -> bool:
     return await config_handler.get_bool(KEY_DELETE_ORIGINALS, default=False)
 
 
+async def include_extras_enabled() -> bool:
+    """When on, GOG auto-packaging also bundles the game's extras/dlc folders
+    (via the generic packer), not just the OS platform installers."""
+    return await config_handler.get_bool(KEY_INCLUDE_EXTRAS, default=False)
+
+
 def _sanitize_title(title: str) -> str:
     # Lazy import to avoid a circular import at module load time
     # (gog_download_handler imports this module's hook).
@@ -78,20 +85,31 @@ def _sanitize_title(title: str) -> str:
     return sanitize_title(title)
 
 
-def _packable_files(directory: str) -> list[str]:
-    """
-    Relative paths (posix arcnames) of every real game file under `directory`,
-    recursively - so subfolders are bundled too, not just the top level.
-    Archives and temp files are skipped.
+def _packable_files(directory: str, *, include_archives: bool = False,
+                    exclude_name: str | None = None) -> list[str]:
+    """Relative posix arcnames of the real files under `directory` (recursive).
+    Temp files are always skipped. By default .zip archives are skipped too (so
+    GOG packaging never re-includes the archive it is building). With
+    `include_archives=True`, content .zip files are kept - custom games whose
+    extras/dlc are already zipped still bundle - while the output archive named
+    `exclude_name` is always excluded so re-packing is stable.
     """
     out: list[str] = []
     try:
         for root, _dirs, files in os.walk(directory):
             for name in files:
-                if name.endswith(".zip") or name.endswith(".tmp"):
+                if name.endswith(".tmp"):
+                    continue
+                if not include_archives and name.endswith(".zip"):
                     continue
                 full = os.path.join(root, name)
                 rel = os.path.relpath(full, directory).replace(os.sep, "/")
+                # Exclude only the output archive itself, which is always written
+                # at the TOP level of `directory` (rel == exclude_name). A file that
+                # merely shares that basename inside a subfolder (e.g. a per-platform
+                # {Title}.zip when bundling the whole game) is real content and stays.
+                if exclude_name and rel == exclude_name:
+                    continue
                 out.append(rel)
     except OSError:
         return []
@@ -99,12 +117,16 @@ def _packable_files(directory: str) -> list[str]:
 
 
 def _pack_dir_sync(
-    src_dir: str, archive_name: str, delete_originals: bool, on_progress=None
+    src_dir: str, archive_name: str, delete_originals: bool, on_progress=None,
+    *, include_archives: bool = False,
 ) -> dict | None:
     """
     Blocking: bundle the loose files in `src_dir` (recursively) into
     `src_dir/archive_name`. No compression (ZIP_STORED) - this is a straight
     copy into one container, not a slow archive. MUST run in a thread.
+
+    `include_archives=True` bundles already-zipped content too (excluding the
+    output archive) - used by the generic per-group packer for custom games.
 
     on_progress(done, total) is called after each file so the caller can report
     live progress. Returns {archive_path, size_bytes, file_count} or None.
@@ -112,7 +134,7 @@ def _pack_dir_sync(
     archive_path = os.path.join(src_dir, archive_name)
     tmp_path     = archive_path + ".tmp"
 
-    files = _packable_files(src_dir)
+    files = _packable_files(src_dir, include_archives=include_archives, exclude_name=archive_name)
     total = len(files)
     existing_archive = archive_path if os.path.exists(archive_path) else None
 
@@ -404,6 +426,10 @@ async def maybe_package_after_job(job_id: int) -> None:
 
     delete_originals = await delete_originals_enabled()
     await pack_platform(gog_id, os_platform, dest_dir, title, delete_originals=delete_originals)
+    # Optionally also bundle extras/dlc, but only once the WHOLE game has finished
+    # downloading (so a still-downloading bonus file is never packed half-written).
+    if await include_extras_enabled() and not await _gog_has_pending_jobs(gog_id):
+        await _package_gog_extras(gog_id, delete_originals)
 
 
 def packable_platforms(title: str, base_dir: str | None = None) -> list[str]:
@@ -466,4 +492,386 @@ async def package_game(gog_id: int, title: str, base_dir: str | None = None) -> 
         else:
             skipped.append(platform)
 
+    # When enabled, also bundle the game's extras/dlc folders in the same run.
+    if await include_extras_enabled():
+        await _package_gog_extras(gog_id, delete_originals)
+
     return {"packaged": packaged, "skipped": skipped}
+
+
+# ── Generic packaging: any library game (the plugin-facing API) ───────────────
+# The functions above stay GOG-specific. Those below drive the SAME per-platform
+# primitive (`_pack_dir_sync`) for ANY LibraryGame - GOG, custom, or an admin
+# custom-library game - keyed on the game id + its source instead of a gog_id.
+# Exposed to plugins/themes via POST /library/games/{id}/package and
+# window.__GD__.library.package(gameId).
+
+# Packable groups: (folder-on-disk, output os, output file_type). Platform
+# folders bundle into per-platform game archives; the extras/dlc/bonus type
+# folders bundle into their own archive (e.g. {Title}-extras.zip) so a game with
+# bonus content packs like its OS installers do. "extras" is no longer excluded
+# from the on-demand (manual/API) path - only from the GOG auto-package above.
+_PLATFORM_GROUPS: tuple[tuple[str, str, str], ...] = tuple((p, p, "game") for p in PLATFORMS)
+_TYPE_GROUPS: tuple[tuple[str, str, str], ...] = (
+    ("extras", "all", "extra"),
+    ("extra",  "all", "extra"),
+    ("bonus",  "all", "extra"),
+    ("dlc",    "all", "dlc"),
+)
+_ALL_GROUPS: tuple[tuple[str, str, str], ...] = _PLATFORM_GROUPS + _TYPE_GROUPS
+_GROUP_FOLDERS: frozenset[str] = frozenset(f for f, _o, _t in _ALL_GROUPS)
+
+
+def _resolve_group_dir(base_dir: str, folder: str) -> str | None:
+    """Return the actual-cased path of `base_dir/folder` (matched case-insensitively),
+    or None when absent. GOG creates lowercase platform folders, but a custom game
+    may ship `Extras/` or `DLC/`; on a case-sensitive filesystem (the Linux server)
+    a plain lowercase join would miss those and silently skip the group."""
+    direct = os.path.join(base_dir, folder)
+    if os.path.isdir(direct):
+        return direct
+    try:
+        for entry in os.listdir(base_dir):
+            if entry.lower() == folder and os.path.isdir(os.path.join(base_dir, entry)):
+                return os.path.join(base_dir, entry)
+    except OSError:
+        pass
+    return None
+
+
+def _game_base_dir(files, title: str | None = None) -> str | None:
+    """Resolve a game's on-disk base folder (the parent of its platform/type
+    subfolders) from its LibraryFile paths. Works for any title-first layout that
+    files content under `.../{windows|mac|linux|extras|dlc}/...` - GOG and the
+    custom title-first scan convention. None when no such folder is present.
+
+    The game's OWN title folder is never treated as a content group (so a game
+    literally titled 'DLC' or 'Windows' cannot collapse the base onto a whole
+    library root), the group folder must not sit at the very path root, and the
+    resolved base must lie strictly inside GAMES_PATH - guards against a crafted or
+    unusual file path causing packaging/deletion outside the game's own directory."""
+    own = _sanitize_title(title).lower() if title else None
+    games_root = os.path.abspath(GAMES_PATH)
+    for f in files:
+        parts = (f.file_path or "").replace("\\", "/").split("/")
+        for i, part in enumerate(parts):
+            pl = part.lower()
+            if own and pl == own:
+                continue  # the title folder itself is not a content group
+            if pl in _GROUP_FOLDERS:
+                base_rel = "/".join(parts[:i])
+                if not base_rel:
+                    return None  # group folder at the path root is not a game layout
+                base = os.path.abspath(os.path.join(BASE_PATH, base_rel))
+                if base == games_root or not (base + os.sep).startswith(games_root + os.sep):
+                    return None  # must be a real subfolder strictly under GAMES_PATH
+                return base
+    return None
+
+
+def _group_archive_name(title: str, folder: str, out_type: str) -> str:
+    """Game files (per platform) -> `{Title}.zip`; extras -> `extras.zip`;
+    dlc -> `dlc.zip`."""
+    if out_type == "extra":
+        return "extras.zip"
+    if out_type == "dlc":
+        return "dlc.zip"
+    return f"{_sanitize_title(title)}.zip"
+
+
+async def _sync_archive_for_game(
+    game_id: int, folder_rel: str, archive_path: str, size_bytes: int,
+    source: str, out_os: str, out_type: str,
+) -> None:
+    """Replace every loose library file physically under `folder_rel` (this game
+    + source) with a single archive row. Path-based, so it works for platform
+    folders and extras/dlc folders alike, regardless of how the scan tagged each
+    file's os/type."""
+    from handler.database.library_handler import LibraryHandler
+    from models.library_file import LibraryFile
+
+    lib      = LibraryHandler()
+    rel_path = os.path.relpath(archive_path, BASE_PATH).replace(os.sep, "/")
+    arc_name = os.path.basename(archive_path)
+    prefix   = folder_rel.rstrip("/") + "/"
+
+    for f in await lib.get_files_for_game(game_id):
+        fp = (f.file_path or "").replace("\\", "/")
+        if f.source == source and (fp.startswith(prefix) or fp == rel_path):
+            await lib.delete_file(f)
+
+    await lib.create_file(LibraryFile(
+        library_game_id=game_id,
+        filename=arc_name,
+        display_name=arc_name,
+        file_type=out_type,
+        os=out_os,
+        size_bytes=size_bytes,
+        file_path=rel_path,
+        source=source,
+        is_available=True,
+    ))
+    logger.info("Library: %s/%s archive synced for game_id=%s (%s)", out_type, out_os, game_id, rel_path)
+
+
+async def _emit_packaging_game(
+    game_id: int, title: str, platform: str, status: str, done: int, total: int
+) -> None:
+    """Packaging-progress event for a generic (non-GOG) job on the same tray
+    channel, keyed on the game id so it cannot collide with a GOG job."""
+    payload = {
+        "id":           f"pkg-g{game_id}-{platform}",
+        "game_id":      game_id,
+        "game_title":   title,
+        "platform":     platform,
+        "status":       status,
+        "done":         done,
+        "total":        total,
+        "progress_pct": round(done / total * 100, 1) if total else 0.0,
+    }
+    if status == "packaging":
+        _active_packaging[payload["id"]] = payload
+    else:
+        _active_packaging.pop(payload["id"], None)
+    try:
+        from handler.socket_handler import emit_event
+        await emit_event("download:packaging", payload)
+    except Exception:
+        pass
+
+
+async def _pack_group_for_game(
+    game_id: int, source: str, folder: str, out_os: str, out_type: str,
+    src_dir: str, title: str, *, delete_originals: bool,
+) -> dict | None:
+    """Package one folder (a platform folder, or an extras/dlc type folder) for an
+    arbitrary library game (locked, with progress events + generic library sync)."""
+    if not os.path.isdir(src_dir):
+        return None
+    archive_name = _group_archive_name(title, folder, out_type)
+    folder_rel   = os.path.relpath(src_dir, BASE_PATH).replace(os.sep, "/")
+
+    # Namespace the lock key so a game id can never collide with a gog id lock.
+    async with _lock_for(game_id, f"g:{folder}"):
+        loop  = asyncio.get_running_loop()
+        total = len(_packable_files(src_dir, include_archives=True, exclude_name=archive_name))
+        if total == 0 and not os.path.exists(os.path.join(src_dir, archive_name)):
+            return None
+
+        def on_progress(done: int, tot: int) -> None:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _emit_packaging_game(game_id, title, folder, "packaging", done, tot), loop
+                )
+            except Exception:
+                pass
+
+        if total > 0:
+            await _emit_packaging_game(game_id, title, folder, "packaging", 0, total)
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: _pack_dir_sync(
+                    src_dir, archive_name, delete_originals, on_progress, include_archives=True,
+                ),
+            )
+        except Exception:
+            await _emit_packaging_game(game_id, title, folder, "failed", 0, total)
+            raise
+        if not result:
+            return None
+
+        await _sync_archive_for_game(
+            game_id, folder_rel, result["archive_path"], result["size_bytes"],
+            source, out_os, out_type,
+        )
+        fc = result.get("file_count", total) or total
+        await _emit_packaging_game(game_id, title, folder, "completed", fc, fc)
+        logger.info(
+            "Packaged game_id=%s %s/%s → %s", game_id, title, folder,
+            os.path.basename(result["archive_path"]),
+        )
+        return result
+
+
+def _game_packable_groups(base_dir: str, title: str) -> list[tuple[str, str, str]]:
+    """Groups (folder, out_os, out_type) worth bundling: a folder with 2+ real
+    files (already-zipped content counts; the output archive does not). A single
+    file needs no archive and is skipped."""
+    out: list[tuple[str, str, str]] = []
+    for folder, out_os, out_type in _ALL_GROUPS:
+        src_dir = _resolve_group_dir(base_dir, folder)
+        if not src_dir:
+            continue
+        archive_name = _group_archive_name(title, folder, out_type)
+        n = len(_packable_files(src_dir, include_archives=True, exclude_name=archive_name))
+        if n >= 2:
+            out.append((folder, out_os, out_type))
+    return out
+
+
+async def package_library_game(
+    game_id: int, *, groups: list[str] | None = None, delete_originals: bool | None = None,
+    single_archive: bool = False,
+) -> dict:
+    """Package a library game's files into archives and sync the library to show
+    one download per archive. Per group by default (each OS platform -> {Title}.zip,
+    extras -> extras.zip, dlc -> dlc.zip); `groups` limits which groups. With
+    `single_archive=True`, EVERY file goes into one combined {Title}.zip instead.
+    `delete_originals` overrides the global 'delete loose files' setting. The
+    plugin/theme-facing entry point. Returns {packaged, skipped}."""
+    from handler.database.library_handler import LibraryHandler
+
+    lib  = LibraryHandler()
+    game = await lib.get_by_id(game_id)
+    if not game:
+        raise ValueError(f"library game {game_id} not found")
+
+    files    = await lib.get_files_for_game(game_id)
+    base_dir = _game_base_dir(files, game.title)
+    if not base_dir:
+        return {"packaged": [], "skipped": [], "reason": "no packable folders"}
+
+    source   = game.source or "custom"
+    title    = game.title
+    del_orig = (await delete_originals_enabled()) if delete_originals is None else bool(delete_originals)
+
+    # Never pack a GOG game while any of its files are still downloading. The
+    # auto-package path already waits for this; the manual/API path must too, or a
+    # half-written file could be zipped and (with delete_originals) removed.
+    if source == "gog" and getattr(game, "gog_game_id", None):
+        from models.gog_game import GogGame
+        from handler.database.session import async_session_factory
+        async with async_session_factory() as _s:
+            _gg = (await _s.execute(
+                select(GogGame).where(GogGame.id == game.gog_game_id)
+            )).scalars().first()
+        if _gg and await _gog_has_pending_jobs(_gg.id):
+            return {"packaged": [], "skipped": [], "reason": "download in progress"}
+
+    # "Everything into one archive": bundle the whole base folder into one
+    # {Title}.zip and replace every loose file with that single download.
+    if single_archive:
+        result = await _pack_group_for_game(
+            game_id, source, "all", "all", "game", base_dir, title, delete_originals=del_orig,
+        )
+        if result and not result.get("noop"):
+            return {"packaged": [{
+                "group": "all", "os": "all", "type": "game",
+                "archive": os.path.basename(result["archive_path"]),
+                "size_bytes": result["size_bytes"], "file_count": result["file_count"],
+            }], "skipped": []}
+        return {"packaged": [], "skipped": ["all"]}
+
+    # None = pack every group; an explicit [] = pack nothing (do NOT collapse an
+    # empty selection to "all" - that would be a destructive surprise with delete).
+    want     = None if groups is None else {g.lower() for g in groups}
+    packaged: list[dict] = []
+    skipped:  list[str]  = []
+
+    for folder, out_os, out_type in _ALL_GROUPS:
+        if want is not None and folder not in want:
+            continue
+        src_dir = _resolve_group_dir(base_dir, folder)
+        if not src_dir:
+            continue
+        archive_name = _group_archive_name(title, folder, out_type)
+        if len(_packable_files(src_dir, include_archives=True, exclude_name=archive_name)) < 2:
+            skipped.append(folder)
+            continue
+        result = await _pack_group_for_game(
+            game_id, source, folder, out_os, out_type, src_dir, title,
+            delete_originals=del_orig,
+        )
+        if result and not result.get("noop"):
+            packaged.append({
+                "group":      folder,
+                "os":         out_os,
+                "type":       out_type,
+                "archive":    os.path.basename(result["archive_path"]),
+                "size_bytes": result["size_bytes"],
+                "file_count": result["file_count"],
+            })
+        else:
+            skipped.append(folder)
+
+    return {"packaged": packaged, "skipped": skipped}
+
+
+async def game_packable_platforms(game_id: int) -> list[str]:
+    """Fast check: labels of a game's groups that have something to bundle
+    (platform folders plus extras/dlc). The Package button shows when non-empty."""
+    from handler.database.library_handler import LibraryHandler
+
+    lib  = LibraryHandler()
+    game = await lib.get_by_id(game_id)
+    if not game:
+        return []
+    base_dir = _game_base_dir(await lib.get_files_for_game(game_id), game.title)
+    if not base_dir:
+        return []
+    return [folder for folder, _os, _t in _game_packable_groups(base_dir, game.title)]
+
+
+async def game_single_archivable(game_id: int) -> bool:
+    """True if a game has >=2 packable files across all its folders combined - the
+    threshold for 'bundle everything into one archive'. The per-group packable check
+    (>=2 in a single folder) hides this for a game with one file per OS folder, so
+    the single-archive path is gated on this instead."""
+    from handler.database.library_handler import LibraryHandler
+
+    lib  = LibraryHandler()
+    game = await lib.get_by_id(game_id)
+    if not game:
+        return False
+    base_dir = _game_base_dir(await lib.get_files_for_game(game_id), game.title)
+    if not base_dir:
+        return False
+    archive_name = f"{_sanitize_title(game.title)}.zip"
+    return len(_packable_files(base_dir, include_archives=True, exclude_name=archive_name)) >= 2
+
+
+async def _gog_has_pending_jobs(gog_id: int) -> bool:
+    """True if ANY download job for this GOG game is still unfinished (any platform
+    or extras), so auto extras-packaging waits until the whole game is downloaded."""
+    from handler.database.session import async_session_factory
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(DownloadJob).where(
+                DownloadJob.gog_id == gog_id,
+                or_(
+                    DownloadJob.status.in_(_PENDING_STATES),
+                    and_(
+                        DownloadJob.status == "completed",
+                        DownloadJob.verify_checksum == True,   # noqa: E712
+                        DownloadJob.checksum_status.is_(None),
+                    ),
+                ),
+            )
+        )
+        return result.scalars().first() is not None
+
+
+async def _package_gog_extras(gog_id: int, delete_originals: bool) -> None:
+    """Bundle a published GOG game's extras/dlc folders via the generic packer
+    (path-based sync). No-op until the game is published as a LibraryGame - the
+    manual Package button can still bundle extras at any time before then."""
+    from handler.database.session import async_session_factory
+    from handler.database.library_handler import LibraryHandler
+    from models.gog_game import GogGame
+
+    async with async_session_factory() as session:
+        gg = (await session.execute(select(GogGame).where(GogGame.gog_id == gog_id))).scalars().first()
+        if not gg:
+            return
+    lib_game = await LibraryHandler().get_by_gog_game_id(gg.id)
+    if not lib_game:
+        return
+    try:
+        await package_library_game(
+            lib_game.id, groups=["extras", "extra", "bonus", "dlc"],
+            delete_originals=delete_originals,
+        )
+    except Exception:
+        logger.exception("GOG extras packaging failed for gog_id=%s", gog_id)

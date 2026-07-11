@@ -74,6 +74,9 @@
             <button v-if="isAdmin" class="cov-btn cov-btn--danger" :disabled="clearing" @click="onClearClick" :title="t('detail.clear_metadata')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
             </button>
+            <button v-if="isAdmin && packablePlatforms.length" class="cov-btn" @click="packageOpen = true" :title="t('packaging.package_now')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 8v13H3V8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+            </button>
           </div>
         </div>
 
@@ -333,6 +336,8 @@
       @saved="onLibMetaSaved"
     />
 
+    <PackageDialog v-if="game && activeLib === 'games'" v-model:open="packageOpen" :game-id="game.id" @done="onPackaged" />
+
     <!-- Download dialog (GOG library only) -->
     <DownloadDialog
       v-if="game && activeLib !== 'games'"
@@ -565,6 +570,7 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import client from '@/services/api/client'
 import { buildLanguageList } from '@/utils/langMap'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
+import PackageDialog from '@/components/games/PackageDialog.vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
 import { resolveDetailRows } from '@/themes/index'
 import EmulationRomMetadataPanel from '@/views/emulation/EmulationRomMetadataPanel.vue'
@@ -650,6 +656,25 @@ const libDlSelected    = ref<Set<number>>(new Set())
 const libDownloading   = ref(false)
 const showScrapeDialog = ref(false)
 const clearing         = ref(false)
+const packageOpen      = ref(false)
+const packablePlatforms = ref<string[]>([])
+
+// Package: bundle a Games-library game's loose per-platform files into one
+// archive each (GOG, custom, or admin custom library). Admin-only; the button
+// shows only when a platform folder has something to bundle. Progress surfaces
+// in the download tray.
+async function fetchPackable(id: number | string) {
+  if (!isAdmin.value || props.activeLib !== 'games') { packablePlatforms.value = []; return }
+  try {
+    const { data } = await client.get(`/library/games/${id}/packable`)
+    packablePlatforms.value = Array.isArray(data?.platforms) ? data.platforms : []
+  } catch { packablePlatforms.value = [] }
+}
+
+// Re-check what is left to package after the dialog kicks off a run.
+function onPackaged() {
+  if (game.value) fetchPackable(game.value.id)
+}
 const showClearDialog  = ref(false)
 
 // Lightbox - index-based (0 = video if present, then screenshots)
@@ -1083,7 +1108,7 @@ async function loadGame(id: string | number) {
       game.value = data as GameData
       gameCollectionSlugs.value = []
       // Collections apply to local Games-library games only (not the GOG catalog).
-      if (props.activeLib === 'games') loadGameCollections(data.id)
+      if (props.activeLib === 'games') { loadGameCollections(data.id); fetchPackable(data.id) }
     }
   } catch (e: any) {
     error.value = e?.response?.data?.detail || 'Failed to load game'

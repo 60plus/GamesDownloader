@@ -1751,7 +1751,7 @@
   "packaging.saved": "Paramètres d'empaquetage enregistrés",
   "packaging.save_failed": "Impossible d'enregistrer les paramètres d'empaquetage",
   "packaging.package_now": "Empaqueter maintenant",
-  "packaging.package_now_hint": "Regrouper les fichiers téléchargés de ce jeu en une archive par plateforme",
+  "packaging.package_now_hint": "Choisis quoi regrouper - chaque selection devient son propre telechargement.",
   "packaging.packaging": "Empaquetage...",
   "packaging.started": "Empaquetage lancé - l'archive apparaîtra dans la bibliothèque une fois prête",
   "packaging.failed": "Échec de l'empaquetage",
@@ -1792,5 +1792,9 @@
   "users.revoke_sessions_failed": "Echec de la revocation des sessions.",
   "meta.access": "Acces",
   "meta.access_hint": "decochez un utilisateur pour lui retirer l'acces",
-  "meta.access_no_users": "Aucun autre utilisateur a restreindre."
+  "meta.access_no_users": "Aucun autre utilisateur a restreindre.",
+  "packaging.include_extras": "Empaqueter aussi les extras et DLC",
+  "packaging.include_extras_hint": "Regroupe aussi les dossiers extras et DLC du jeu dans leurs propres archives, pas seulement les installateurs OS.",
+  "packaging.single_archive": "Tout empaqueter dans une seule archive",
+  "packaging.group_game": "Jeu"
 }

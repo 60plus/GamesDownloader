@@ -1788,7 +1788,7 @@
   "packaging.saved": "Zapisano ustawienia pakowania",
   "packaging.save_failed": "Nie udało się zapisać ustawień pakowania",
   "packaging.package_now": "Spakuj teraz",
-  "packaging.package_now_hint": "Spakuj pobrane pliki tej gry w jedno archiwum na platformę",
+  "packaging.package_now_hint": "Wybierz co spakowac - kazdy wybor to osobne pobranie.",
   "packaging.packaging": "Pakowanie...",
   "packaging.started": "Rozpoczęto pakowanie - archiwum pojawi się w bibliotece, gdy będzie gotowe",
   "packaging.failed": "Pakowanie nie powiodło się",
@@ -1829,5 +1829,9 @@
   "users.revoke_sessions_failed": "Nie udalo sie uniewaznic sesji.",
   "meta.access": "Dostep",
   "meta.access_hint": "odznacz uzytkownika aby zabrac mu dostep",
-  "meta.access_no_users": "Brak innych uzytkownikow do ograniczenia."
+  "meta.access_no_users": "Brak innych uzytkownikow do ograniczenia.",
+  "packaging.include_extras": "Pakuj tez extras i DLC",
+  "packaging.include_extras_hint": "Spakuj foldery extras i DLC gry do osobnych archiwow, nie tylko instalatory OS.",
+  "packaging.single_archive": "Spakuj wszystko w jedno archiwum",
+  "packaging.group_game": "Gra"
 }

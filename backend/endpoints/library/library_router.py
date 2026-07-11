@@ -1976,6 +1976,52 @@ async def list_game_files(request: Request, game_id: int) -> list:
     return [_file_to_dict(f) for f in files]
 
 
+class PackageBody(BaseModel):
+    # Which groups to bundle (folder labels from GET .../packable); empty/None = all.
+    groups: list[str] | None = None
+    # Delete the loose originals after bundling (overrides the global setting).
+    delete_originals: bool | None = None
+    # Bundle EVERY file into one combined archive instead of one per group.
+    single_archive: bool | None = None
+
+
+@protected_route(library_router.post, "/games/{game_id}/package", scopes=[Scope.LIBRARY_ADMIN])
+async def package_game_files(request: Request, game_id: int, body: PackageBody | None = None) -> dict:
+    """Bundle a game's loose files into one archive per group - each OS platform
+    plus the extras/dlc folders - for a GOG, custom, or admin custom-library game.
+    `body.groups` limits which groups to pack; `body.delete_originals` overrides
+    the global delete-loose-files setting. Runs in the background; progress streams
+    over the `download:packaging` socket event. The plugin and theme entry point is
+    `__GD__.library.package(gameId, opts)`."""
+    game = await _lib.get_by_id(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    from handler.gog.zip_packer import (
+        game_packable_platforms, game_single_archivable, package_library_game,
+    )
+    single_archive = bool(body.single_archive) if body and body.single_archive else False
+    platforms = await game_packable_platforms(game_id)
+    # "Everything into one archive" combines across groups, so it is available even
+    # when no single folder has >=2 files (e.g. one installer per OS) - gate it on
+    # the whole-game file count instead of the per-group check.
+    if not platforms and not (single_archive and await game_single_archivable(game_id)):
+        return {"ok": True, "started": False, "platforms": [], "detail": "nothing to package"}
+    groups = body.groups if body else None
+    delete_originals = body.delete_originals if body else None
+    import asyncio
+    asyncio.create_task(package_library_game(
+        game_id, groups=groups, delete_originals=delete_originals, single_archive=single_archive,
+    ))
+    return {"ok": True, "started": True, "platforms": platforms or (["all"] if single_archive else [])}
+
+
+@protected_route(library_router.get, "/games/{game_id}/packable", scopes=[Scope.LIBRARY_ADMIN])
+async def game_packable(request: Request, game_id: int) -> dict:
+    """Which of a game's platforms currently have loose files worth bundling."""
+    from handler.gog.zip_packer import game_packable_platforms
+    return {"platforms": await game_packable_platforms(game_id)}
+
+
 @protected_route(library_router.post, "/games/{game_id}/files", scopes=[Scope.LIBRARY_ADMIN])
 async def add_game_file(request: Request, game_id: int, body: FileCreateBody) -> dict:
     game = await _lib.get_by_id(game_id)

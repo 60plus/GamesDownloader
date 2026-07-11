@@ -620,6 +620,8 @@
       @publish-library="onPublishLibrary"
     />
 
+    <PackageDialog v-if="publishedId" v-model:open="packageOpen" :game-id="publishedId" />
+
     <!-- ── Scrape confirmation (when external data exists) ──────────────────── -->
     <Teleport to="body">
       <div v-if="showScrapeDialog" class="gd-confirm-overlay" @click.self="showScrapeDialog = false">
@@ -673,6 +675,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import client from '@/services/api/client'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
+import PackageDialog from '@/components/games/PackageDialog.vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
 import { resolveDetailRows } from '@/themes/index'
 import DownloadDialog from '@/components/gog/DownloadDialog.vue'
@@ -721,6 +724,7 @@ const isAdmin        = computed(() => auth.user?.role === 'admin')
 // ── Publish to Library ─────────────────────────────────────────────────────────
 const publishLoading  = ref(false)
 const publishedId     = ref<number | null>(null)   // library_game.id when published
+const packageOpen     = ref(false)
 const publishMsg      = ref('')
 const packaging       = ref(false)
 let   _publishPollTimer: ReturnType<typeof setInterval> | null = null
@@ -729,6 +733,17 @@ let   _publishPollTimer: ReturnType<typeof setInterval> | null = null
  *  Runs server-side in the background; archives appear in the library when done. */
 async function packageNow() {
   if (!game.value || packaging.value) return
+  // Published GOG games are in the Games library, so use the shared Package
+  // dialog (per-group choice, extras/dlc, single-archive, delete-originals) -
+  // the same experience as custom games.
+  if (!publishedId.value && game.value.gog_id) {
+    await checkPublishStatus(game.value.gog_id)
+  }
+  if (publishedId.value) {
+    packageOpen.value = true
+    return
+  }
+  // Not published yet: fall back to the legacy on-disk per-platform packaging.
   packaging.value = true
   publishMsg.value = ''
   try {

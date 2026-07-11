@@ -1751,7 +1751,7 @@
   "packaging.saved": "Impostazioni di pacchettizzazione salvate",
   "packaging.save_failed": "Impossibile salvare le impostazioni di pacchettizzazione",
   "packaging.package_now": "Impacchetta ora",
-  "packaging.package_now_hint": "Raggruppa i file scaricati di questo gioco in un archivio per piattaforma",
+  "packaging.package_now_hint": "Scegli cosa raggruppare - ogni selezione diventa un download separato.",
   "packaging.packaging": "Pacchettizzazione...",
   "packaging.started": "Pacchettizzazione avviata - l'archivio apparirà nella libreria quando è pronto",
   "packaging.failed": "Pacchettizzazione non riuscita",
@@ -1792,5 +1792,9 @@
   "users.revoke_sessions_failed": "Impossibile revocare le sessioni.",
   "meta.access": "Accesso",
   "meta.access_hint": "deseleziona un utente per rimuovere il suo accesso",
-  "meta.access_no_users": "Nessun altro utente da limitare."
+  "meta.access_no_users": "Nessun altro utente da limitare.",
+  "packaging.include_extras": "Impacchetta anche extra e DLC",
+  "packaging.include_extras_hint": "Raggruppa anche le cartelle extra e DLC del gioco nei propri archivi, non solo gli installer del SO.",
+  "packaging.single_archive": "Impacchetta tutto in un unico archivio",
+  "packaging.group_game": "Gioco"
 }

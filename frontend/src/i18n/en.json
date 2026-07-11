@@ -1788,7 +1788,7 @@
   "packaging.saved": "Packaging settings saved",
   "packaging.save_failed": "Could not save packaging settings",
   "packaging.package_now": "Package now",
-  "packaging.package_now_hint": "Bundle this game's downloaded files into one archive per platform",
+  "packaging.package_now_hint": "Choose what to bundle - each selection becomes its own download.",
   "packaging.packaging": "Packaging...",
   "packaging.started": "Packaging started - the archive will appear in the library when ready",
   "packaging.failed": "Packaging failed",
@@ -1829,5 +1829,9 @@
   "users.revoke_sessions_failed": "Failed to revoke sessions.",
   "meta.access": "Access",
   "meta.access_hint": "uncheck a user to remove their access",
-  "meta.access_no_users": "No other users to restrict."
+  "meta.access_no_users": "No other users to restrict.",
+  "packaging.include_extras": "Also package extras and DLC",
+  "packaging.include_extras_hint": "Bundle the game's extras and DLC folders into their own archives too, not just the OS installers.",
+  "packaging.single_archive": "Package everything into one archive",
+  "packaging.group_game": "Game"
 }

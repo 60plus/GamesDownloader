@@ -216,6 +216,14 @@
                 {{ clearing ? t('detail.clearing') : t('detail.clear_metadata') }}
               </button>
 
+              <!-- Package: bundle loose per-platform files into one archive each -->
+              <button v-if="isAdmin && packablePlatforms.length" class="gd-btn-ghost" @click="packageOpen = true" :title="t('packaging.package_now_hint')">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M21 8v13H3V8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>
+                </svg>
+                {{ t('packaging.package_now') }}
+              </button>
+
               <!-- Unpublish / Republish / Delete -->
               <button v-if="isAdmin && game.is_active" class="gd-btn-unpublish" @click="unpublishGame" :title="t('detail.unpublish')">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
@@ -590,6 +598,8 @@
       />
     </Teleport>
 
+    <PackageDialog v-if="game" v-model:open="packageOpen" :game-id="game.id" @done="onPackaged" />
+
   </div>
 </template>
 
@@ -601,6 +611,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useCollectionsStore } from '@/stores/collections'
 import client from '@/services/api/client'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
+import PackageDialog from '@/components/games/PackageDialog.vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
 import { resolveDetailRows } from '@/themes/index'
 import { sanitizeHtml } from '@/utils/sanitize'
@@ -694,6 +705,8 @@ async function loadGameCollections(id: number | string) {
 const coverFailed = ref(false)
 const scraping   = ref(false)
 const clearing   = ref(false)
+const packageOpen = ref(false)
+const packablePlatforms = ref<string[]>([])
 
 // ── Languages (deduplicated, with flags) ─────────────────────────────────────
 const gameLangs = computed(() => buildLanguageList(game.value?.languages))
@@ -1164,6 +1177,24 @@ async function fetchTransmissionEnabled() {
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 
+// Bundle a game's loose per-platform files into one archive each. Admin-only;
+// the button shows only when a platform folder actually has something to bundle
+// (fetchPackable). Works for GOG, custom, and admin custom-library games.
+async function fetchPackable(id: number | string) {
+  if (!isAdmin.value) { packablePlatforms.value = []; return }
+  try {
+    const { data } = await client.get(`/library/games/${id}/packable`)
+    packablePlatforms.value = Array.isArray(data?.platforms) ? data.platforms : []
+  } catch {
+    packablePlatforms.value = []
+  }
+}
+
+// Re-check what is left to package after the dialog kicks off a run.
+function onPackaged() {
+  if (game.value) fetchPackable(game.value.id)
+}
+
 async function fetchGame() {
   loading.value = true
   try {
@@ -1172,6 +1203,7 @@ async function fetchGame() {
     game.value = data
     descOverflow.value = !!(data.description && data.description.length > 600)
     loadGameCollections(data.id)
+    fetchPackable(data.id)
     // Lazy-load plugin ratings
     if (data.title) fetchPluginRatings(data.title)
   } catch {

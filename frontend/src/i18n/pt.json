@@ -1751,7 +1751,7 @@
   "packaging.saved": "Definições de empacotamento guardadas",
   "packaging.save_failed": "Não foi possível guardar as definições de empacotamento",
   "packaging.package_now": "Empacotar agora",
-  "packaging.package_now_hint": "Agrupar os ficheiros transferidos deste jogo num arquivo por plataforma",
+  "packaging.package_now_hint": "Escolhe o que agrupar - cada selecao torna-se o seu proprio download.",
   "packaging.packaging": "A empacotar...",
   "packaging.started": "Empacotamento iniciado - o arquivo aparecerá na biblioteca quando estiver pronto",
   "packaging.failed": "Falha no empacotamento",
@@ -1792,5 +1792,9 @@
   "users.revoke_sessions_failed": "Falha ao revogar as sessoes.",
   "meta.access": "Acesso",
   "meta.access_hint": "desmarque um utilizador para remover o seu acesso",
-  "meta.access_no_users": "Nao ha outros utilizadores para restringir."
+  "meta.access_no_users": "Nao ha outros utilizadores para restringir.",
+  "packaging.include_extras": "Empacotar tambem extras e DLC",
+  "packaging.include_extras_hint": "Agrupa tambem as pastas de extras e DLC do jogo nos seus proprios ficheiros, nao apenas os instaladores do SO.",
+  "packaging.single_archive": "Empacotar tudo num unico ficheiro",
+  "packaging.group_game": "Jogo"
 }

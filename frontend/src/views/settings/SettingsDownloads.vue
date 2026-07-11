@@ -364,6 +364,19 @@
             </label>
           </div>
 
+          <div v-if="pkg.zip_per_platform" class="sd-tr-row"
+            @mouseenter="setHint(t('packaging.include_extras'), t('packaging.include_extras_hint'))"
+            @mouseleave="clearHint()">
+            <div>
+              <div class="field-label">{{ t('packaging.include_extras') }}</div>
+              <div class="field-hint">{{ t('packaging.include_extras_hint') }}</div>
+            </div>
+            <label class="sd-toggle">
+              <input type="checkbox" v-model="pkg.include_extras" />
+              <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
+            </label>
+          </div>
+
           <div v-if="pkgError" class="field-server-error">{{ pkgError }}</div>
           <div v-if="pkgSaved" class="field-ok">{{ t('packaging.saved') }}</div>
           <div class="sd-actions">
@@ -963,9 +976,10 @@ async function saveTransmission() {
 
 // ── Packaging ─────────────────────────────────────────────────────────────────
 
-const pkg = reactive<{ zip_per_platform: boolean; delete_originals: boolean }>({
+const pkg = reactive<{ zip_per_platform: boolean; delete_originals: boolean; include_extras: boolean }>({
   zip_per_platform: false,
   delete_originals: false,
+  include_extras: false,
 })
 const pkgLoading = ref(true)
 const pkgSaving  = ref(false)
@@ -978,6 +992,7 @@ async function loadPackaging() {
     const r = await client.get('/settings/downloads/packaging')
     pkg.zip_per_platform = !!r.data.zip_per_platform
     pkg.delete_originals = !!r.data.delete_originals
+    pkg.include_extras = !!r.data.include_extras
   } catch { /* ignore */ } finally {
     pkgLoading.value = false
   }

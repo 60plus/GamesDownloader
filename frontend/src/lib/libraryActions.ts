@@ -177,6 +177,35 @@ export async function addByUpload(opts: AddByUploadOpts): Promise<any> {
   return game;
 }
 
+/** Bundle a game's loose per-platform files into one archive per platform
+ * (GOG, custom, or an admin custom-library game). Runs server-side in the
+ * background; follow progress via the `download:packaging` socket event (its
+ * `id` is `pkg-g{gameId}-{platform}`). Returns `{ started, platforms }` -
+ * `started` is false when there was nothing to bundle. Admin only. */
+export interface PackageOpts {
+  /** Subset of group labels to bundle (from packable()); omit for every group. */
+  groups?: string[];
+  /** Delete the loose originals after bundling (overrides the global setting). */
+  deleteOriginals?: boolean;
+  /** Bundle every file into one combined archive instead of one per group. */
+  singleArchive?: boolean;
+}
+export async function packageGame(gameId: number | string, opts: PackageOpts = {}): Promise<any> {
+  const { data } = await client.post(`/library/games/${gameId}/package`, {
+    groups: opts.groups,
+    delete_originals: opts.deleteOriginals,
+    single_archive: opts.singleArchive,
+  });
+  return data;
+}
+
+/** Which of a game's platforms currently have loose files worth bundling (so a
+ * theme can show or hide a "Package" button). Returns e.g. ["windows","linux"]. */
+export async function packablePlatforms(gameId: number | string): Promise<string[]> {
+  const { data } = await client.get(`/library/games/${gameId}/packable`);
+  return Array.isArray(data?.platforms) ? data.platforms : [];
+}
+
 const libraryActions = {
   createGame,
   uploadFile,
@@ -184,6 +213,8 @@ const libraryActions = {
   addTorrent,
   scan,
   addByUpload,
+  package: packageGame,
+  packable: packablePlatforms,
 };
 
 export default libraryActions;

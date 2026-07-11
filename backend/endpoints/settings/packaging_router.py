@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.config.config_handler import config_handler
-from handler.gog.zip_packer import KEY_DELETE_ORIGINALS, KEY_ENABLED
+from handler.gog.zip_packer import KEY_DELETE_ORIGINALS, KEY_ENABLED, KEY_INCLUDE_EXTRAS
 
 router = APIRouter(prefix="/api/settings/downloads/packaging", tags=["packaging"])
 
@@ -21,6 +21,7 @@ router = APIRouter(prefix="/api/settings/downloads/packaging", tags=["packaging"
 class PackagingConfig(BaseModel):
     zip_per_platform: bool = False   # master switch
     delete_originals:  bool = False  # remove loose files after a successful zip
+    include_extras:    bool = False  # also auto-package the extras/dlc folders
 
 
 @protected_route(router.get, "", scopes=[Scope.LIBRARY_ADMIN])
@@ -28,6 +29,7 @@ async def get_packaging_config(request: Request) -> PackagingConfig:
     return PackagingConfig(
         zip_per_platform = await config_handler.get_bool(KEY_ENABLED, default=False),
         delete_originals = await config_handler.get_bool(KEY_DELETE_ORIGINALS, default=False),
+        include_extras   = await config_handler.get_bool(KEY_INCLUDE_EXTRAS, default=False),
     )
 
 
@@ -36,5 +38,6 @@ async def save_packaging_config(request: Request, data: PackagingConfig) -> dict
     await config_handler.set_many({
         KEY_ENABLED:          (str(data.zip_per_platform).lower(), False),
         KEY_DELETE_ORIGINALS: (str(data.delete_originals).lower(), False),
+        KEY_INCLUDE_EXTRAS:   (str(data.include_extras).lower(), False),
     })
     return {"ok": True}
