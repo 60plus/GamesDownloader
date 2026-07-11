@@ -74,6 +74,18 @@
           <div class="toggle-group">
             <div class="toggle-row">
               <div class="toggle-info">
+                <div class="toggle-name">{{ t('notif.recently_added') }}</div>
+                <div class="toggle-desc">{{ t('notif.recently_added_email_desc') }}</div>
+              </div>
+              <label class="toggle-pill">
+                <input type="checkbox" v-model="smtp.email_notify_added" class="toggle-input" />
+                <span class="toggle-track" :class="{ 'toggle-track--on': smtp.email_notify_added }">
+                  <span class="toggle-thumb" />
+                </span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-info">
                 <div class="toggle-name">{{ t('notif.download_complete') }}</div>
                 <div class="toggle-desc">{{ t('notif.download_complete_desc') }}</div>
               </div>
@@ -123,6 +135,25 @@
               <div class="sn-tpl-hint">
                 {{ t('notif.placeholders_hint') }}<br>
                 {{ t('notif.html_hint') }}
+              </div>
+
+              <div class="sn-tpl-section">
+                <div class="sn-tpl-section-hdr">{{ t('notif.recently_added') }}</div>
+                <div class="sn-tpl-group">
+                  <div class="sn-tpl-label">{{ t('notif.subject') }}</div>
+                  <input v-model="smtp.email_tpl_added_subject" class="field-input field-input--sm" placeholder="Added to the library: {title}" />
+                </div>
+                <div class="sn-tpl-group">
+                  <div class="sn-tpl-label">{{ t('notif.body') }}</div>
+                  <textarea v-model="smtp.email_tpl_added_body" class="sn-tpl-textarea" placeholder="<p><strong>{title}</strong> was recently added to your library.</p>"></textarea>
+                </div>
+                <div class="sn-tpl-preview" style="background:#1a1a2e">
+                  <div class="sn-tpl-preview-bar" style="background:#8E44AD;width:3px" />
+                  <div class="sn-tpl-preview-body">
+                    <div class="sn-tpl-preview-title">Subject: {{ tplPreview(smtp.email_tpl_added_subject, 'Added to the library: {title}', sampleAdded) }}</div>
+                    <div class="sn-tpl-preview-text" v-html="tplPreviewHtml(smtp.email_tpl_added_body, '&lt;p&gt;&lt;strong&gt;{title}&lt;/strong&gt; was recently added to your library.&lt;/p&gt;', sampleAdded)"></div>
+                  </div>
+                </div>
               </div>
 
               <div class="sn-tpl-section">
@@ -283,9 +314,28 @@
             />
           </div>
 
+          <!-- Server name (shown in "recently added" notifications) -->
+          <div class="field-group">
+            <label class="field-label">{{ t('notif.server_name') }}</label>
+            <input v-model="wh.server_name" class="field-input" :placeholder="t('notif.server_name_ph')" />
+            <div class="field-hint">{{ t('notif.server_name_desc') }}</div>
+          </div>
+
           <!-- Trigger toggles -->
           <div class="field-label">{{ t('notif.trigger_on') }}</div>
           <div class="toggle-group">
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="toggle-name">{{ t('notif.recently_added') }}</div>
+                <div class="toggle-desc">{{ t('notif.recently_added_desc') }}</div>
+              </div>
+              <label class="toggle-pill">
+                <input type="checkbox" v-model="wh.notify_added" class="toggle-input" />
+                <span class="toggle-track" :class="{ 'toggle-track--on': wh.notify_added }">
+                  <span class="toggle-thumb" />
+                </span>
+              </label>
+            </div>
             <div class="toggle-row">
               <div class="toggle-info">
                 <div class="toggle-name">{{ t('notif.download_complete') }}</div>
@@ -358,7 +408,32 @@
             </button>
             <div v-if="advOpen" class="sn-templates">
               <div class="sn-tpl-hint">
-                {{ t('notif.placeholders_hint') }}
+                {{ t('notif.placeholders_hint') }}<br>
+                {{ t('notif.added_placeholders_hint') }}
+              </div>
+
+              <div class="sn-tpl-section">
+                <div class="sn-tpl-section-hdr">{{ t('notif.recently_added') }}</div>
+                <div class="sn-tpl-group">
+                  <div class="sn-tpl-label">{{ t('notif.message_field') }}</div>
+                  <input v-model="wh.tpl_added_content" class="field-input field-input--sm" placeholder="({server}) {title} was recently added." />
+                </div>
+                <div class="sn-tpl-group">
+                  <div class="sn-tpl-label">{{ t('notif.title_field') }}</div>
+                  <input v-model="wh.tpl_added_title" class="field-input field-input--sm" placeholder="{title}" />
+                </div>
+                <div class="sn-tpl-group">
+                  <div class="sn-tpl-label">{{ t('notif.body') }}</div>
+                  <input v-model="wh.tpl_added_body" class="field-input field-input--sm" :placeholder="t('notif.added_body_ph')" />
+                </div>
+                <div class="sn-tpl-preview">
+                  <div class="sn-tpl-preview-bar" style="background:#8E44AD" />
+                  <div class="sn-tpl-preview-body">
+                    <div class="sn-tpl-preview-text" style="color:#dcddde;font-weight:600">{{ tplPreview(wh.tpl_added_content, '({server}) {title} was recently added.', sampleAdded) }}</div>
+                    <div class="sn-tpl-preview-title">{{ tplPreview(wh.tpl_added_title, '{title}', sampleAdded) }}</div>
+                    <div class="sn-tpl-preview-text">{{ tplPreview(wh.tpl_added_body, sampleAdded.description, sampleAdded) }}</div>
+                  </div>
+                </div>
               </div>
 
               <div class="sn-tpl-section">
@@ -488,6 +563,9 @@ const smtp = reactive({
   email_notify_download: true,
   email_notify_sync: true,
   email_notify_request: true,
+  email_notify_added: false,
+  email_tpl_added_subject: '',
+  email_tpl_added_body: '',
   email_tpl_download_subject: '',
   email_tpl_download_body: '',
   email_tpl_sync_subject: '',
@@ -524,6 +602,7 @@ const emailStatusTypes = [
 ]
 
 // Sample data for live preview
+const sampleAdded = { title: 'Hollow Knight: Silksong', source: 'gog', server: 'MediaMonster', description: 'A haunting sequel through a kingdom of silk and song.' }
 const sampleDl = { title: 'Cyberpunk 2077', username: 'admin', status: '', platform: 'PC', note: '', description: '' }
 const sampleSync = { title: '', username: '', status: '', platform: '', note: '', description: '' }
 const sampleReqNew = { title: 'Half-Life 3', username: 'admin', status: 'Pending', platform: 'Games', note: '', description: 'Valve please release this game already.' }
@@ -553,8 +632,13 @@ const wh = reactive({
   notify_download: true,
   notify_sync: true,
   notify_request: true,
+  notify_added: true,
   include_cover: true,
   avatar_url: '',
+  server_name: '',
+  tpl_added_title: '',
+  tpl_added_body: '',
+  tpl_added_content: '',
   tpl_download_title: '',
   tpl_download_body: '',
   tpl_sync_title: '',

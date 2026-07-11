@@ -306,6 +306,13 @@ async def scrape_rom(
         saved = await _download_image(cover_url, dest)
         if saved:
             merged["cover_path"] = _resource_url(platform.slug, rom.id, saved.name)
+            # Keep the original source URL so notifications can fall back to it
+            # when public_base_url is unset (parity with GogGame.cover_url) - but
+            # only when it is credential-free. ScreenScraper media URLs embed the
+            # dev + account passwords, so they are never stored (and never sent).
+            from handler.notifications.recently_added import _is_leaky_url
+            if not _is_leaky_url(cover_url):
+                merged["cover_url"] = cover_url
             merged["cover_type"] = ss_cover_type
             detected = _detect_cover_aspect(saved)
             if detected:
@@ -482,6 +489,14 @@ async def scrape_roms_batch(rom_ids: list[int], platform: RomPlatform, fill_miss
             if data:
                 await rom_handler.update_metadata(rom_id, data)
                 stats["scraped"] += 1
+                # ROM now has (usually) a cover -> fire the one-shot recently-added
+                # card. Idempotent per ROM; burst-capped so a bulk platform scrape
+                # of a fresh library can't flood the webhook.
+                try:
+                    from handler.notifications.recently_added import schedule_rom
+                    schedule_rom(rom_id)
+                except Exception:
+                    pass
             else:
                 stats["skipped"] += 1
         except Exception as e:

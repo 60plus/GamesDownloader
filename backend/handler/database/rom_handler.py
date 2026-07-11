@@ -151,7 +151,7 @@ _METADATA_FIELDS: frozenset[str] = frozenset({
     "name", "slug", "summary", "developer", "publisher",
     "release_year", "genres", "regions", "languages", "tags",
     "rating", "ss_score", "igdb_rating", "lb_rating", "plugin_ratings", "player_count", "alternative_names", "franchises",
-    "cover_path", "cover_type", "cover_aspect", "background_path", "screenshots",
+    "cover_path", "cover_url", "cover_type", "cover_aspect", "background_path", "screenshots",
     "support_path", "wheel_path", "bezel_path", "steamgrid_path", "video_path", "picto_path",
     "ss_id", "igdb_id", "launchbox_id", "ss_metadata", "igdb_metadata",
     "developer_ss_id", "publisher_ss_id",
@@ -362,7 +362,7 @@ class RomHandler(DBBaseHandler):
             "name", "slug", "summary", "developer", "publisher",
             "release_year", "genres", "regions", "languages", "tags",
             "rating", "ss_score", "igdb_rating", "lb_rating", "plugin_ratings", "player_count", "alternative_names", "franchises",
-            "cover_path", "cover_type", "cover_aspect", "background_path", "screenshots",
+            "cover_path", "cover_url", "cover_type", "cover_aspect", "background_path", "screenshots",
             "support_path", "wheel_path", "bezel_path", "steamgrid_path", "video_path", "picto_path",
             "ss_id", "igdb_id", "launchbox_id", "ss_metadata", "igdb_metadata",
         ]
@@ -385,7 +385,7 @@ class RomHandler(DBBaseHandler):
                 "name", "slug", "summary", "developer", "publisher",
                 "release_year", "genres", "regions", "languages", "tags",
                 "rating", "ss_score", "igdb_rating", "lb_rating", "plugin_ratings", "player_count", "alternative_names", "franchises",
-                "cover_path", "cover_type", "cover_aspect", "background_path", "screenshots",
+                "cover_path", "cover_url", "cover_type", "cover_aspect", "background_path", "screenshots",
                 "support_path", "wheel_path", "bezel_path", "steamgrid_path", "video_path", "picto_path",
                 "ss_id", "igdb_id", "launchbox_id", "ss_metadata", "igdb_metadata",
             ]

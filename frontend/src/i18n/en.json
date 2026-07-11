@@ -1833,5 +1833,19 @@
   "packaging.include_extras": "Also package extras and DLC",
   "packaging.include_extras_hint": "Bundle the game's extras and DLC folders into their own archives too, not just the OS installers.",
   "packaging.single_archive": "Package everything into one archive",
-  "packaging.group_game": "Game"
+  "packaging.group_game": "Game",
+  "meta.resend_notification": "Send notification",
+  "meta.resend_notification_hint": "(Re)send the 'recently added' notification for this title",
+  "meta.notification_sent": "Notification sent",
+  "meta.notification_skipped": "Nothing to send (notifications off)",
+  "meta.notification_failed": "Could not send notification",
+  "notif.recently_added": "Recently added",
+  "notif.recently_added_desc": "A card per new game or ROM, sent once it has a cover",
+  "notif.recently_added_email_desc": "An email for each newly added title (can be noisy)",
+  "notif.server_name": "Server name",
+  "notif.server_name_desc": "Shown in 'recently added' notifications. Defaults to the public URL host.",
+  "notif.server_name_ph": "My Game Server",
+  "notif.message_field": "Message (above the embed)",
+  "notif.added_placeholders_hint": "'Recently added' supports {title}, {source}, {server} and {description}.",
+  "notif.added_body_ph": "Leave empty to use the game description"
 }

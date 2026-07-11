@@ -292,6 +292,18 @@ async def _auto_register_game(td) -> int | None:
 
         await db.commit()
         game_id = game.id
+        from plugins import events as _plugin_events
+        _plugin_events.game_added(game)
+        _plugin_events.download_complete(
+            game, os.path.dirname(moved_files[0]) if moved_files else dest_root
+        )
+        # Recently-added card: no-op unless the torrent game already has a cover
+        # (usually it does not until an admin scrapes it, which announces then).
+        try:
+            from handler.notifications.recently_added import schedule_library_game
+            schedule_library_game(game_id)
+        except Exception:
+            pass
 
     # Membership is written through the registry handler (its own session), so
     # it must happen after the game row is committed above.

@@ -1796,5 +1796,19 @@
   "packaging.include_extras": "Empacotar tambem extras e DLC",
   "packaging.include_extras_hint": "Agrupa tambem as pastas de extras e DLC do jogo nos seus proprios ficheiros, nao apenas os instaladores do SO.",
   "packaging.single_archive": "Empacotar tudo num unico ficheiro",
-  "packaging.group_game": "Jogo"
+  "packaging.group_game": "Jogo",
+  "meta.resend_notification": "Enviar notificação",
+  "meta.resend_notification_hint": "(Re)enviar a notificação 'adicionado recentemente' para este título",
+  "meta.notification_sent": "Notificação enviada",
+  "meta.notification_skipped": "Nada a enviar (notificações desligadas)",
+  "meta.notification_failed": "Não foi possível enviar a notificação",
+  "notif.recently_added": "Adicionado recentemente",
+  "notif.recently_added_desc": "Um cartão por novo jogo ou ROM, quando já tem capa",
+  "notif.recently_added_email_desc": "Um e-mail para cada título adicionado (pode ser frequente)",
+  "notif.server_name": "Nome do servidor",
+  "notif.server_name_desc": "Mostrado nas notificações 'adicionado recentemente'. Padrão: host do URL público.",
+  "notif.server_name_ph": "Meu servidor de jogos",
+  "notif.message_field": "Mensagem (acima do embed)",
+  "notif.added_placeholders_hint": "'Adicionado recentemente' suporta {title}, {source}, {server} e {description}.",
+  "notif.added_body_ph": "Deixe vazio para usar a descrição do jogo"
 }

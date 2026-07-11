@@ -647,6 +647,8 @@ async def create_library_game(request: Request, body: GameCreateBody) -> dict:
         is_active=True,
     )
     game = await _lib.create(game)
+    from plugins import events as _plugin_events
+    _plugin_events.game_added(game)
 
     # Target a user-created custom library: add membership and keep it out of the
     # default Games library so it appears only in that library. The admin can still
@@ -719,6 +721,11 @@ async def update_library_game(request: Request, game_id: int, body: GameUpdateBo
         from models.gog_game import GogGame as _GG
         async with _asf() as _s:
             gog_game = await _s.get(_GG, game.gog_game_id)
+
+    # If this edit made the game "ready" (cover present) and it was never
+    # announced, fire the one-shot recently-added card now. No-op once announced.
+    from handler.notifications.recently_added import schedule_library_game
+    schedule_library_game(game_id)
 
     return _game_to_dict(updated, gog_game=gog_game)
 
@@ -1275,6 +1282,8 @@ async def _publish_gog_core(
             published_by=published_by,
         )
         lib_game = await _lib.create(lib_game)
+        from plugins import events as _plugin_events
+        _plugin_events.game_added(lib_game)
 
     existing_files = await _lib.get_files_for_game(lib_game.id)
     existing_paths = {f.file_path for f in existing_files}
@@ -1293,6 +1302,13 @@ async def _publish_gog_core(
 
     lib_game = await _lib.get_by_id(lib_game.id)
     total_files = len(await _lib.get_files_for_game(lib_game.id))
+
+    # GOG-published games carry their cover/description from the linked GogGame,
+    # so they are "ready" right away - fire the one-shot recently-added card
+    # (idempotent: a re-publish of an already-announced game is a no-op).
+    from handler.notifications.recently_added import schedule_library_game
+    schedule_library_game(lib_game.id)
+
     return {**_game_to_dict(lib_game), "_scanned": added, "_total": total_files}
 
 
@@ -1557,12 +1573,34 @@ async def scrape_library_game_metadata(request: Request, game_id: int) -> dict:
         await session.flush()
         await session.commit()
 
+    # Now that the game has (usually) a cover + description, fire the one-shot
+    # "recently added" card. Skipped automatically if already announced or still
+    # coverless; never blocks the response.
+    from handler.notifications.recently_added import schedule_library_game
+    schedule_library_game(game_id)
+
     return {
         "ok":      True,
         "sources": result["sources"],
         "applied": result["applied"],
         "gog_id":  result["gog_id"],
     }
+
+
+@protected_route(library_router.post, "/games/{game_id}/announce", scopes=[Scope.LIBRARY_WRITE])
+async def announce_library_game_added(request: Request, game_id: int) -> dict:
+    """Manually (re)send the rich "recently added to the library" notification
+    for this game - the "(Re)send notification" button in the metadata editor.
+    Bypasses the once-only + cover-ready guards (force=True)."""
+    game = await _lib.get_by_id(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    # Per-game deny binds here too: an editor denied this game may not broadcast
+    # it to Discord/email (admins bypass, matching the read/detail routes).
+    await _check_user_can_access(request, game)
+    from handler.notifications.recently_added import announce_library_game
+    sent = await announce_library_game(game_id, force=True)
+    return {"ok": True, "sent": sent}
 
 
 @protected_route(library_router.post, "/games/{game_id}/clear-metadata", scopes=[Scope.LIBRARY_ADMIN])

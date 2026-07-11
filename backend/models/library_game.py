@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, Boolean, Date, ForeignKey, Integer, String, Text
@@ -85,6 +85,12 @@ class LibraryGame(Base):
     published_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
     )
+
+    # ── Notifications ─────────────────────────────────────────────────────────
+    # When the "recently added to the library" notification was sent for this
+    # game. NULL = not yet announced (eligible for the one-shot auto-announce
+    # once the game has a cover). Set once so re-scrapes/edits never re-spam.
+    announced_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     # ── Relationships ─────────────────────────────────────────────────────────
     files: Mapped[list[LibraryFile]] = relationship(

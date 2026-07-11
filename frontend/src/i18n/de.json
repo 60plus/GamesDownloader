@@ -1796,5 +1796,19 @@
   "packaging.include_extras": "Extras und DLC ebenfalls packen",
   "packaging.include_extras_hint": "Bundelt auch die Extras- und DLC-Ordner des Spiels in eigene Archive, nicht nur die OS-Installer.",
   "packaging.single_archive": "Alles in ein Archiv packen",
-  "packaging.group_game": "Spiel"
+  "packaging.group_game": "Spiel",
+  "meta.resend_notification": "Benachrichtigung senden",
+  "meta.resend_notification_hint": "Die 'kürzlich hinzugefügt'-Benachrichtigung für diesen Titel (erneut) senden",
+  "meta.notification_sent": "Benachrichtigung gesendet",
+  "meta.notification_skipped": "Nichts zu senden (Benachrichtigungen aus)",
+  "meta.notification_failed": "Benachrichtigung konnte nicht gesendet werden",
+  "notif.recently_added": "Kürzlich hinzugefügt",
+  "notif.recently_added_desc": "Eine Karte pro neuem Spiel oder ROM, sobald ein Cover vorhanden ist",
+  "notif.recently_added_email_desc": "Eine E-Mail für jeden neu hinzugefügten Titel (kann viel sein)",
+  "notif.server_name": "Servername",
+  "notif.server_name_desc": "Wird in 'kürzlich hinzugefügt'-Benachrichtigungen angezeigt. Standard: Host der öffentlichen URL.",
+  "notif.server_name_ph": "Mein Spieleserver",
+  "notif.message_field": "Nachricht (über dem Embed)",
+  "notif.added_placeholders_hint": "'Kürzlich hinzugefügt' unterstützt {title}, {source}, {server} und {description}.",
+  "notif.added_body_ph": "Leer lassen, um die Spielbeschreibung zu verwenden"
 }

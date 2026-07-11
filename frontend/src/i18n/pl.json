@@ -1833,5 +1833,19 @@
   "packaging.include_extras": "Pakuj tez extras i DLC",
   "packaging.include_extras_hint": "Spakuj foldery extras i DLC gry do osobnych archiwow, nie tylko instalatory OS.",
   "packaging.single_archive": "Spakuj wszystko w jedno archiwum",
-  "packaging.group_game": "Gra"
+  "packaging.group_game": "Gra",
+  "meta.resend_notification": "Wyślij powiadomienie",
+  "meta.resend_notification_hint": "Wyślij ponownie powiadomienie 'ostatnio dodane' dla tej pozycji",
+  "meta.notification_sent": "Powiadomienie wysłane",
+  "meta.notification_skipped": "Nie ma czego wysłać (powiadomienia wyłączone)",
+  "meta.notification_failed": "Nie udało się wysłać powiadomienia",
+  "notif.recently_added": "Ostatnio dodane",
+  "notif.recently_added_desc": "Osobna karta dla każdej nowej gry lub ROM-a, gdy ma już okładkę",
+  "notif.recently_added_email_desc": "E-mail dla każdej nowo dodanej pozycji (może być ich dużo)",
+  "notif.server_name": "Nazwa serwera",
+  "notif.server_name_desc": "Pokazywana w powiadomieniach 'ostatnio dodane'. Domyślnie host publicznego URL.",
+  "notif.server_name_ph": "Mój serwer gier",
+  "notif.message_field": "Wiadomość (nad kartą)",
+  "notif.added_placeholders_hint": "'Ostatnio dodane' obsługuje {title}, {source}, {server} i {description}.",
+  "notif.added_body_ph": "Zostaw puste, aby użyć opisu gry"
 }

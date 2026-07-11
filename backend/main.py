@@ -103,6 +103,7 @@ async def _init_db() -> None:
         ("roms",           "sha1_hash",         "VARCHAR(40) NULL"),
         ("roms",           "cover_type",        "VARCHAR(32) NULL"),
         ("roms",           "cover_aspect",      "VARCHAR(10) NULL"),
+        ("roms",           "cover_url",         "VARCHAR(1024) NULL"),
         ("roms",           "developer_ss_id",   "INT NULL"),
         ("roms",           "publisher_ss_id",   "INT NULL"),
         ("roms",           "ss_score",          "FLOAT NULL"),
@@ -153,6 +154,9 @@ async def _init_db() -> None:
         ("gog_games",      "video_path",          "VARCHAR(1024) NULL"),
         # Torrent downloads can target a custom library (folder + membership).
         ("torrent_downloads", "library",          "VARCHAR(128) NULL"),
+        # Recently-added notification: one-shot guard (backfilled once below).
+        ("library_games",  "announced_at",         "DATETIME NULL"),
+        ("roms",           "announced_at",         "DATETIME NULL"),
     ]
     async with async_engine.begin() as conn:
         for table, column, col_ddl in _COLUMN_MIGRATIONS:
@@ -223,6 +227,29 @@ async def _init_db() -> None:
                 logger.info("Migration: renamed %d user role(s) viewer -> user", count)
         except Exception as exc:
             logger.warning("Role migration (viewer->user) failed: %s", exc)
+
+    # ── Recently-added notification: one-time announced_at backfill ──────────
+    # The announced_at columns are added by _COLUMN_MIGRATIONS above. Backfill
+    # every existing row to NOW() ONCE so the pre-existing library never floods
+    # the webhook; only rows created afterwards (announced_at NULL) are eligible
+    # for the auto-announce. Guarded by a config flag rather than by column
+    # existence, so a crash between the ALTER and the UPDATE cannot skip the
+    # backfill permanently (which would make the whole legacy library announce).
+    try:
+        from handler.config.config_handler import config_handler as _cfg
+        if not await _cfg.get_bool("_announced_at_backfilled", default=False):
+            async with async_engine.begin() as conn:
+                for _tbl in ("library_games", "roms"):
+                    try:
+                        await conn.execute(
+                            text(f"UPDATE `{_tbl}` SET `announced_at` = NOW() WHERE `announced_at` IS NULL")
+                        )
+                    except Exception as exc:
+                        logger.warning("announced_at backfill failed for %s: %s", _tbl, exc)
+            await _cfg.set("_announced_at_backfilled", "true")
+            logger.info("Migration: backfilled announced_at for existing rows")
+    except Exception as exc:
+        logger.warning("announced_at backfill guard failed: %s", exc)
 
     # ── SSRF hardening: NULL legacy http(s) avatar paths ──────────────────────
     # Older versions stored remote CDN URLs as avatar_path and the GET handler

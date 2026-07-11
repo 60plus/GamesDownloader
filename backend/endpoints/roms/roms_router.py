@@ -601,7 +601,7 @@ async def update_rom_metadata(
     if body.hltb_main_s is not None:    data["hltb_main_s"]    = body.hltb_main_s
     if body.hltb_extra_s is not None:   data["hltb_extra_s"]   = body.hltb_extra_s
     if body.hltb_complete_s is not None: data["hltb_complete_s"] = body.hltb_complete_s
-    if body.cover_path is not None:       data["cover_path"] = body.cover_path
+    if body.cover_path is not None:       data["cover_path"] = body.cover_path; data["cover_url"] = None
     if body.background_path is not None:  data["background_path"] = body.background_path
     if body.screenshots is not None:      data["screenshots"] = body.screenshots
     if body.support_path is not None:     data["support_path"] = body.support_path
@@ -622,6 +622,8 @@ async def update_rom_metadata(
     for _field, _fname in _media_cols:
         if getattr(body, _field) == "":
             data[_field] = None
+            if _field == "cover_path":
+                data["cover_url"] = None   # drop the notification fallback too
             if media_dir.exists():
                 for _old in media_dir.glob(f"{_fname}.*"):
                     _old.unlink(missing_ok=True)
@@ -643,6 +645,11 @@ async def update_rom_metadata(
         saved = await _download_image(body.cover_url, dest)
         if saved:
             data["cover_path"] = _resource_url(platform_slug, rom_id, saved.name) + _bust
+            # Persist the (credential-free) source URL so a recently-added
+            # notification can fall back to it when public_base_url is unset.
+            # A credentialed source (ScreenScraper) is never stored/sent.
+            from handler.notifications.recently_added import _is_leaky_url
+            data["cover_url"] = None if _is_leaky_url(body.cover_url) else body.cover_url
 
     # Download background if URL provided
     if body.background_url:
@@ -749,7 +756,10 @@ async def upload_rom_media(
         shots.append(url)
         await rom_handler.update_metadata(rom_id, {"screenshots": shots})
     else:
-        await rom_handler.update_metadata(rom_id, {_UPLOAD_KINDS[kind]: url})
+        _upd = {_UPLOAD_KINDS[kind]: url}
+        if kind == "cover":
+            _upd["cover_url"] = None   # an uploaded file has no clean remote source
+        await rom_handler.update_metadata(rom_id, _upd)
     return {"ok": True, "path": url}
 
 
@@ -1553,6 +1563,12 @@ async def scrape_rom(
         data = await _scrape(rom, platform, forced_ss_id=forced_ss_id, forced_launchbox_id=forced_launchbox_id)
         if data:
             await rom_handler.update_metadata(rom_id, data)
+            # ROM now has a cover -> one-shot recently-added card (idempotent).
+            try:
+                from handler.notifications.recently_added import schedule_rom
+                schedule_rom(rom_id)
+            except Exception:
+                pass
 
     background_tasks.add_task(_run)
     return {"ok": True, "rom_id": rom_id, "forced_ss_id": forced_ss_id, "forced_launchbox_id": forced_launchbox_id}
@@ -1573,6 +1589,49 @@ async def hltb_rescrape_roms(
 
     background_tasks.add_task(_rescrape, force)
     return {"ok": True, "message": "HLTB ROM rescrape started in background", "force": force}
+
+
+# ── Play tracking (fires plugin lifecycle_on_play_start / _on_play_end) ────────
+
+class _RomPlayEnd(BaseModel):
+    seconds: int | None = None
+
+
+@protected_route(router.post, "/{rom_id}/play/start", scopes=[Scopes.LIBRARY_READ])
+async def rom_play_start(request: Request, rom_id: int) -> dict:
+    """Fire lifecycle_on_play_start when the in-browser player launches a ROM.
+    Called by player.html once EmulatorJS reports the game has started."""
+    from plugins import events as _pe
+    title = None
+    try:
+        rom = await rom_handler.get_by_id(rom_id)
+        title = (getattr(rom, "name", None) or getattr(rom, "fs_name_no_ext", None)) if rom else None
+    except Exception:
+        pass
+    _pe.play_start({"id": rom_id, "title": title, "source": "rom"})
+    return {"ok": True}
+
+
+@protected_route(router.post, "/{rom_id}/play/end", scopes=[Scopes.LIBRARY_READ])
+async def rom_play_end(request: Request, rom_id: int, body: _RomPlayEnd | None = None) -> dict:
+    """Fire lifecycle_on_play_end when a ROM play session ends (player closed).
+    `seconds` is the elapsed play time reported by player.html."""
+    from plugins import events as _pe
+    _pe.play_end({"id": rom_id, "source": "rom"}, (body.seconds if body else 0) or 0)
+    return {"ok": True}
+
+
+@protected_route(router.post, "/{rom_id}/announce", scopes=[Scopes.LIBRARY_WRITE])
+async def announce_rom_added(request: Request, rom_id: int) -> dict:
+    """Manually (re)send the rich "recently added" notification for this ROM -
+    the "(Re)send notification" button in the ROM metadata editor. Landscape box
+    art is preserved by Discord's big image; bypasses the once-only guards."""
+    rom = await rom_handler.get_with_platform(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    from handler.notifications.recently_added import announce_rom
+    sent = await announce_rom(rom_id, force=True)
+    return {"ok": True, "sent": sent}
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────

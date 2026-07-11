@@ -857,8 +857,14 @@
         <div class="mep-save-status">
           <span v-if="saveError" class="mep-err">{{ saveError }}</span>
           <span v-else-if="saveOk" class="mep-ok">✓ {{ t('meta.saved') }}</span>
+          <span v-else-if="notifyMsg" :class="notifyOk ? 'mep-ok' : 'mep-err'">{{ notifyMsg }}</span>
         </div>
         <div class="mep-footer-actions">
+          <button class="mep-btn-notify" :disabled="notifying" @click="resendNotification" :title="t('meta.resend_notification_hint')">
+            <div v-if="notifying" class="mep-spinner mep-spinner--sm" />
+            <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            {{ t('meta.resend_notification') }}
+          </button>
           <button class="mep-btn-cancel" @click="$emit('close')">{{ t('meta.cancel') }}</button>
           <button class="mep-btn-save" :disabled="saving || !hasChanges" @click="save">
             <div v-if="saving" class="mep-spinner mep-spinner--sm" />
@@ -1121,6 +1127,9 @@ function pluginRatingsFromRows(): Record<string, { name?: string; rating?: numbe
 const saving    = ref(false)
 const saveOk    = ref(false)
 const saveError = ref('')
+const notifying = ref(false)
+const notifyMsg = ref('')
+const notifyOk  = ref(true)
 
 // ── Computed ───────────────────────────────────────────────────────────────────
 const currentCoverSrc = computed(() => selectedCover.value || props.rom.cover_path || '')
@@ -1430,6 +1439,19 @@ async function save() {
     saving.value = false
   }
 }
+
+async function resendNotification() {
+  notifying.value = true; notifyMsg.value = ''; notifyOk.value = true
+  try {
+    const { data } = await client.post(`/roms/${props.rom.id}/announce`)
+    notifyMsg.value = data?.sent ? t('meta.notification_sent') : t('meta.notification_skipped')
+    setTimeout(() => { notifyMsg.value = '' }, 3500)
+  } catch (e: any) {
+    notifyOk.value = false
+    notifyMsg.value = e?.response?.data?.detail || t('meta.notification_failed')
+    setTimeout(() => { notifyMsg.value = '' }, 4500)
+  } finally { notifying.value = false }
+}
 </script>
 
 <style scoped>
@@ -1718,6 +1740,15 @@ async function save() {
 .mep-ok  { color: #34d399; }
 .mep-err { color: #f87171; }
 .mep-footer-actions { display: flex; gap: var(--space-2, 8px); }
+.mep-btn-notify {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: color-mix(in srgb, var(--pl, #6366f1) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl, #6366f1) 32%, rgba(255,255,255,.12));
+  color: var(--pl-light, #a5b4fc); padding: 7px 14px; border-radius: 7px;
+  font-size: .82rem; cursor: pointer; transition: all .15s; margin-right: auto;
+}
+.mep-btn-notify:not(:disabled):hover { background: color-mix(in srgb, var(--pl, #6366f1) 24%, transparent); color: #fff; }
+.mep-btn-notify:disabled { opacity: .5; cursor: default; }
 .mep-btn-cancel {
   background: none; border: 1px solid rgba(255,255,255,.12);
   color: rgba(255,255,255,.55); padding: 7px 16px; border-radius: 7px;

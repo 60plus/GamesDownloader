@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -71,6 +73,7 @@ class Rom(Base):
 
     # ── Media ─────────────────────────────────────────────────────────────────
     cover_path:      Mapped[str | None] = mapped_column(String(512), nullable=True)
+    cover_url:       Mapped[str | None] = mapped_column(String(1024), nullable=True)  # original remote source (fallback for notifications when public_base_url unset)
     cover_type:      Mapped[str | None] = mapped_column(String(32),  nullable=True)  # box-2D, box-3D, etc.
     cover_aspect:    Mapped[str | None] = mapped_column(String(10),  nullable=True)  # detected from image, e.g. "3/4"
     background_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -90,6 +93,11 @@ class Rom(Base):
     # ── Status ────────────────────────────────────────────────────────────────
     is_identified:  Mapped[bool] = mapped_column(Boolean, default=False)
     missing_from_fs: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # ── Notifications ─────────────────────────────────────────────────────────
+    # When the "recently added" notification was sent for this ROM. NULL = not
+    # yet announced (eligible once it has a cover). Set once to avoid re-spam.
+    announced_at:   Mapped[datetime | None] = mapped_column(nullable=True)
 
     # ── Relationships ─────────────────────────────────────────────────────────
     platform: Mapped["RomPlatform"] = relationship(  # noqa: F821

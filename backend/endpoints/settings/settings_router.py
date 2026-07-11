@@ -61,6 +61,9 @@ class SmtpRequest(BaseModel):
     email_notify_download: bool = True
     email_notify_sync: bool = True
     email_notify_request: bool = True
+    email_notify_added: bool = False
+    email_tpl_added_subject: str | None = None
+    email_tpl_added_body: str | None = None
     email_tpl_download_subject: str | None = None
     email_tpl_download_body: str | None = None
     email_tpl_sync_subject: str | None = None
@@ -84,8 +87,13 @@ class WebhookRequest(BaseModel):
     notify_download: bool = True
     notify_sync: bool = True
     notify_request: bool = True
+    notify_added: bool = True
     include_cover: bool = True
     avatar_url: str | None = None
+    server_name: str | None = None
+    tpl_added_title: str | None = None
+    tpl_added_body: str | None = None
+    tpl_added_content: str | None = None
     tpl_download_title: str | None = None
     tpl_download_body: str | None = None
     tpl_sync_title: str | None = None
@@ -275,6 +283,9 @@ async def get_smtp(request: Request) -> dict:
         "email_notify_download": await config_handler.get_bool("email_notify_download", default=True),
         "email_notify_sync":     await config_handler.get_bool("email_notify_sync", default=True),
         "email_notify_request":  await config_handler.get_bool("email_notify_request", default=True),
+        "email_notify_added":    await config_handler.get_bool("email_notify_added", default=False),
+        "email_tpl_added_subject":          await config_handler.get("email_tpl_added_subject") or "",
+        "email_tpl_added_body":             await config_handler.get("email_tpl_added_body") or "",
         "email_tpl_download_subject":       await config_handler.get("email_tpl_download_subject") or "",
         "email_tpl_download_body":          await config_handler.get("email_tpl_download_body") or "",
         "email_tpl_sync_subject":           await config_handler.get("email_tpl_sync_subject") or "",
@@ -305,6 +316,9 @@ async def save_smtp(request: Request, req: SmtpRequest) -> dict:
         "email_notify_download": (str(req.email_notify_download).lower(), False),
         "email_notify_sync":     (str(req.email_notify_sync).lower(), False),
         "email_notify_request":  (str(req.email_notify_request).lower(), False),
+        "email_notify_added":    (str(req.email_notify_added).lower(), False),
+        "email_tpl_added_subject":          (req.email_tpl_added_subject or "", False),
+        "email_tpl_added_body":             (req.email_tpl_added_body or "", False),
         "email_tpl_download_subject":       (req.email_tpl_download_subject or "", False),
         "email_tpl_download_body":          (req.email_tpl_download_body or "", False),
         "email_tpl_sync_subject":           (req.email_tpl_sync_subject or "", False),
@@ -373,8 +387,13 @@ async def get_webhooks(request: Request) -> dict:
         "notify_download": await config_handler.get_bool("webhook_notify_download", default=True),
         "notify_sync":     await config_handler.get_bool("webhook_notify_sync", default=True),
         "notify_request":  await config_handler.get_bool("webhook_notify_request", default=True),
+        "notify_added":    await config_handler.get_bool("webhook_notify_added", default=True),
         "include_cover":   await config_handler.get_bool("webhook_include_cover", default=True),
         "avatar_url":      await config_handler.get("webhook_avatar_url") or "",
+        "server_name":     await config_handler.get("server_name") or "",
+        "tpl_added_title":          await config_handler.get("webhook_tpl_added_title") or "",
+        "tpl_added_body":           await config_handler.get("webhook_tpl_added_body") or "",
+        "tpl_added_content":        await config_handler.get("webhook_tpl_added_content") or "",
         "tpl_download_title":       await config_handler.get("webhook_tpl_download_title") or "",
         "tpl_download_body":        await config_handler.get("webhook_tpl_download_body") or "",
         "tpl_sync_title":           await config_handler.get("webhook_tpl_sync_title") or "",
@@ -401,8 +420,13 @@ async def save_webhooks(request: Request, req: WebhookRequest) -> dict:
         "webhook_notify_download": (str(req.notify_download).lower(), False),
         "webhook_notify_sync":     (str(req.notify_sync).lower(), False),
         "webhook_notify_request":  (str(req.notify_request).lower(), False),
+        "webhook_notify_added":    (str(req.notify_added).lower(), False),
         "webhook_include_cover":   (str(req.include_cover).lower(), False),
         "webhook_avatar_url":      (req.avatar_url or "", False),
+        "server_name":             (req.server_name or "", False),
+        "webhook_tpl_added_title":          (req.tpl_added_title or "", False),
+        "webhook_tpl_added_body":           (req.tpl_added_body or "", False),
+        "webhook_tpl_added_content":        (req.tpl_added_content or "", False),
         "webhook_tpl_download_title":       (req.tpl_download_title or "", False),
         "webhook_tpl_download_body":        (req.tpl_download_body or "", False),
         "webhook_tpl_sync_title":           (req.tpl_sync_title or "", False),

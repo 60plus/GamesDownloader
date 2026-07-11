@@ -1796,5 +1796,19 @@
   "packaging.include_extras": "Упаковывать также extras и DLC",
   "packaging.include_extras_hint": "Объединяет папки extras и DLC игры в отдельные архивы, а не только установщики ОС.",
   "packaging.single_archive": "Упаковать всё в один архив",
-  "packaging.group_game": "Игра"
+  "packaging.group_game": "Игра",
+  "meta.resend_notification": "Отправить уведомление",
+  "meta.resend_notification_hint": "(Повторно) отправить уведомление 'недавно добавлено' для этой позиции",
+  "meta.notification_sent": "Уведомление отправлено",
+  "meta.notification_skipped": "Нечего отправлять (уведомления выключены)",
+  "meta.notification_failed": "Не удалось отправить уведомление",
+  "notif.recently_added": "Недавно добавленные",
+  "notif.recently_added_desc": "Отдельная карточка для каждой новой игры или ROM, когда есть обложка",
+  "notif.recently_added_email_desc": "Письмо для каждой добавленной позиции (может быть часто)",
+  "notif.server_name": "Имя сервера",
+  "notif.server_name_desc": "Показывается в уведомлениях 'недавно добавлено'. По умолчанию — хост публичного URL.",
+  "notif.server_name_ph": "Мой игровой сервер",
+  "notif.message_field": "Сообщение (над встраиванием)",
+  "notif.added_placeholders_hint": "'Недавно добавлено' поддерживает {title}, {source}, {server} и {description}.",
+  "notif.added_body_ph": "Оставьте пустым, чтобы использовать описание игры"
 }

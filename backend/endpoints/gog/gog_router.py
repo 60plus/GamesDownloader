@@ -246,6 +246,21 @@ async def scrape_game(
     return {"ok": True, "message": f"Scraping metadata for '{game.title}'"}
 
 
+@gog_router.post("/library/games/{game_id}/announce")
+async def announce_gog_game_added(game_id: int, request: Request) -> dict:
+    """Manually (re)send the "recently added" notification for a GOG game -
+    the button in the GOG metadata editor. `game_id` is the GogGame id, so we
+    announce its published LibraryGame (nothing to send if not published yet)."""
+    _require_scope(request, Scope.GOG_WRITE)
+    from handler.database.library_handler import LibraryHandler
+    lib_game = await LibraryHandler().get_by_gog_game_id(game_id)
+    if lib_game is None:
+        return {"ok": True, "sent": False}
+    from handler.notifications.recently_added import announce_library_game
+    sent = await announce_library_game(lib_game.id, force=True)
+    return {"ok": True, "sent": sent}
+
+
 @gog_router.delete("/library/games/{game_id}/metadata")
 async def clear_game_metadata(game_id: int, request: Request) -> dict:
     """Clear all scraped metadata for a single game (title/gog_id are preserved)."""
