@@ -148,6 +148,15 @@ class LifecycleSpec:
         """Called when a download finishes."""
 
     @hookspec
+    def lifecycle_on_play_start(self, game: dict[str, Any]) -> None:
+        """Called when a user launches a game or ROM (the in-browser player
+        opens). `game` carries at least id/title/source."""
+
+    @hookspec
+    def lifecycle_on_play_end(self, game: dict[str, Any], seconds: int) -> None:
+        """Called when a play session ends. `seconds` is the elapsed play time."""
+
+    @hookspec
     def lifecycle_on_startup(self) -> None:
         """Called when the application starts."""
 

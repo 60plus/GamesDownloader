@@ -786,6 +786,16 @@ function exitPlayer() {
       if (sv && sv.length) uploadSave(sv);
     }
   } catch {}
+  // Plugin play tracking: report elapsed seconds (fires lifecycle_on_play_end).
+  // fetch+keepalive (not sendBeacon) so the Bearer token can be sent on exit.
+  try {
+    const secs = window.__gdPlayStart ? Math.round((Date.now() - window.__gdPlayStart) / 1000) : 0;
+    fetch(`${API_BASE}/api/roms/${ROM_ID}/play/end`, {
+      method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), keepalive: true,
+      body: JSON.stringify({ seconds: secs }),
+    });
+    window.__gdPlayStart = 0;
+  } catch {}
   // Always notify parent (works for iframe embed and window.open)
   try { window.parent.postMessage({ type: 'gd-exit' }, '*'); } catch {}
   try { if (window.opener) window.opener.postMessage({ type: 'gd-exit' }, '*'); } catch {}
@@ -1012,6 +1022,9 @@ function exitPlayer() {
     try { navigator.getGamepads(); } catch {}
     // Ask parent to re-focus the iframe now that game is running
     window.parent.postMessage({ type: 'gd-game-started' }, '*');
+    // Plugin play tracking: mark session start (fires lifecycle_on_play_start).
+    window.__gdPlayStart = Date.now();
+    try { fetch(`${API_BASE}/api/roms/${ROM_ID}/play/start`, { method: 'POST', headers: authHeaders() }); } catch {}
 
     // Auto-fullscreen for "Fullscreen" launch mode
     if (AUTO_FULLSCREEN) {

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from config import GD_VERSION, PLUGINS_PATH
 from decorators.auth import protected_route
@@ -679,6 +680,173 @@ async def get_plugin_themes() -> list:
     return [t for t in themes if t]
 
 
+@plugins_router.get("/frontend/routes")
+async def get_plugin_routes() -> list:
+    """Custom nav routes declared by enabled plugins (frontend_get_routes hook).
+
+    Each entry is {path, label, icon}. `path` is namespaced under /x/ in the SPA
+    so it cannot collide with a core route. The plugin's injected JS supplies the
+    page CONTENT by calling window.__GD__.registerRoute({ path, mount }).
+    """
+    out: list[dict] = []
+    try:
+        for parts in plugin_manager.hook.frontend_get_routes():
+            for r in (parts or []):
+                if isinstance(r, dict) and r.get("path"):
+                    out.append({
+                        "path": str(r["path"]).lstrip("/"),
+                        "label": r.get("label", ""),
+                        "icon": r.get("icon", ""),
+                    })
+    except Exception:
+        logger.warning("frontend_get_routes aggregation failed")
+    return out
+
+
+@plugins_router.get("/dashboard/cards")
+async def get_dashboard_cards() -> list:
+    """Aggregate dashboard widget cards declared by plugins (widget_get_cards hook).
+
+    Each card is a small data tile: {id, title, value?, subtitle?, icon?, link?}.
+    Rendered by the core Dashboard page. `link` may be an internal route
+    (e.g. /x/<pluginpath>) the card navigates to on click.
+    """
+    out: list[dict] = []
+    try:
+        for parts in plugin_manager.hook.widget_get_cards():
+            for c in (parts or []):
+                if isinstance(c, dict) and (c.get("title") or c.get("id")):
+                    out.append({
+                        "id": str(c.get("id") or c.get("title")),
+                        "title": c.get("title", ""),
+                        "value": c.get("value"),
+                        "subtitle": c.get("subtitle", ""),
+                        "icon": c.get("icon", ""),
+                        "link": c.get("link", ""),
+                    })
+    except Exception:
+        logger.warning("widget_get_cards aggregation failed")
+    return out
+
+
+# ── Plugin download providers (download_provider_* hooks) ─────────────────────
+
+def _instance_by(id_attr: str, value: str):
+    """Find a registered plugin instance whose <id_attr>() returns `value`."""
+    for inst in plugin_manager.get_plugin_instances():
+        fn = getattr(inst, id_attr, None)
+        try:
+            if callable(fn) and fn() == value:
+                return inst
+        except Exception:
+            continue
+    return None
+
+
+@protected_route(plugins_router.get, "/download/providers", scopes=[Scope.LIBRARY_READ])
+async def list_download_providers(request: Request, game_id: str | None = Query(None)) -> list:
+    """Plugin-provided download sources (download_provider_id/name). With game_id,
+    also reports which can handle it (download_can_handle)."""
+    out: list[dict] = []
+    for inst in plugin_manager.get_plugin_instances():
+        pid_fn = getattr(inst, "download_provider_id", None)
+        if not callable(pid_fn):
+            continue
+        try:
+            pid = pid_fn()
+        except Exception:
+            continue
+        if not pid:
+            continue
+        name_fn = getattr(inst, "download_provider_name", None)
+        can = None
+        if game_id is not None:
+            ch = getattr(inst, "download_can_handle", None)
+            try:
+                can = bool(ch(game_id)) if callable(ch) else None
+            except Exception:
+                can = None
+        out.append({"id": pid, "name": (name_fn() if callable(name_fn) else pid), "can_handle": can})
+    return out
+
+
+class _PluginDownloadStart(BaseModel):
+    game_id: str
+    destination: str | None = None
+
+
+@protected_route(plugins_router.post, "/download/providers/{provider_id}/start", scopes=[Scope.LIBRARY_ADMIN])
+async def start_plugin_download(request: Request, provider_id: str, body: _PluginDownloadStart) -> dict:
+    """Start a download through a plugin download provider (download_start)."""
+    inst = _instance_by("download_provider_id", provider_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail="Download provider not found")
+    fn = getattr(inst, "download_start", None)
+    if not callable(fn):
+        raise HTTPException(status_code=400, detail="Provider cannot start downloads")
+    try:
+        return dict(fn(body.game_id, body.destination or "") or {})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Provider error: {e}")
+
+
+@protected_route(plugins_router.get, "/download/providers/{provider_id}/status/{task_id}", scopes=[Scope.LIBRARY_READ])
+async def plugin_download_status(request: Request, provider_id: str, task_id: str) -> dict:
+    """Progress of a plugin-provider download (download_get_status)."""
+    inst = _instance_by("download_provider_id", provider_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail="Download provider not found")
+    fn = getattr(inst, "download_get_status", None)
+    if not callable(fn):
+        raise HTTPException(status_code=400, detail="Provider has no status")
+    try:
+        return dict(fn(task_id) or {})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Provider error: {e}")
+
+
+# ── Plugin library sources (library_source_* hooks) ──────────────────────────
+
+@protected_route(plugins_router.get, "/library/sources", scopes=[Scope.LIBRARY_READ])
+async def list_library_sources(request: Request) -> list:
+    """Plugin-provided library sources (library_source_id/name)."""
+    out: list[dict] = []
+    for inst in plugin_manager.get_plugin_instances():
+        sid_fn = getattr(inst, "library_source_id", None)
+        if not callable(sid_fn):
+            continue
+        try:
+            sid = sid_fn()
+        except Exception:
+            continue
+        if not sid:
+            continue
+        name_fn = getattr(inst, "library_source_name", None)
+        out.append({"id": sid, "name": (name_fn() if callable(name_fn) else sid)})
+    return out
+
+
+class _LibrarySourceScan(BaseModel):
+    path: str
+
+
+@protected_route(plugins_router.post, "/library/sources/{source_id}/scan", scopes=[Scope.LIBRARY_ADMIN])
+async def scan_library_source(request: Request, source_id: str, body: _LibrarySourceScan) -> dict:
+    """Scan a path through a plugin library source (library_scan) and return the
+    discovered games/ROMs. Adoption into the library is left to the caller."""
+    inst = _instance_by("library_source_id", source_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail="Library source not found")
+    fn = getattr(inst, "library_scan", None)
+    if not callable(fn):
+        raise HTTPException(status_code=400, detail="Source cannot scan")
+    try:
+        discovered = fn(body.path) or []
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Source error: {e}")
+    return {"discovered": list(discovered)}
+
+
 @plugins_router.get("/frontend/js")
 async def get_plugin_js():
     """Concatenate JavaScript from all enabled theme plugins."""
@@ -809,6 +977,16 @@ async def plugin_metadata_fetch(
         all_results = plugin_manager.hook.metadata_get_game(provider_game_id=game_id)
         for result in all_results:
             if isinstance(result, dict) and result.get("provider_id") == provider_id:
+                # Fallback: if the provider's game dict carries no cover, ask its
+                # dedicated cover hook (metadata_get_cover_url) and fold it in.
+                if not result.get("cover_url") and not result.get("cover"):
+                    try:
+                        for cu in plugin_manager.hook.metadata_get_cover_url(provider_game_id=game_id):
+                            if cu:
+                                result["cover_url"] = cu
+                                break
+                    except Exception:
+                        pass
                 return result
     except Exception as e:
         logger.warning("Plugin metadata fetch error: %s", e)

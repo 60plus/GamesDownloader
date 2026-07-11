@@ -6,10 +6,10 @@ import App from "./App.vue";
 // failed to render on Windows Chrome / Edge - the package ships
 // `.fi.fi-<iso2>` classes plus the SVG masks they reference.
 import "flag-icons/css/flag-icons.min.css";
-import { createAppRouter } from "./plugins/router";
+import { createAppRouter, addPluginRoutes } from "./plugins/router";
 import { createAppPinia } from "./plugins/pinia";
 import { vuetify } from "./plugins/vuetify";
-import { registerTheme, registerPluginLayout, registerPluginCouchMode, registerMetadataTab, registerDetailRow, resolveDetailRows, registerHomeSections, getHomeSections } from "./themes/index";
+import { registerTheme, registerPluginLayout, registerPluginCouchMode, registerMetadataTab, registerDetailRow, resolveDetailRows, registerHomeSections, getHomeSections, registerPluginRoute, pluginNavRoutes, setPluginNavRoutes } from "./themes/index";
 import { useCouchNav, navPaused as couchNavPaused } from "./composables/useCouchNav";
 import { useDialog } from "./composables/useDialog";
 import { useCouchTheme } from "./composables/useCouchTheme";
@@ -43,7 +43,8 @@ import "./styles/skins.css";
 const app = createApp(App);
 
 app.use(createAppPinia());
-app.use(createAppRouter());
+const router = createAppRouter();
+app.use(router);
 app.use(vuetify);
 
 // Register shared components globally so plugin themes can use them
@@ -155,6 +156,12 @@ function createSafeSocketStore() {
   // Consumer side of registerDetailRow, for plugin themes that render their
   // own game detail pages and must show plugin rows natively.
   resolveDetailRows,
+  // Custom plugin pages. A plugin's backend hook frontend_get_routes declares
+  // {path,label,icon} (fetched below into the router + `pluginRoutes`), and its
+  // injected JS calls registerRoute({path, mount}) to render the page content.
+  // Themes read `pluginRoutes` (reactive) to show nav links to /x/<path>.
+  registerRoute: registerPluginRoute,
+  pluginRoutes: pluginNavRoutes,
   // Theme-declared home sections. A theme layout with its own extra home-page
   // sections (trailer shelf, genre tiles...) calls register() on mount (and the
   // returned unregister on unmount); Settings -> Libraries then offers per-user
@@ -287,6 +294,15 @@ client.get("/plugins/frontend/i18n").then((res: any) => {
     i18n.merge(res.data);
   }
 }).catch(() => { /* no plugins or not authenticated yet */ });
+
+// Load plugin-declared custom pages (frontend_get_routes): wire each into the
+// router at /x/<path> and expose them for theme nav via __GD__.pluginRoutes.
+client.get("/plugins/frontend/routes").then((res: any) => {
+  if (Array.isArray(res.data) && res.data.length) {
+    addPluginRoutes(router, res.data);
+    setPluginNavRoutes(res.data);
+  }
+}).catch(() => { /* no plugin pages or not authenticated yet */ });
 
 // Check for plugin updates (admin only, respects interval setting)
 setTimeout(() => {

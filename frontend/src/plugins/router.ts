@@ -1,10 +1,11 @@
-import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
+import { createRouter, createWebHistory, type RouteRecordRaw, type Router } from "vue-router";
 import client from "@/services/api/client";
 import { useLibrariesStore } from "@/stores/libraries";
 
 const routes: RouteRecordRaw[] = [
   {
     path: "/",
+    name: "shell",
     component: () => import("@/layouts/LayoutShell.vue"),
     children: [
       {
@@ -88,6 +89,12 @@ const routes: RouteRecordRaw[] = [
         name: "profile",
         component: () => import("@/views/profile/ProfileView.vue"),
         meta: { title: "Profile" },
+      },
+      {
+        path: "dashboard",
+        name: "dashboard",
+        component: () => import("@/views/DashboardView.vue"),
+        meta: { title: "Dashboard" },
       },
       {
         path: "settings",
@@ -237,4 +244,28 @@ export function createAppRouter() {
   })
 
   return router;
+}
+
+/**
+ * Add plugin-declared pages (from GET /api/plugins/frontend/routes) as children
+ * of the LayoutShell so they share the app chrome. Each page lives at
+ * `/x/<path>` and renders through PluginPage.vue, which invokes the mount fn the
+ * plugin registered via window.__GD__.registerRoute. Idempotent.
+ */
+export function addPluginRoutes(
+  router: Router,
+  routes: { path: string; label?: string; icon?: string }[],
+): void {
+  for (const r of routes || []) {
+    const clean = String(r?.path || "").replace(/^\/+/, "");
+    if (!clean) continue;
+    const name = `plugin-${clean}`;
+    if (router.hasRoute(name)) continue;
+    router.addRoute("shell", {
+      path: `x/${clean}`,
+      name,
+      component: () => import("@/views/PluginPage.vue"),
+      meta: { title: r.label || clean, pluginPath: clean },
+    });
+  }
 }

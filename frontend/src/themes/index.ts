@@ -617,3 +617,37 @@ export function registerHomeSections(sections: ThemeHomeSection[]): () => void {
 export function getHomeSections(): ThemeHomeSection[] {
   return _homeSections;
 }
+
+// ── Plugin route registry (custom plugin pages) ──────────────────────────────
+// A plugin declares a custom page two ways that meet here:
+//   1. backend hook frontend_get_routes -> nav metadata {path, label, icon}
+//      (fetched in main.ts: added to the router as /x/<path> + exposed for nav).
+//   2. the plugin's injected JS supplies the page CONTENT by calling
+//      window.__GD__.registerRoute({ path, mount }); PluginPage.vue looks the
+//      mount up by path when the /x/<path> route is active.
+export interface PluginRouteMount {
+  path: string;
+  mount: (el: HTMLElement, ctx: { path: string; api: unknown; t: (k: string) => string }) => (() => void) | void;
+}
+
+const _pluginRouteMounts = new Map<string, PluginRouteMount["mount"]>();
+
+/** Plugin JS -> register how a custom page renders (vanilla DOM mount). */
+export function registerPluginRoute(route: PluginRouteMount): void {
+  if (route && route.path && typeof route.mount === "function") {
+    _pluginRouteMounts.set(String(route.path).replace(/^\/+/, ""), route.mount);
+  }
+}
+
+/** PluginPage.vue -> the mount fn registered for a path (or undefined). */
+export function getPluginRouteMount(path: string): PluginRouteMount["mount"] | undefined {
+  return _pluginRouteMounts.get(String(path || "").replace(/^\/+/, ""));
+}
+
+/** Nav metadata for plugin pages (reactive; set from the backend hook in
+ *  main.ts). Themes read this to render their own nav links. */
+export const pluginNavRoutes = shallowReactive<{ path: string; label: string; icon: string }[]>([]);
+
+export function setPluginNavRoutes(routes: { path: string; label: string; icon: string }[]): void {
+  pluginNavRoutes.splice(0, pluginNavRoutes.length, ...(routes || []));
+}

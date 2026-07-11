@@ -209,6 +209,8 @@ async def _on_file_downloaded(job_id: int) -> None:
                         is_available=True,
                     ))
                     logger.info("Auto-synced file to library: %s → LibraryGame id=%s", rel_path, lib_game.id)
+                    from plugins import events as _plugin_events
+                    _plugin_events.download_complete(lib_game, dest_path)
 
         # Optionally bundle this platform's files into a single archive once
         # every file for the platform has finished (runs after the library
