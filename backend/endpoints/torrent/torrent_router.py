@@ -103,7 +103,7 @@ class AddTorrentByUrl(BaseModel):
     library: str | None = None
 
 
-@protected_route(torrent_router.post, "/download/url", scopes=[Scope.LIBRARY_UPLOAD])
+@protected_route(torrent_router.post, "/download/url", scopes=[Scope.LIBRARY_ADMIN])
 async def add_torrent_url(request: Request, body: AddTorrentByUrl) -> dict:
     """Add torrent by magnet link or .torrent URL."""
     slug = _slugify(body.title)
@@ -123,7 +123,7 @@ async def add_torrent_url(request: Request, body: AddTorrentByUrl) -> dict:
     return _fmt_download(td)
 
 
-@protected_route(torrent_router.post, "/download/file", scopes=[Scope.LIBRARY_UPLOAD])
+@protected_route(torrent_router.post, "/download/file", scopes=[Scope.LIBRARY_ADMIN])
 async def add_torrent_file(
     request: Request,
     title:   str = Form(...),
@@ -188,7 +188,7 @@ async def _create_torrent_download(request, title, os_name, download_dir, *, tra
 
 # ── Admin: list / manage downloads ───────────────────────────────────────────
 
-@protected_route(torrent_router.get, "/downloads", scopes=[Scope.LIBRARY_UPLOAD])
+@protected_route(torrent_router.get, "/downloads", scopes=[Scope.LIBRARY_ADMIN])
 async def list_downloads(request: Request) -> list:
     from handler.database.session import async_session_factory
     from models.torrent_download import TorrentDownload
@@ -200,7 +200,7 @@ async def list_downloads(request: Request) -> list:
     return [_fmt_download(r) for r in rows]
 
 
-@protected_route(torrent_router.get, "/downloads/{dl_id}", scopes=[Scope.LIBRARY_UPLOAD])
+@protected_route(torrent_router.get, "/downloads/{dl_id}", scopes=[Scope.LIBRARY_ADMIN])
 async def get_download(request: Request, dl_id: int) -> dict:
     from handler.database.session import async_session_factory
     from models.torrent_download import TorrentDownload
@@ -211,7 +211,7 @@ async def get_download(request: Request, dl_id: int) -> dict:
     return _fmt_download(td)
 
 
-@protected_route(torrent_router.delete, "/downloads/{dl_id}", scopes=[Scope.LIBRARY_UPLOAD])
+@protected_route(torrent_router.delete, "/downloads/{dl_id}", scopes=[Scope.LIBRARY_ADMIN])
 async def cancel_download(request: Request, dl_id: int) -> dict:
     from handler.database.session import async_session_factory
     from models.torrent_download import TorrentDownload

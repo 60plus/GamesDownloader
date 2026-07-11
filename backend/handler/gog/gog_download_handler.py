@@ -872,8 +872,47 @@ class GogDownloadHandler(DBBaseHandler):
                                 await _update(session, checksum_status="skipped")
                         logger.info("Job %s: checksum skipped (no MD5 or size from GOG)", job_id)
 
+            # ── Step 6: Optional ClamAV scan of the finished file ────────────
+            # Runs only when the admin enabled `clamav_auto_scan_download`. A hit
+            # quarantines/deletes the file and fails the job, so an infected GOG
+            # download is never adopted into the library. Fails open on scanner
+            # error so a broken daemon does not block legitimate downloads.
+            infected = False
+            try:
+                from handler.clamav import clamav_handler as _clam
+                if await _clam.is_download_scanning_enabled():
+                    scan_res = await _clam.scan_file(str(dest_path))
+                    _scan_status = scan_res.get("status")
+                    if _scan_status in ("skipped", "error"):
+                        # Fail-open, but never silently: the admin asked for scanning,
+                        # so surface that this download was adopted WITHOUT a verdict.
+                        logger.warning(
+                            "ClamAV did not scan GOG download job %s (status=%s): %s - "
+                            "file adopted UNSCANNED",
+                            job_id, _scan_status, scan_res.get("message") or "no detail",
+                        )
+                    if _scan_status == "FOUND":
+                        infected = True
+                        threat = scan_res.get("threat") or "unknown"
+                        action_res = await _clam.quarantine_or_delete(str(dest_path), threat)
+                        logger.warning(
+                            "ClamAV blocked GOG download job %s ('%s', threat=%s, action=%s)",
+                            job_id, file_name, threat, action_res.get("action"),
+                        )
+                        async with async_session_factory() as session:
+                            async with session.begin():
+                                await _update(
+                                    session,
+                                    status="failed",
+                                    error_msg=f"Blocked by ClamAV: {threat}"[:1024],
+                                    checksum_status="infected",
+                                )
+            except Exception:
+                logger.exception("ClamAV scan of GOG download %s failed; leaving file in place", job_id)
+
             # Mark game downloaded and sync file into library (best-effort, non-blocking)
-            asyncio.create_task(_on_file_downloaded(job_id))
+            if not infected:
+                asyncio.create_task(_on_file_downloaded(job_id))
 
         except asyncio.CancelledError:
             # Don't overwrite "paused" status set by pause_job()

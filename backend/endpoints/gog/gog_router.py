@@ -329,6 +329,9 @@ async def sync_library(
                 "sync",
                 title="Library Synced",
                 description=f"GOG library sync complete - {count} games in library.",
+                tpl_title_key="tpl_sync_title",
+                tpl_body_key="tpl_sync_body",
+                placeholders={"count": str(count)},
             )
             if do_scrape:
                 # Await scrape directly - keep running=True until metadata is fetched.

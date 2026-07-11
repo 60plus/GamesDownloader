@@ -112,6 +112,15 @@ async def is_upload_scanning_enabled() -> bool:
     return await config_handler.get_bool("clamav_auto_scan_upload", default=False)
 
 
+async def is_download_scanning_enabled() -> bool:
+    """True when the admin has enabled `clamav_auto_scan_download` (scan files
+    fetched from GOG once each download completes)."""
+    from handler.config.config_handler import config_handler
+    if not await config_handler.get_bool("clamav_enabled", default=True):
+        return False
+    return await config_handler.get_bool("clamav_auto_scan_download", default=False)
+
+
 async def scan_file(fpath: str) -> dict:
     """Scan a single absolute file path against the running clamd daemon.
 

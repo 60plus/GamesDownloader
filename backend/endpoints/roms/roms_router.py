@@ -1284,7 +1284,7 @@ async def download_rom(request: Request, rom_id: int) -> FileResponse:
 
 # ── Clear metadata ────────────────────────────────────────────────────────────
 
-@protected_route(router.post, "/{rom_id}/clear-metadata", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.post, "/{rom_id}/clear-metadata", scopes=[Scopes.LIBRARY_ADMIN])
 async def clear_rom_metadata(request: Request, rom_id: int) -> dict:
     """Clear all scraped metadata for a single ROM (keeps file info + hashes)."""
     result = await rom_handler.clear_metadata(rom_id)
@@ -1293,7 +1293,7 @@ async def clear_rom_metadata(request: Request, rom_id: int) -> dict:
     return {"ok": True}
 
 
-@protected_route(router.post, "/platforms/{slug}/clear-metadata", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.post, "/platforms/{slug}/clear-metadata", scopes=[Scopes.LIBRARY_ADMIN])
 async def clear_platform_metadata(request: Request, slug: str) -> dict:
     """Clear scraped metadata for ALL ROMs on a platform."""
     platform = await rom_platform_handler.get_by_slug(slug)
@@ -1307,7 +1307,7 @@ async def clear_platform_metadata(request: Request, slug: str) -> dict:
     return {"ok": True, "cleared": count}
 
 
-@protected_route(router.delete, "/metadata", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.delete, "/metadata", scopes=[Scopes.LIBRARY_ADMIN])
 async def clear_all_roms_metadata(request: Request) -> dict:
     """Clear scraped metadata for ALL ROMs across all platforms."""
     count = await rom_handler.clear_all_metadata()
