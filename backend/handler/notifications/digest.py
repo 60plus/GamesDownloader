@@ -506,6 +506,12 @@ async def send_single_item(kind: str, obj_id: int) -> bool:
                     return False
                 card = await _card_from_game(session, obj, base)
 
+        # An item with no resolvable cover is not a "ready" card - skip the email
+        # rather than send an empty title-only one (matches the digest gate).
+        if not card.get("cover_url"):
+            logger.info("recently-added: skip single-item email for %s id=%s (no cover art)", kind, obj_id)
+            return False
+
         from handler.notifications.recipients import (
             recipients_for_library_game, recipients_for_rom,
         )
@@ -567,10 +573,20 @@ async def build_and_send_digest(*, window_start: datetime, window_end: datetime)
                    Rom.announced_at > ws, Rom.announced_at <= we)
             .order_by(Rom.announced_at.desc())
         )).scalars().all()
+        # Only announce items that resolve to real cover art. A recently-added
+        # card without a cover is broken, and a coverless row that still carries
+        # an announced_at (a one-off backfill, a manual force-send, or a
+        # removed/orphaned entry that was never hard-deleted) must not leak into
+        # the newsletter - this mirrors the auto-announce contract, which also
+        # requires a resolvable cover before it will announce.
         for g in games:
-            items.append(("game", g, await _card_from_game(session, g, base)))
+            card = await _card_from_game(session, g, base)
+            if card.get("cover_url"):
+                items.append(("game", g, card))
         for r in roms:
-            items.append(("rom", r, await _card_from_rom(session, r, base)))
+            card = await _card_from_rom(session, r, base)
+            if card.get("cover_url"):
+                items.append(("rom", r, card))
 
     if not items:
         return 0
