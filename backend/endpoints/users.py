@@ -51,6 +51,30 @@ async def save_preferences(request: Request, data: dict = Body(...)) -> dict:
     return {"ok": True}
 
 
+@router.get("/me/notifications")
+async def get_notification_prefs(request: Request) -> dict:
+    """The current user's email opt-in plus whether email is even available
+    (SMTP configured on the server). The opt-in toggle is only useful when
+    smtp_ready is true. No credentials are exposed."""
+    _require_auth(request)
+    from handler.config.config_handler import config_handler
+    host = (await config_handler.get("smtp_host") or "").strip()
+    from_addr = (await config_handler.get("smtp_from_address") or "").strip()
+    return {
+        "smtp_ready": bool(host and from_addr),
+        "recently_added": bool(getattr(request.state.user, "notify_recently_added", True)),
+    }
+
+
+@router.put("/me/notifications")
+async def save_notification_prefs(request: Request, data: dict = Body(...)) -> dict:
+    """Toggle the current user's 'recently added' email opt-in."""
+    _require_auth(request)
+    val = bool(data.get("recently_added", True))
+    await _users_db.update(request.state.user, {"notify_recently_added": val})
+    return {"ok": True, "recently_added": val}
+
+
 @router.post("/me/password")
 async def change_password(request: Request, data: PasswordChange) -> dict:
     """Change own password. Requires current password to confirm."""

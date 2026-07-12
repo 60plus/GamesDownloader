@@ -39,6 +39,12 @@ class User(Base):
     # Per-user UI appearance preferences (theme, skin, card effects, etc.)
     preferences: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
+    # Per-user email opt-in: receive a mail when a game/ROM is added to a
+    # library this user can see. Default on; the toggle is only useful once an
+    # admin has configured SMTP. Kept as its own column (not in `preferences`,
+    # which the theme store overwrites wholesale).
+    notify_recently_added: Mapped[bool] = mapped_column(Boolean, default=True)
+
     # ── Two-factor authentication (TOTP - RFC 6238) ──────────────────────────
     # totp_secret holds the base32-encoded shared secret only when 2FA is
     # actively enabled. During enrollment the secret is staged in Redis

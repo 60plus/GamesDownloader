@@ -132,6 +132,65 @@ async def notify_if_configured(
         logger.warning("Webhook notification failed (event=%s): %s", event, e)
 
 
+async def notify_email(
+    event: str,
+    *,
+    recipients: list[str],
+    subject_key: str,
+    subject_default: str,
+    body_key: str,
+    body_default: str,
+    placeholders: dict[str, Any] | None = None,
+    cover_url: str | None = None,
+    detail_url: str | None = None,
+    default_on: bool = True,
+) -> None:
+    """Send a notification email for `event` to `recipients` (BCC) if the event
+    is enabled and SMTP is set up.
+
+    Independent of the webhook. Recipients are resolved by the caller (see
+    handler.notifications.recipients). Placeholder values are HTML-escaped in the
+    body and stripped of CR/LF in the subject (the admin's template HTML is kept).
+    Recipients are BCC'd so they never see each other's addresses."""
+    import html as _html
+    from handler.config.config_handler import config_handler
+    try:
+        recipients = [r for r in (recipients or []) if r]
+        if not recipients:
+            return
+        if not await config_handler.get_bool(f"email_notify_{event}", default=default_on):
+            return
+        host = (await config_handler.get("smtp_host") or "").strip()
+        from_addr = (await config_handler.get("smtp_from_address") or "").strip()
+        if not (host and from_addr):
+            return
+        try:
+            port = int((await config_handler.get("smtp_port")) or "587")
+        except (TypeError, ValueError):
+            port = 587
+        user = await config_handler.get("smtp_username") or ""
+        password = await config_handler.get("smtp_password") or ""
+        use_tls = await config_handler.get_bool("smtp_use_tls", default=True)
+        ph = placeholders or {}
+        subject = (await config_handler.get(subject_key)) or subject_default
+        for k, v in ph.items():
+            subject = subject.replace("{" + k + "}", str(v))
+        subject = subject.replace("\r", " ").replace("\n", " ")
+        body = (await config_handler.get(body_key)) or body_default
+        for k, v in ph.items():
+            body = body.replace("{" + k + "}", _html.escape(str(v)))
+        if cover_url:
+            body += f'<p><img src="{_html.escape(cover_url, quote=True)}" alt="" style="max-width:320px"></p>'
+        if detail_url:
+            body += f'<p><a href="{_html.escape(detail_url, quote=True)}">View details</a></p>'
+        from handler.email.smtp_sender import send_email
+        # To header is the from address; the real audience is BCC (hidden).
+        await send_email(host, port, user, password, from_addr, from_addr, subject, body,
+                         "starttls" if use_tls else "none", bcc=recipients)
+    except Exception as e:
+        logger.warning("notify_email failed (event=%s): %s", event, e)
+
+
 async def send_generic(
     url: str,
     title: str,

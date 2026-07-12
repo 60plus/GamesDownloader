@@ -330,7 +330,7 @@ async def create_request(request: Request, body: RequestCreate) -> dict:
         }
     # Webhook OUTSIDE session scope to avoid nested transactions
     try:
-        from handler.notifications.webhook_handler import notify_if_configured
+        from handler.notifications.webhook_handler import notify_email, notify_if_configured
         ph = {
             "title": gr_data["title"],
             "username": gr_data["username"] or "Unknown",
@@ -352,6 +352,15 @@ async def create_request(request: Request, body: RequestCreate) -> dict:
             color=0x3B82F6,
             tpl_title_key="tpl_request_new_title",
             tpl_body_key="tpl_request_new_body",
+            placeholders=ph,
+        )
+        from handler.notifications.recipients import admin_recipients
+        await notify_email(
+            "request",
+            recipients=await admin_recipients(),   # a new request is for the admins to action
+            subject_key="email_tpl_request_new_subject", subject_default="New Game Request: {title}",
+            body_key="email_tpl_request_new_body",
+            body_default="<p><strong>{username}</strong> requested <strong>{title}</strong>.</p><p>{description}</p>",
             placeholders=ph,
         )
     except Exception:
@@ -403,10 +412,12 @@ async def patch_request(request: Request, request_id: int, body: RequestPatch) -
             cover = gr.cover_url
             username = gr.username or "Unknown"
             note = gr.admin_note or ""
+            req_user_id = gr.user_id
     # Webhook notification on status change
     if old_status != new_status:
         try:
-            from handler.notifications.webhook_handler import notify_if_configured
+            from handler.notifications.webhook_handler import notify_email, notify_if_configured
+            from handler.notifications.recipients import user_recipient
             status_colors = {
                 "approved": 0x22C55E,
                 "rejected": 0xEF4444,
@@ -444,6 +455,15 @@ async def patch_request(request: Request, request_id: int, body: RequestPatch) -
                 color=color,
                 tpl_title_key=f"tpl_request_{new_status}_title",
                 tpl_body_key=f"tpl_request_{new_status}_body",
+                placeholders=ph,
+            )
+            await notify_email(
+                "request",
+                recipients=await user_recipient(req_user_id),   # the requester gets the decision
+                subject_key=f"email_tpl_request_{new_status}_subject",
+                subject_default="Game Request {status}: {title}",
+                body_key=f"email_tpl_request_{new_status}_body",
+                body_default="<p>Request for <strong>{title}</strong> by {username} is now <strong>{status}</strong>.</p><p>{note}</p>",
                 placeholders=ph,
             )
         except Exception:

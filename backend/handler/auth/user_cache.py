@@ -46,7 +46,7 @@ _CACHE_TTL    = 60   # seconds - short enough that role/disable changes apply qu
 
 _FIELDS = (
     "id", "username", "email", "hashed_password", "role", "enabled",
-    "avatar_path", "permissions", "preferences",
+    "avatar_path", "permissions", "preferences", "notify_recently_added",
     "totp_secret", "totp_enabled", "totp_recovery_codes",
     "created_at", "updated_at",
 )
@@ -104,6 +104,13 @@ def _deserialize(blob: str) -> User | None:
             except ValueError:
                 v = Role.USER
         setattr(user, f, v)
+
+    # Columns added after a snapshot was written are absent from old blobs.
+    # A transient User() leaves such mapped attributes as None (the model's
+    # default= only applies at INSERT), so restore the intended default here
+    # to avoid a None reading back as False for boolean opt-ins.
+    if getattr(user, "notify_recently_added", None) is None:
+        user.notify_recently_added = True
     return user
 
 

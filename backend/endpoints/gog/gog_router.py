@@ -339,13 +339,22 @@ async def sync_library(
                 return
 
             count = result.get("synced", 0)
-            from handler.notifications.webhook_handler import notify_if_configured
+            from handler.notifications.webhook_handler import notify_email, notify_if_configured
+            from handler.notifications.recipients import admin_recipients
             await notify_if_configured(
                 "sync",
                 title="Library Synced",
                 description=f"GOG library sync complete - {count} games in library.",
                 tpl_title_key="tpl_sync_title",
                 tpl_body_key="tpl_sync_body",
+                placeholders={"count": str(count)},
+            )
+            await notify_email(
+                "sync",
+                recipients=await admin_recipients(),   # GOG library is admin-only
+                subject_key="email_tpl_sync_subject", subject_default="GOG Library Synced",
+                body_key="email_tpl_sync_body",
+                body_default="<p>Your GOG library has been synchronized - {count} games in library.</p>",
                 placeholders={"count": str(count)},
             )
             if do_scrape:

@@ -54,6 +54,18 @@
           </div>
         </div>
 
+        <!-- Email notifications (only when the server has SMTP configured) -->
+        <div v-if="notifSmtpReady" class="pv-section">
+          <div class="pv-section-title">{{ t('profile.notifications') }}</div>
+          <label class="pv-notif-row">
+            <input type="checkbox" v-model="notifRecentlyAdded" @change="saveNotifPrefs" class="pv-notif-check" />
+            <span class="pv-notif-text">
+              <span class="pv-notif-label">{{ t('profile.notify_recently_added') }}</span>
+              <span class="pv-notif-hint">{{ t('profile.notify_recently_added_hint') }}</span>
+            </span>
+          </label>
+        </div>
+
         <!-- Avatar -->
         <div class="pv-section">
           <div class="pv-section-title">{{ t('profile.avatar') }}</div>
@@ -686,6 +698,21 @@ const gogError    = ref('')
 const libraryGames = ref<any[]>([])
 
 const avatarUploading = ref(false)
+const notifSmtpReady = ref(false)
+const notifRecentlyAdded = ref(true)
+
+async function loadNotifPrefs() {
+  try {
+    const { data } = await client.get('/users/me/notifications')
+    notifSmtpReady.value = !!data?.smtp_ready
+    notifRecentlyAdded.value = data?.recently_added !== false
+  } catch { /* ignore - section just stays hidden */ }
+}
+async function saveNotifPrefs() {
+  try {
+    await client.put('/users/me/notifications', { recently_added: notifRecentlyAdded.value })
+  } catch { /* ignore */ }
+}
 const avatarMsg       = ref('')
 const avatarOk        = ref(true)
 
@@ -923,6 +950,7 @@ async function deleteSave(id: number) {
 }
 
 onMounted(async () => {
+  loadNotifPrefs()
   try {
     const { data } = await client.get('/users/me')
     user.value = data
@@ -1208,6 +1236,14 @@ async function changePassword() {
   font-size: var(--fs-sm, 12px); color: var(--muted); line-height: 1.55;
 }
 .pv-lang-row { padding: 4px 20px; }
+.pv-notif-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 6px 20px; cursor: pointer;
+}
+.pv-notif-check { margin-top: 3px; width: 16px; height: 16px; cursor: pointer; accent-color: var(--pl); flex-shrink: 0; }
+.pv-notif-text { display: flex; flex-direction: column; gap: 2px; }
+.pv-notif-label { font-size: 13px; color: var(--text); }
+.pv-notif-hint { font-size: 11px; color: var(--muted); line-height: 1.4; }
 
 /* ── Avatar ───────────────────────────────────────────────────────────────── */
 .pv-avatar-row {
