@@ -93,6 +93,9 @@ const PLUGIN_SOCKET_EVENTS = new Set([
   "upload:url_progress",
   "upload:url_complete",
   "upload:url_error",
+  // Packaging progress, so a theme can follow __GD__.library.package() jobs
+  // ({ id, status: "packaging"|"completed"|"failed", done, total }).
+  "download:packaging",
 ]);
 
 function createPluginEventBridge() {
