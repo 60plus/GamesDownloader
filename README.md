@@ -65,6 +65,11 @@ Every area below has a dedicated page in the [Wiki](https://github.com/60plus/Ga
 - Shareable one-time **download tokens** (optional password, expiry, and download limit, no account needed) and **torrent seeding** of any library file via the built-in Transmission daemon.
 - Full detail: [Downloads & Sharing](https://github.com/60plus/GamesDownloader/wiki/Downloads-and-Torrents)
 
+### Notifications
+- **Recently-added** announcements in the spirit of Plex/Tautulli: a rich Discord card per title, plus email as an immediate alert or a scheduled **daily / weekly digest** with a branded two-per-row layout (Games / GOG / ROMs), per-user opt-in, and delivery only to people who can actually see each item.
+- Webhook and email for **GOG library sync** and **game requests** (to admins, with the decision going back to the requester), alongside the security alerts and periodic report.
+- Full detail: [Email & Notifications](https://github.com/60plus/GamesDownloader/wiki/Email-and-Notifications)
+
 ### Extensible
 - A **plugin system** (metadata scrapers, download providers, library sources, widgets, lifecycle hooks) and full **theme plugins** that ship complete custom Vue layouts, installable from a plugin store.
 - Full detail: [Plugin Development](https://github.com/60plus/GamesDownloader/wiki/Plugin-Development)
