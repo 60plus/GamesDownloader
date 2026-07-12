@@ -181,23 +181,42 @@ async def _claim(model, row_id: int) -> bool:
     return (res.rowcount or 0) == 1
 
 
+async def _email_mode() -> str:
+    """Recently-added email delivery mode: off | immediate | daily | weekly.
+    daily/weekly are handled by the digest scheduler (handler.notifications.
+    digest); only 'immediate' sends per item from the announce path."""
+    from handler.config.config_handler import config_handler
+    return (await config_handler.get("smtp_recently_added_mode") or "off").strip().lower()
+
+
 async def _delivery_configured() -> bool:
-    """True if at least one channel (webhook or email) is set up to deliver an
-    'added' notification. An auto-announce checks this first so it does not
-    consume the one-shot when nothing would be sent (e.g. the library was
-    scraped before the webhook was configured)."""
+    """True if at least one channel is set up to record/deliver an 'added'
+    notification. An auto-announce checks this first so it does not consume the
+    one-shot when nothing would happen. For email, ANY non-off mode counts: even
+    a daily/weekly digest needs announced_at stamped now so the item enters the
+    next newsletter window (the send itself happens later)."""
     from handler.config.config_handler import config_handler
     if (await config_handler.get_bool("webhook_enabled")
             and (await config_handler.get("webhook_url") or "").strip()
             and await config_handler.get_bool("webhook_notify_added", default=True)):
         return True
-    if await config_handler.get_bool("email_notify_added", default=False):
+    if (await _email_mode()) != "off":
         host = (await config_handler.get("smtp_host") or "").strip()
-        to_addr = (await config_handler.get("alert_smtp_to") or "").strip()
         from_addr = (await config_handler.get("smtp_from_address") or "").strip()
-        if host and to_addr and from_addr:
+        if host and from_addr:   # recipients are opted-in users, resolved at send time
             return True
     return False
+
+
+async def _maybe_email_now(kind: str, obj_id: int, *, force: bool) -> None:
+    """Immediate single-item email, ONLY in 'immediate' mode. In daily/weekly the
+    digest scheduler owns email, so neither the auto path nor a manual resend
+    sends an off-cycle mail (that would duplicate the item in the next digest,
+    since both select it by announced_at). 'off' sends nothing. Discord/webhook
+    still fire immediately via _deliver regardless of this."""
+    if (await _email_mode()) == "immediate":
+        from handler.notifications.digest import send_single_item
+        await send_single_item(kind, obj_id)
 
 
 async def _deliver(
@@ -209,9 +228,12 @@ async def _deliver(
     cover_url: str | None,
     server_name: str,
 ) -> None:
-    """Send the resolved card to Discord/webhook and (optionally) email."""
-    import html as _html
-    from handler.config.config_handler import config_handler
+    """Send the resolved card to Discord / webhook (immediate, per item).
+
+    Email is handled separately: 'immediate' mode and the manual resend button
+    send a single-item card right away (handler.notifications.digest.
+    send_single_item); daily/weekly modes collect items into a scheduled
+    newsletter instead."""
     from handler.notifications.webhook_handler import notify_if_configured
 
     color = _SOURCE_COLORS.get(source, _DEFAULT_COLOR)
@@ -245,46 +267,6 @@ async def _deliver(
         tpl_content_key="tpl_added_content",
         placeholders=ph,
     )
-
-    # Email (opt-in; per-game email is off by default to avoid inbox spam).
-    try:
-        if not await config_handler.get_bool("email_notify_added", default=False):
-            return
-        host = (await config_handler.get("smtp_host") or "").strip()
-        to_addr = (await config_handler.get("alert_smtp_to") or "").strip()
-        from_addr = (await config_handler.get("smtp_from_address") or "").strip()
-        if not (host and to_addr and from_addr):
-            return
-        try:
-            port = int((await config_handler.get("smtp_port")) or "587")
-        except (TypeError, ValueError):
-            port = 587
-        user = await config_handler.get("smtp_username") or ""
-        password = await config_handler.get("smtp_password") or ""
-        use_tls = await config_handler.get_bool("smtp_use_tls", default=True)
-        # HTML body: escape every substituted value (title/description are
-        # scraped text). cover/detail URLs are our own but escape them too.
-        esc = {k: _html.escape(str(v)) for k, v in ph.items()}
-        safe_cover = _html.escape(cover_url, quote=True) if cover_url else ""
-        safe_detail = _html.escape(detail_url, quote=True) if detail_url else ""
-        default_body = (
-            '<p>{title} was recently added to your library.</p>'
-            + (f'<p><img src="{safe_cover}" alt="" style="max-width:320px"></p>' if safe_cover else "")
-            + (f'<p><a href="{safe_detail}">View details</a></p>' if safe_detail else "")
-        )
-        body = (await config_handler.get("email_tpl_added_body")) or default_body
-        for k, v in esc.items():
-            body = body.replace("{" + k + "}", v)
-        # Subject is a mail header - substitute raw text but strip CR/LF.
-        subject = (await config_handler.get("email_tpl_added_subject")) or "Added to the library: {title}"
-        for k, v in ph.items():
-            subject = subject.replace("{" + k + "}", str(v))
-        subject = subject.replace("\r", " ").replace("\n", " ")
-        from handler.email.smtp_sender import send_email
-        await send_email(host, port, user, password, from_addr, to_addr, subject, body,
-                         "starttls" if use_tls else "none")
-    except Exception as e:
-        logger.warning("recently-added email failed for '%s': %s", title, e)
 
 
 # ── Library games (custom / torrent / GOG-published) ────────────────────────────
@@ -341,6 +323,7 @@ async def announce_library_game(game_id: int, *, force: bool = False) -> bool:
             source=source, title=title, description=description[:400],
             detail_url=detail_url, cover_url=cover_url, server_name=server,
         )
+        await _maybe_email_now("game", game_id, force=force)
         if force:
             await _claim(LibraryGame, game_id)   # mark so the auto path won't duplicate later
         logger.info("recently-added: announced library game id=%s '%s'", game_id, title)
@@ -403,6 +386,7 @@ async def announce_rom(rom_id: int, *, force: bool = False) -> bool:
             source="rom", title=title, description=desc,
             detail_url=detail_url, cover_url=cover_url, server_name=server,
         )
+        await _maybe_email_now("rom", rom_id, force=force)
         if force:
             await _claim(Rom, rom_id)   # mark so the auto path won't duplicate later
         logger.info("recently-added: announced ROM id=%s '%s'", rom_id, title)

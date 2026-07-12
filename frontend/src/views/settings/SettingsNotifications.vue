@@ -59,6 +59,12 @@
             </div>
           </div>
 
+          <div class="field-group">
+            <label class="field-label">{{ t('notif.notify_recipient') }}</label>
+            <input v-model="smtp.notify_to" class="field-input" placeholder="you@example.com" />
+            <div class="field-hint">{{ t('notif.notify_recipient_desc') }}</div>
+          </div>
+
           <div class="toggle-row-inline">
             <span class="toggle-name">{{ t('notif.use_tls') }}</span>
             <label class="toggle-pill">
@@ -69,21 +75,49 @@
             </label>
           </div>
 
+          <!-- Recently added: digest newsletter schedule -->
+          <div class="field-group">
+            <label class="field-label">{{ t('notif.recently_added') }}</label>
+            <select v-model="smtp.recently_added_mode" class="field-input">
+              <option value="off">{{ t('notif.ra_off') }}</option>
+              <option value="immediate">{{ t('notif.ra_immediate') }}</option>
+              <option value="daily">{{ t('notif.ra_daily') }}</option>
+              <option value="weekly">{{ t('notif.ra_weekly') }}</option>
+            </select>
+            <div class="field-hint">{{ t('notif.recently_added_email_desc') }}</div>
+
+            <div v-if="smtp.recently_added_mode === 'daily' || smtp.recently_added_mode === 'weekly'"
+                 class="sn-ra-schedule">
+              <div v-if="smtp.recently_added_mode === 'weekly'" class="sn-ra-field">
+                <label class="field-label">{{ t('notif.ra_weekday') }}</label>
+                <select v-model.number="smtp.recently_added_weekday" class="field-input field-input--sm">
+                  <option :value="0">{{ t('notif.wd_mon') }}</option>
+                  <option :value="1">{{ t('notif.wd_tue') }}</option>
+                  <option :value="2">{{ t('notif.wd_wed') }}</option>
+                  <option :value="3">{{ t('notif.wd_thu') }}</option>
+                  <option :value="4">{{ t('notif.wd_fri') }}</option>
+                  <option :value="5">{{ t('notif.wd_sat') }}</option>
+                  <option :value="6">{{ t('notif.wd_sun') }}</option>
+                </select>
+              </div>
+              <div class="sn-ra-field">
+                <label class="field-label">{{ t('notif.ra_time') }}</label>
+                <input v-model="smtp.recently_added_time" type="time" class="field-input field-input--sm" />
+                <div class="field-hint">{{ t('notif.ra_time_hint') }}</div>
+              </div>
+              <div class="sn-ra-actions">
+                <button type="button" class="action-btn action-btn--secondary"
+                        :disabled="digestSending" @click="sendDigestNow">
+                  {{ digestSending ? t('notif.ra_sending') : t('notif.ra_send_now') }}
+                </button>
+                <span v-if="digestMsg" class="sn-ra-msg">{{ digestMsg }}</span>
+              </div>
+            </div>
+          </div>
+
           <!-- Trigger toggles -->
           <div class="field-label">{{ t('notif.trigger_on') }}</div>
           <div class="toggle-group">
-            <div class="toggle-row">
-              <div class="toggle-info">
-                <div class="toggle-name">{{ t('notif.recently_added') }}</div>
-                <div class="toggle-desc">{{ t('notif.recently_added_email_desc') }}</div>
-              </div>
-              <label class="toggle-pill">
-                <input type="checkbox" v-model="smtp.email_notify_added" class="toggle-input" />
-                <span class="toggle-track" :class="{ 'toggle-track--on': smtp.email_notify_added }">
-                  <span class="toggle-thumb" />
-                </span>
-              </label>
-            </div>
             <div class="toggle-row">
               <div class="toggle-info">
                 <div class="toggle-name">{{ t('notif.download_complete') }}</div>
@@ -555,15 +589,20 @@ const smtpSaving  = ref(false)
 const smtpTesting = ref(false)
 const smtpSaved   = ref(false)
 const smtpError   = ref('')
+const digestSending = ref(false)
+const digestMsg     = ref('')
 const smtpTestResult = ref<{ ok: boolean; message: string } | null>(null)
 
 const smtp = reactive({
   enabled: false,
-  host: '', port: 587, username: '', password: '', from_address: '', use_tls: true, test_to: '',
+  host: '', port: 587, username: '', password: '', from_address: '', use_tls: true, test_to: '', notify_to: '',
   email_notify_download: true,
   email_notify_sync: true,
   email_notify_request: true,
   email_notify_added: false,
+  recently_added_mode: 'off',
+  recently_added_time: '09:00',
+  recently_added_weekday: 0,
   email_tpl_added_subject: '',
   email_tpl_added_body: '',
   email_tpl_download_subject: '',
@@ -697,6 +736,20 @@ async function saveSmtp() {
   } catch (e: any) {
     smtpError.value = e?.response?.data?.detail || t('notif.smtp_save_failed')
   } finally { smtpSaving.value = false }
+}
+
+async function sendDigestNow() {
+  digestSending.value = true
+  digestMsg.value = ''
+  try {
+    await client.post('/settings/smtp', smtp)   // persist schedule + SMTP first
+    const r = await client.post('/settings/smtp/recently-added-digest/test').then(x => x.data)
+    digestMsg.value = r?.ok
+      ? t('notif.ra_sent_ok', { n: r.emails_sent ?? 0 })
+      : (r?.error || t('notif.ra_sent_fail'))
+  } catch (e: any) {
+    digestMsg.value = e?.response?.data?.detail || t('notif.ra_sent_fail')
+  } finally { digestSending.value = false }
 }
 
 // ── Webhook actions ───────────────────────────────────────────────────────────
@@ -887,6 +940,16 @@ async function saveWebhook() {
   letter-spacing: .03em; text-transform: uppercase;
 }
 .sn-advanced-toggle:hover { color: var(--text, #fff); }
+.sn-ra-schedule {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
+  margin-top: 12px; padding: 12px; border-radius: 8px;
+  background: var(--surface-2, rgba(255,255,255,.03));
+  border: 1px solid var(--border, rgba(255,255,255,.08));
+}
+.sn-ra-field { display: flex; flex-direction: column; gap: 4px; }
+.sn-ra-field .field-input--sm { min-width: 130px; }
+.sn-ra-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.sn-ra-msg { font-size: 12px; color: var(--muted, rgba(255,255,255,.55)); }
 .sn-templates { display: flex; flex-direction: column; gap: var(--space-2, 8px); padding: 8px 0; }
 .sn-tpl-hint {
   font-size: 11px; color: var(--muted, rgba(255,255,255,.35));

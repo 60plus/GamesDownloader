@@ -860,7 +860,7 @@
           <span v-else-if="notifyMsg" :class="notifyOk ? 'mep-ok' : 'mep-err'">{{ notifyMsg }}</span>
         </div>
         <div class="mep-footer-actions">
-          <button class="mep-btn-notify" :disabled="notifying" @click="resendNotification" :title="t('meta.resend_notification_hint')">
+          <button v-if="notifyEnabled" class="mep-btn-notify" :disabled="notifying" @click="resendNotification" :title="t('meta.resend_notification_hint')">
             <div v-if="notifying" class="mep-spinner mep-spinner--sm" />
             <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
             {{ t('meta.resend_notification') }}
@@ -898,6 +898,10 @@ onMounted(async () => {
     const { data } = await client.get('/plugins/metadata/providers')
     metadataProviders.value = data || []
   } catch { /* no plugins */ }
+  try {
+    const { data } = await client.get('/settings/notifications/added-enabled')
+    notifyEnabled.value = !!data?.enabled
+  } catch { notifyEnabled.value = false }
   buildPluginRatingRows()
 })
 
@@ -1130,6 +1134,8 @@ const saveError = ref('')
 const notifying = ref(false)
 const notifyMsg = ref('')
 const notifyOk  = ref(true)
+// Show "Send notification" only when at least one channel (Discord/email) is on.
+const notifyEnabled = ref(false)
 
 // ── Computed ───────────────────────────────────────────────────────────────────
 const currentCoverSrc = computed(() => selectedCover.value || props.rom.cover_path || '')

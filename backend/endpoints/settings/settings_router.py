@@ -58,10 +58,15 @@ class SmtpRequest(BaseModel):
     from_address: str | None = None
     use_tls: bool = True
     test_to: str | None = None
+    notify_to: str | None = None
     email_notify_download: bool = True
     email_notify_sync: bool = True
     email_notify_request: bool = True
     email_notify_added: bool = False
+    # Recently-added email delivery: off | immediate | daily | weekly
+    recently_added_mode: str = "off"
+    recently_added_time: str = "09:00"     # HH:MM, server local time (daily/weekly)
+    recently_added_weekday: int = 0        # 0=Mon .. 6=Sun (weekly)
     email_tpl_added_subject: str | None = None
     email_tpl_added_body: str | None = None
     email_tpl_download_subject: str | None = None
@@ -270,6 +275,19 @@ _TEST_EMAIL_HTML = """\
 """
 
 
+def _valid_ra_mode(mode: str | None) -> str:
+    m = (mode or "off").strip().lower()
+    return m if m in ("off", "immediate", "daily", "weekly") else "off"
+
+
+def _valid_hhmm(s: str | None) -> str:
+    try:
+        hh, mm = (s or "09:00").split(":", 1)
+        return f"{max(0, min(23, int(hh))):02d}:{max(0, min(59, int(mm))):02d}"
+    except (ValueError, AttributeError):
+        return "09:00"
+
+
 @protected_route(settings_router.get, "/smtp", scopes=[Scope.SETTINGS_READ])
 async def get_smtp(request: Request) -> dict:
     return {
@@ -280,10 +298,14 @@ async def get_smtp(request: Request) -> dict:
         "password":     await config_handler.get("smtp_password") or "",
         "from_address": await config_handler.get("smtp_from_address") or "",
         "use_tls":      await config_handler.get_bool("smtp_use_tls", default=True),
+        "notify_to":    await config_handler.get("smtp_notify_to") or "",
         "email_notify_download": await config_handler.get_bool("email_notify_download", default=True),
         "email_notify_sync":     await config_handler.get_bool("email_notify_sync", default=True),
         "email_notify_request":  await config_handler.get_bool("email_notify_request", default=True),
         "email_notify_added":    await config_handler.get_bool("email_notify_added", default=False),
+        "recently_added_mode":    await config_handler.get("smtp_recently_added_mode") or "off",
+        "recently_added_time":    await config_handler.get("smtp_recently_added_time") or "09:00",
+        "recently_added_weekday": int(await config_handler.get("smtp_recently_added_weekday") or "0"),
         "email_tpl_added_subject":          await config_handler.get("email_tpl_added_subject") or "",
         "email_tpl_added_body":             await config_handler.get("email_tpl_added_body") or "",
         "email_tpl_download_subject":       await config_handler.get("email_tpl_download_subject") or "",
@@ -313,10 +335,14 @@ async def save_smtp(request: Request, req: SmtpRequest) -> dict:
         "smtp_password":     (req.password or "", True),
         "smtp_from_address": (req.from_address or "", False),
         "smtp_use_tls":      (str(req.use_tls).lower(), False),
+        "smtp_notify_to":    (req.notify_to or "", False),
         "email_notify_download": (str(req.email_notify_download).lower(), False),
         "email_notify_sync":     (str(req.email_notify_sync).lower(), False),
         "email_notify_request":  (str(req.email_notify_request).lower(), False),
         "email_notify_added":    (str(req.email_notify_added).lower(), False),
+        "smtp_recently_added_mode":    (_valid_ra_mode(req.recently_added_mode), False),
+        "smtp_recently_added_time":    (_valid_hhmm(req.recently_added_time), False),
+        "smtp_recently_added_weekday": (str(max(0, min(6, req.recently_added_weekday))), False),
         "email_tpl_added_subject":          (req.email_tpl_added_subject or "", False),
         "email_tpl_added_body":             (req.email_tpl_added_body or "", False),
         "email_tpl_download_subject":       (req.email_tpl_download_subject or "", False),
@@ -334,7 +360,36 @@ async def save_smtp(request: Request, req: SmtpRequest) -> dict:
         "email_tpl_request_done_subject":     (req.email_tpl_request_done_subject or "", False),
         "email_tpl_request_done_body":        (req.email_tpl_request_done_body or "", False),
     })
+    # Switching to a digest mode: seed the cursor to "now" so the first
+    # newsletter only contains items added AFTER enabling it, never the whole
+    # back-catalogue. Only when no cursor exists yet.
+    if _valid_ra_mode(req.recently_added_mode) in ("daily", "weekly"):
+        if not (await config_handler.get("smtp_recently_added_last_sent") or "").strip():
+            from datetime import datetime, timezone
+            await config_handler.set("smtp_recently_added_last_sent",
+                                     datetime.now(timezone.utc).isoformat())
     return {"ok": True}
+
+
+@protected_route(settings_router.get, "/notifications/added-enabled", scopes=None)
+async def added_notifications_enabled(request: Request) -> dict:
+    """Whether a 'recently added' notification can be delivered on any channel
+    (Discord/webhook or email). The metadata editor hides its 'Send
+    notification' button when both are off. Auth-only: returns just a bool."""
+    from handler.notifications.recently_added import _delivery_configured
+    return {"enabled": await _delivery_configured()}
+
+
+@protected_route(settings_router.post, "/smtp/recently-added-digest/test", scopes=[Scope.SETTINGS_WRITE])
+async def send_recently_added_digest_now(request: Request) -> dict:
+    """Send a recently-added newsletter right now for the last 7 days, ignoring
+    the schedule. For previewing the digest without waiting for the slot."""
+    from handler.notifications.digest import send_now
+    try:
+        sent = await send_now(days=7)
+        return {"ok": True, "emails_sent": sent}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
 
 
 @protected_route(settings_router.post, "/smtp/test", scopes=[Scope.SETTINGS_WRITE])

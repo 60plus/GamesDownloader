@@ -132,6 +132,8 @@ async def _init_db() -> None:
         ("users",          "totp_secret",         "VARCHAR(64) NULL"),
         ("users",          "totp_enabled",        "TINYINT(1) NOT NULL DEFAULT 0"),
         ("users",          "totp_recovery_codes", "JSON NULL"),
+        # Per-user opt-in for recently-added emails (default on).
+        ("users",          "notify_recently_added", "TINYINT(1) NOT NULL DEFAULT 1"),
         # Library collections feature
         ("library_games",  "in_default_library",  "TINYINT(1) NOT NULL DEFAULT 1"),
         # Per-user library access control
@@ -406,6 +408,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from handler.email.security_report import report_loop as _report_loop
     _report_task = asyncio.create_task(_report_loop())
 
+    # Recently-added email newsletter loop (checks every few minutes for the slot)
+    from handler.notifications.digest import digest_loop as _digest_loop
+    _digest_task = asyncio.create_task(_digest_loop())
+
     # Torrent monitors
     from handler.torrent.seed_monitor import seed_monitor_loop, download_monitor_loop
     _seed_task     = asyncio.create_task(seed_monitor_loop())
@@ -416,6 +422,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Shutdown
     _clamav_task.cancel()
     _report_task.cancel()
+    _digest_task.cancel()
     _seed_task.cancel()
     _dl_mon_task.cancel()
     plugin_manager.hook.lifecycle_on_shutdown()
