@@ -251,15 +251,20 @@ async def set_game_membership(request: Request, game_id: int, body: MembershipBo
     slug_to_id = {lib.slug: lib.id for lib in libs if lib.kind == "custom_lib"}
     wanted_ids = [slug_to_id[s] for s in body.collections if s in slug_to_id]
 
+    # Invariant: never leave a game homeless. Unchecking the default library while
+    # selecting no custom library would orphan it (is_active=1, no membership), so
+    # re-home it to the default library instead.
+    in_default = body.in_default_library or not wanted_ids
+
     async with async_session_factory() as s:
         async with s.begin():
             game = await s.get(LibraryGame, game_id)
             if game is None:
                 raise HTTPException(status_code=404, detail="Game not found")
-            game.in_default_library = body.in_default_library
+            game.in_default_library = in_default
 
     await library_registry_handler.set_memberships(game_id, wanted_ids)
-    return {"ok": True, "in_default_library": body.in_default_library, "collections": list(slug_to_id.keys() & set(body.collections))}
+    return {"ok": True, "in_default_library": in_default, "collections": list(slug_to_id.keys() & set(body.collections))}
 
 
 # ── Per-user access control ───────────────────────────────────────────────────

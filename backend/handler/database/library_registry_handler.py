@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete as _delete, func, select
+from sqlalchemy import delete as _delete, func, select, update as _update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from decorators.database import begin_session
@@ -97,9 +97,15 @@ class LibraryRegistryHandler(DBBaseHandler):
 
     @begin_session
     async def delete_user_library(self, slug: str, *, session: AsyncSession = None) -> bool:
+        from models.library_game import LibraryGame
         lib = (await session.execute(select(Library).where(Library.slug == slug))).scalars().first()
         if lib is None or lib.is_builtin:
             return False
+        # Games that belong to this library, captured BEFORE its membership rows
+        # cascade away, so we can rescue any that would be left with no home.
+        member_ids = [r[0] for r in (await session.execute(
+            select(LibraryMembership.library_game_id).where(LibraryMembership.library_id == lib.id)
+        )).all()]
         # A collections container also owns its Collections. Delete them first so
         # their membership rows cascade (the library_id FK is not enforced on the
         # pre-existing table, so we cannot rely on ON DELETE CASCADE there).
@@ -111,6 +117,23 @@ class LibraryRegistryHandler(DBBaseHandler):
             for c in colls:
                 await session.delete(c)  # collection_membership rows cascade
         await session.delete(lib)  # library_membership rows cascade
+        await session.flush()       # apply the cascade before checking what is left
+        # Re-home any game whose ONLY library was this one: with no membership and
+        # outside the default library it would be an unreachable orphan
+        # (is_active=1, no membership). Move it into the default library instead.
+        if member_ids:
+            still = {r[0] for r in (await session.execute(
+                select(LibraryMembership.library_game_id)
+                .where(LibraryMembership.library_game_id.in_(member_ids))
+            )).all()}
+            stranded = [gid for gid in member_ids if gid not in still]
+            if stranded:
+                await session.execute(
+                    _update(LibraryGame)
+                    .where(LibraryGame.id.in_(stranded),
+                           LibraryGame.in_default_library.is_(False))
+                    .values(in_default_library=True)
+                )
         return True
 
     # ── Per-game collection membership ──────────────────────────────────────────
@@ -130,6 +153,14 @@ class LibraryRegistryHandler(DBBaseHandler):
         )
         for lid in library_ids:
             session.add(LibraryMembership(library_id=lid, library_game_id=game_id))
+        # Invariant: a game must always have a home. If it now belongs to no custom
+        # library and is not in the default library, re-home it there so it can
+        # never become an unreachable orphan (is_active=1, no membership row).
+        if not library_ids:
+            from models.library_game import LibraryGame
+            game = await session.get(LibraryGame, game_id)
+            if game is not None and not game.in_default_library:
+                game.in_default_library = True
 
     # ── Per-user access control (restricted libraries) ──────────────────────────
 
