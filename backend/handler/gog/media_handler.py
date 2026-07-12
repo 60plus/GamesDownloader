@@ -16,7 +16,7 @@ import logging
 import re
 from pathlib import Path
 
-import httpx
+from utils.http import fetch_media_bytes
 
 try:
     from config import GD_BASE_PATH
@@ -93,14 +93,12 @@ async def download_cover(gog_id: int, url: str, overwrite: bool = False) -> str 
 
     try:
         fetch_url = _fix_gog_url(url)
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=20) as c:
-            r = await c.get(fetch_url)
-            r.raise_for_status()
-            ext = _ext_from(fetch_url, r.headers.get("content-type", ""))
-            dest = covers_dir / f"cover_auto{ext}"
-            dest.write_bytes(r.content)
-            logger.debug("Cover downloaded for gog_id=%s → %s", gog_id, dest)
-            return f"/resources/gog/{gog_id}/covers/cover_auto{ext}"
+        content, ctype = await fetch_media_bytes(fetch_url, headers=_HDRS, timeout=20)
+        ext = _ext_from(fetch_url, ctype)
+        dest = covers_dir / f"cover_auto{ext}"
+        dest.write_bytes(content)
+        logger.debug("Cover downloaded for gog_id=%s → %s", gog_id, dest)
+        return f"/resources/gog/{gog_id}/covers/cover_auto{ext}"
     except Exception as exc:
         logger.warning("Cover download failed gog_id=%s url=%s: %s", gog_id, url, exc)
         return None
@@ -120,13 +118,11 @@ async def download_background(gog_id: int, url: str, overwrite: bool = False) ->
 
     try:
         fetch_url = _fix_gog_url(url)
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=20) as c:
-            r = await c.get(fetch_url)
-            r.raise_for_status()
-            ext = _ext_from(fetch_url, r.headers.get("content-type", ""))
-            dest = bg_dir / f"background_auto{ext}"
-            dest.write_bytes(r.content)
-            return f"/resources/gog/{gog_id}/background/background_auto{ext}"
+        content, ctype = await fetch_media_bytes(fetch_url, headers=_HDRS, timeout=20)
+        ext = _ext_from(fetch_url, ctype)
+        dest = bg_dir / f"background_auto{ext}"
+        dest.write_bytes(content)
+        return f"/resources/gog/{gog_id}/background/background_auto{ext}"
     except Exception as exc:
         logger.warning("Background download failed gog_id=%s: %s", gog_id, exc)
         return None
@@ -145,13 +141,11 @@ async def download_logo(gog_id: int, url: str, overwrite: bool = False) -> str |
                 return f"/resources/gog/{gog_id}/logo/logo_auto{ext}"
 
     try:
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=20) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            ext = _ext_from(url, r.headers.get("content-type", ""))
-            dest = logo_dir / f"logo_auto{ext}"
-            dest.write_bytes(r.content)
-            return f"/resources/gog/{gog_id}/logo/logo_auto{ext}"
+        content, ctype = await fetch_media_bytes(url, headers=_HDRS, timeout=20)
+        ext = _ext_from(url, ctype)
+        dest = logo_dir / f"logo_auto{ext}"
+        dest.write_bytes(content)
+        return f"/resources/gog/{gog_id}/logo/logo_auto{ext}"
     except Exception as exc:
         logger.warning("Logo download failed gog_id=%s: %s", gog_id, exc)
         return None
@@ -171,13 +165,11 @@ async def download_icon(gog_id: int, url: str, overwrite: bool = False) -> str |
 
     try:
         fetch_url = _fix_gog_url(url)
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=20) as c:
-            r = await c.get(fetch_url)
-            r.raise_for_status()
-            ext = _ext_from(fetch_url, r.headers.get("content-type", ""))
-            dest = icon_dir / f"icon_auto{ext}"
-            dest.write_bytes(r.content)
-            return f"/resources/gog/{gog_id}/icon/icon_auto{ext}"
+        content, ctype = await fetch_media_bytes(fetch_url, headers=_HDRS, timeout=20)
+        ext = _ext_from(fetch_url, ctype)
+        dest = icon_dir / f"icon_auto{ext}"
+        dest.write_bytes(content)
+        return f"/resources/gog/{gog_id}/icon/icon_auto{ext}"
     except Exception as exc:
         logger.warning("Icon download failed gog_id=%s: %s", gog_id, exc)
         return None
@@ -197,14 +189,12 @@ async def download_avatar(user_id: str, url: str) -> str | None:
     try:
         fetch_url = _fix_gog_url(url)
         logger.debug("Downloading avatar user_id=%s  url=%s  fixed=%s", user_id, url, fetch_url)
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=20) as c:
-            r = await c.get(fetch_url)
-            r.raise_for_status()
-            ext = _ext_from(fetch_url, r.headers.get("content-type", ""))
-            dest = avatars_dir / f"{user_id}{ext}"
-            dest.write_bytes(r.content)
-            logger.info("Avatar downloaded for user_id=%s → %s", user_id, dest)
-            return f"/resources/avatars/{user_id}{ext}"
+        content, ctype = await fetch_media_bytes(fetch_url, headers=_HDRS, timeout=20)
+        ext = _ext_from(fetch_url, ctype)
+        dest = avatars_dir / f"{user_id}{ext}"
+        dest.write_bytes(content)
+        logger.info("Avatar downloaded for user_id=%s → %s", user_id, dest)
+        return f"/resources/avatars/{user_id}{ext}"
     except Exception as exc:
         logger.warning("Avatar download failed user_id=%s url=%s: %s", user_id, url, exc)
         return None
@@ -219,28 +209,26 @@ async def download_screenshots(gog_id: int, urls: list[str], overwrite: bool = F
     shots_dir.mkdir(exist_ok=True)
 
     saved: list[str] = []
-    async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=20) as c:
-        for i, url in enumerate(urls[:12]):
-            try:
-                # Check for existing cached screenshot (skip if not overwriting)
-                if not overwrite:
-                    found_cached = False
-                    for ext_check in (".jpg", ".png", ".webp", ".gif"):
-                        cached = shots_dir / f"auto_{i:03d}{ext_check}"
-                        if cached.exists() and cached.stat().st_size > 0:
-                            saved.append(f"/resources/gog/{gog_id}/shots/auto_{i:03d}{ext_check}")
-                            found_cached = True
-                            break
-                    if found_cached:
-                        continue
-                fetch_url = _fix_gog_url(url)
-                r = await c.get(fetch_url)
-                r.raise_for_status()
-                ext = _ext_from(fetch_url, r.headers.get("content-type", ""))
-                dest = shots_dir / f"auto_{i:03d}{ext}"
-                dest.write_bytes(r.content)
-                saved.append(f"/resources/gog/{gog_id}/shots/auto_{i:03d}{ext}")
-            except Exception as exc:
-                logger.warning("Screenshot %d failed gog_id=%s: %s", i, gog_id, exc)
+    for i, url in enumerate(urls[:12]):
+        try:
+            # Check for existing cached screenshot (skip if not overwriting)
+            if not overwrite:
+                found_cached = False
+                for ext_check in (".jpg", ".png", ".webp", ".gif"):
+                    cached = shots_dir / f"auto_{i:03d}{ext_check}"
+                    if cached.exists() and cached.stat().st_size > 0:
+                        saved.append(f"/resources/gog/{gog_id}/shots/auto_{i:03d}{ext_check}")
+                        found_cached = True
+                        break
+                if found_cached:
+                    continue
+            fetch_url = _fix_gog_url(url)
+            content, ctype = await fetch_media_bytes(fetch_url, headers=_HDRS, timeout=20)
+            ext = _ext_from(fetch_url, ctype)
+            dest = shots_dir / f"auto_{i:03d}{ext}"
+            dest.write_bytes(content)
+            saved.append(f"/resources/gog/{gog_id}/shots/auto_{i:03d}{ext}")
+        except Exception as exc:
+            logger.warning("Screenshot %d failed gog_id=%s: %s", i, gog_id, exc)
 
     return saved

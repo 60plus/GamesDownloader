@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import httpx
 
+from utils.net_guard import assert_fetch_allowed, make_request_guard
+
 _client: httpx.AsyncClient | None = None
 
 DEFAULT_TIMEOUT = httpx.Timeout(connect=10, read=30, write=10, pool=10)
@@ -34,3 +36,31 @@ async def close_client() -> None:
     if _client and not _client.is_closed:
         await _client.aclose()
         _client = None
+
+
+async def fetch_media_bytes(
+    url: str, *, headers: dict | None = None, timeout: float = 20
+) -> tuple[bytes, str]:
+    """Fetch a media asset (cover/hero/logo/icon/screenshot/...) whose URL came
+    from an external metadata or scraper provider, through the SSRF guard.
+
+    Blocks URLs that resolve to internal / LAN / cloud-metadata addresses, both
+    up front and on every redirect hop (redirect-based SSRF bypass). Scraped
+    media URLs should never point at a private address, so private LAN is not
+    allowed.
+
+    Returns (content_bytes, content_type). Raises net_guard.UnsafeURLError when
+    the URL is blocked (a ValueError, so the media handlers' broad `except`
+    catches it and falls back gracefully), or the usual httpx errors on a
+    network/HTTP failure.
+    """
+    assert_fetch_allowed(url)
+    async with httpx.AsyncClient(
+        headers=headers,
+        follow_redirects=True,
+        timeout=timeout,
+        event_hooks={"request": [make_request_guard()]},
+    ) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        return resp.content, resp.headers.get("content-type", "")

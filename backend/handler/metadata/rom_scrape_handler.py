@@ -16,6 +16,8 @@ from pathlib import Path
 
 import httpx
 
+from utils.http import fetch_media_bytes
+
 from config import RESOURCES_PATH
 from config import config_manager
 from handler.config.config_handler import config_handler
@@ -74,17 +76,17 @@ async def _download_image(url: str, dest: Path) -> Path | None:
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
-            r = await c.get(url, headers={"User-Agent": "GamesDownloader/3.0"})
-            r.raise_for_status()
-            # Detect real extension from Content-Type when URL ext is ambiguous
-            url_ext = dest.suffix.lstrip(".").lower()
-            if url_ext not in _REAL_EXTS:
-                ct = r.headers.get("content-type", "").split(";")[0].strip()
-                real_ext = _CT_EXT.get(ct)
-                if real_ext:
-                    dest = dest.with_suffix(f".{real_ext}")
-            dest.write_bytes(r.content)
+        content, ctype = await fetch_media_bytes(
+            url, headers={"User-Agent": "GamesDownloader/3.0"}, timeout=30
+        )
+        # Detect real extension from Content-Type when URL ext is ambiguous
+        url_ext = dest.suffix.lstrip(".").lower()
+        if url_ext not in _REAL_EXTS:
+            ct = ctype.split(";")[0].strip()
+            real_ext = _CT_EXT.get(ct)
+            if real_ext:
+                dest = dest.with_suffix(f".{real_ext}")
+        dest.write_bytes(content)
         return dest
     except Exception as e:
         logger.warning("Failed to download %s: %s", url, e)

@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import httpx
+from utils.http import fetch_media_bytes
 
 try:
     from config import GD_BASE_PATH
@@ -65,11 +65,9 @@ def _is_external(url: str | None) -> bool:
 async def _download(url: str, dest: Path) -> bool:
     """Download a URL to a file. Returns True on success."""
     try:
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=30) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            dest.write_bytes(r.content)
-            return True
+        content, _ctype = await fetch_media_bytes(url, headers=_HDRS, timeout=30)
+        dest.write_bytes(content)
+        return True
     except Exception as exc:
         logger.warning("Download failed %s: %s", url, exc)
         return False
@@ -90,14 +88,12 @@ async def download_cover(game_id: int, url: str, overwrite: bool = False) -> str
                 return f"/resources/library/{game_id}/cover/cover{ext}"
 
     try:
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=30) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            ext = _ext_from(url, r.headers.get("content-type", ""))
-            dest = cover_dir / f"cover{ext}"
-            dest.write_bytes(r.content)
-            logger.debug("Cover downloaded for game_id=%s → %s", game_id, dest)
-            return f"/resources/library/{game_id}/cover/cover{ext}"
+        content, ctype = await fetch_media_bytes(url, headers=_HDRS, timeout=30)
+        ext = _ext_from(url, ctype)
+        dest = cover_dir / f"cover{ext}"
+        dest.write_bytes(content)
+        logger.debug("Cover downloaded for game_id=%s → %s", game_id, dest)
+        return f"/resources/library/{game_id}/cover/cover{ext}"
     except Exception as exc:
         logger.warning("Cover download failed game_id=%s url=%s: %s", game_id, url, exc)
         return None
@@ -118,13 +114,11 @@ async def download_background(game_id: int, url: str, overwrite: bool = False) -
                 return f"/resources/library/{game_id}/background/background{ext}"
 
     try:
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=30) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            ext = _ext_from(url, r.headers.get("content-type", ""))
-            dest = bg_dir / f"background{ext}"
-            dest.write_bytes(r.content)
-            return f"/resources/library/{game_id}/background/background{ext}"
+        content, ctype = await fetch_media_bytes(url, headers=_HDRS, timeout=30)
+        ext = _ext_from(url, ctype)
+        dest = bg_dir / f"background{ext}"
+        dest.write_bytes(content)
+        return f"/resources/library/{game_id}/background/background{ext}"
     except Exception as exc:
         logger.warning("Background download failed game_id=%s: %s", game_id, exc)
         return None
@@ -145,13 +139,11 @@ async def download_logo(game_id: int, url: str, overwrite: bool = False) -> str 
                 return f"/resources/library/{game_id}/logo/logo{ext}"
 
     try:
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=30) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            ext = _ext_from(url, r.headers.get("content-type", ""))
-            dest = logo_dir / f"logo{ext}"
-            dest.write_bytes(r.content)
-            return f"/resources/library/{game_id}/logo/logo{ext}"
+        content, ctype = await fetch_media_bytes(url, headers=_HDRS, timeout=30)
+        ext = _ext_from(url, ctype)
+        dest = logo_dir / f"logo{ext}"
+        dest.write_bytes(content)
+        return f"/resources/library/{game_id}/logo/logo{ext}"
     except Exception as exc:
         logger.warning("Logo download failed game_id=%s: %s", game_id, exc)
         return None
@@ -172,13 +164,11 @@ async def download_icon(game_id: int, url: str, overwrite: bool = False) -> str 
                 return f"/resources/library/{game_id}/icon/icon{ext}"
 
     try:
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=30) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            ext = _ext_from(url, r.headers.get("content-type", ""))
-            dest = icon_dir / f"icon{ext}"
-            dest.write_bytes(r.content)
-            return f"/resources/library/{game_id}/icon/icon{ext}"
+        content, ctype = await fetch_media_bytes(url, headers=_HDRS, timeout=30)
+        ext = _ext_from(url, ctype)
+        dest = icon_dir / f"icon{ext}"
+        dest.write_bytes(content)
+        return f"/resources/library/{game_id}/icon/icon{ext}"
     except Exception as exc:
         logger.warning("Icon download failed game_id=%s: %s", game_id, exc)
         return None
@@ -213,13 +203,11 @@ async def download_screenshots(game_id: int, urls: list[str], overwrite: bool = 
                 continue
 
         try:
-            async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=30) as c:
-                r = await c.get(url)
-                r.raise_for_status()
-                ext = _ext_from(url, r.headers.get("content-type", ""))
-                dest = shots_dir / f"shot_{i:03d}{ext}"
-                dest.write_bytes(r.content)
-                results.append(f"/resources/library/{game_id}/shots/shot_{i:03d}{ext}")
+            content, ctype = await fetch_media_bytes(url, headers=_HDRS, timeout=30)
+            ext = _ext_from(url, ctype)
+            dest = shots_dir / f"shot_{i:03d}{ext}"
+            dest.write_bytes(content)
+            results.append(f"/resources/library/{game_id}/shots/shot_{i:03d}{ext}")
         except Exception as exc:
             logger.warning("Screenshot %d download failed game_id=%s: %s", i, game_id, exc)
             results.append(url)  # keep external URL as fallback
@@ -336,13 +324,11 @@ async def download_collection_image(slug: str, url: str, kind: str = "cover") ->
         except OSError:
             pass
     try:
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=30) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            ext = _ext_from(url, r.headers.get("content-type", ""))
-            dest = COLLECTION_COVERS_PATH / f"{stem}{ext}"
-            dest.write_bytes(r.content)
-            return f"/resources/collection-covers/{stem}{ext}?v={int(dest.stat().st_mtime)}"
+        content, ctype = await fetch_media_bytes(url, headers=_HDRS, timeout=30)
+        ext = _ext_from(url, ctype)
+        dest = COLLECTION_COVERS_PATH / f"{stem}{ext}"
+        dest.write_bytes(content)
+        return f"/resources/collection-covers/{stem}{ext}?v={int(dest.stat().st_mtime)}"
     except Exception as exc:
         logger.warning("Collection %s download failed slug=%s url=%s: %s", kind, slug, url, exc)
         return None
