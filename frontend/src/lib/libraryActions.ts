@@ -206,6 +206,68 @@ export async function packablePlatforms(gameId: number | string): Promise<string
   return Array.isArray(data?.platforms) ? data.platforms : [];
 }
 
+// ── GOG library ─────────────────────────────────────────────────────────────
+// GOG is not folder-scanned like custom libraries; it syncs from the connected
+// account and adopts already-downloaded games. Exposed here so every theme
+// (built-in and plugin) drives the GOG library toolbar through one API instead
+// of hand-rolling the /gog/library/* endpoints.
+
+export interface GogSyncOpts {
+  /** Also scrape metadata for newly synced games (default true). */
+  autoScrape?: boolean;
+  /** Re-scrape metadata even for games that already have it (default false). */
+  forceRescrape?: boolean;
+}
+
+export interface GogSyncStatus {
+  running: boolean;
+  /** "adopt" (adding downloaded games) | "scrape" (fetching metadata) | undefined. */
+  phase?: string;
+  synced: number;
+  adopted: number;
+  error?: string | null;
+}
+
+/** Start a GOG library sync: pull the connected account's library, adopt any
+ * already-downloaded games, and (unless disabled) scrape metadata. Runs
+ * server-side; poll gogSyncStatus() for progress. Admin only. */
+export async function gogSync(opts: GogSyncOpts = {}): Promise<void> {
+  const params = new URLSearchParams();
+  if (opts.autoScrape === false) params.set("auto_scrape", "false");
+  if (opts.forceRescrape) params.set("force_rescrape", "true");
+  const qs = params.toString();
+  await client.post(`/gog/library/sync${qs ? "?" + qs : ""}`);
+}
+
+/** Current state of a running (or the last) GOG sync. Poll while `running`. */
+export async function gogSyncStatus(): Promise<GogSyncStatus> {
+  const { data } = await client.get("/gog/library/sync/status");
+  return data as GogSyncStatus;
+}
+
+/** Clear all scraped metadata from the GOG library (keeps the games). Admin only. */
+export async function gogClearMetadata(): Promise<void> {
+  await client.delete("/gog/library/metadata");
+}
+
+// ── Per-game metadata ─────────────────────────────────────────────────────────
+
+/** Which library a game lives in, for the endpoints that differ by source. */
+export type GameKind = "games" | "gog" | "rom";
+
+/** Remove all scraped metadata for ONE game (title, source and files are kept),
+ * so it can be re-scraped from scratch. The endpoint differs per source, so
+ * themes call this instead of hard-coding three routes. Admin only. */
+export async function clearGameMetadata(kind: GameKind, id: number | string): Promise<void> {
+  if (kind === "gog") {
+    await client.delete(`/gog/library/games/${id}/metadata`);
+  } else if (kind === "rom") {
+    await client.post(`/roms/${id}/clear-metadata`);
+  } else {
+    await client.post(`/library/games/${id}/clear-metadata`);
+  }
+}
+
 const libraryActions = {
   createGame,
   uploadFile,
@@ -215,6 +277,10 @@ const libraryActions = {
   addByUpload,
   package: packageGame,
   packable: packablePlatforms,
+  gogSync,
+  gogSyncStatus,
+  gogClearMetadata,
+  clearGameMetadata,
 };
 
 export default libraryActions;

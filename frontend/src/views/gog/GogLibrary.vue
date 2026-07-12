@@ -306,6 +306,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
 import { storeToRefs } from 'pinia'
 import client from '@/services/api/client'
+import libraryActions from '@/lib/libraryActions'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
 import GameListRow from '@/components/games/GameListRow.vue'
 import { useI18n } from '@/i18n'
@@ -522,7 +523,7 @@ function openSyncDialog() {
 function startSyncPoller() {
   const poll = setInterval(async () => {
     try {
-      const { data } = await client.get('/gog/library/sync/status')
+      const data = await libraryActions.gogSyncStatus()
       if (data.running) {
         syncMsg.value = data.phase === 'adopt'
           ? 'Adding downloaded games…'
@@ -551,11 +552,7 @@ async function confirmSync() {
   syncing.value = true
   syncMsg.value = 'Syncing…'
   try {
-    const params = new URLSearchParams()
-    if (!syncAutoScrape.value) params.set('auto_scrape', 'false')
-    if (syncForceRescrape.value) params.set('force_rescrape', 'true')
-    const qs = params.toString()
-    await client.post(`/gog/library/sync${qs ? '?' + qs : ''}`)
+    await libraryActions.gogSync({ autoScrape: syncAutoScrape.value, forceRescrape: syncForceRescrape.value })
     startSyncPoller()
   } catch (e: any) {
     syncMsg.value = e?.response?.data?.detail || 'Sync failed'
@@ -566,7 +563,7 @@ async function confirmSync() {
 async function clearAllMetadata() {
   clearingAll.value = true
   try {
-    await client.delete('/gog/library/metadata')
+    await libraryActions.gogClearMetadata()
     await loadGames()
   } catch { /* ignore */ } finally {
     clearingAll.value = false
