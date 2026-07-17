@@ -51,6 +51,10 @@ Every area below has a dedicated page in the [Wiki](https://github.com/60plus/Ga
 - **Couch Mode**: a full-screen, controller-first console UI with a platform carousel and a complete emulator settings system.
 - Full detail: [ROMs & Emulation](https://github.com/60plus/GamesDownloader/wiki/ROMs-and-Emulation)
 
+### Dashboard
+- A role-aware overview screen. Every user gets a personal **Your activity** panel (downloads, game saves with a per-user quota, requests, continue-playing), and admins additionally get a live **Server overview** - a real-time transfer queue, a server-health heartbeat, download and email stats, top titles and platforms, security, antivirus, and disk - all gated on the server, not just hidden.
+- Full detail: [Dashboard](https://github.com/60plus/GamesDownloader/wiki/Dashboard)
+
 ### Metadata and artwork
 - One-pass scraping from **IGDB, RAWG, ScreenScraper, SteamGridDB, LaunchBox, HowLongToBeat**, and metadata plugins, merged across sources.
 - A ten-tab **Edit Metadata** panel with combined multi-source search and per-field overrides. All scraped media is downloaded and served locally, never hot-linked.
@@ -111,7 +115,7 @@ The full manual lives in the **[Wiki](https://github.com/60plus/GamesDownloader/
 
 - [Installation](https://github.com/60plus/GamesDownloader/wiki/Installation) and [Reverse Proxy & HTTPS](https://github.com/60plus/GamesDownloader/wiki/Reverse-Proxy-and-HTTPS)
 - [Configuration](https://github.com/60plus/GamesDownloader/wiki/Configuration), [Scrapers & Metadata](https://github.com/60plus/GamesDownloader/wiki/Scrapers-and-Metadata), [Email & Notifications](https://github.com/60plus/GamesDownloader/wiki/Email-and-Notifications), [Network & Security](https://github.com/60plus/GamesDownloader/wiki/Network-and-Security)
-- Features: [Library](https://github.com/60plus/GamesDownloader/wiki/Library), [Collections](https://github.com/60plus/GamesDownloader/wiki/Collections), [GOG Integration](https://github.com/60plus/GamesDownloader/wiki/GOG-Integration), [ROMs & Emulation](https://github.com/60plus/GamesDownloader/wiki/ROMs-and-Emulation), [Downloads & Sharing](https://github.com/60plus/GamesDownloader/wiki/Downloads-and-Torrents), [Users & Permissions](https://github.com/60plus/GamesDownloader/wiki/Users-and-Permissions), [Themes](https://github.com/60plus/GamesDownloader/wiki/Themes)
+- Features: [Dashboard](https://github.com/60plus/GamesDownloader/wiki/Dashboard), [Library](https://github.com/60plus/GamesDownloader/wiki/Library), [Collections](https://github.com/60plus/GamesDownloader/wiki/Collections), [GOG Integration](https://github.com/60plus/GamesDownloader/wiki/GOG-Integration), [ROMs & Emulation](https://github.com/60plus/GamesDownloader/wiki/ROMs-and-Emulation), [Downloads & Sharing](https://github.com/60plus/GamesDownloader/wiki/Downloads-and-Torrents), [Users & Permissions](https://github.com/60plus/GamesDownloader/wiki/Users-and-Permissions), [Themes](https://github.com/60plus/GamesDownloader/wiki/Themes)
 - [Plugin Development](https://github.com/60plus/GamesDownloader/wiki/Plugin-Development) and the [Plugin Trust Model](https://github.com/60plus/GamesDownloader/wiki/Plugin-Trust-Model)
 - [Troubleshooting & FAQ](https://github.com/60plus/GamesDownloader/wiki/Troubleshooting-and-FAQ)
 
