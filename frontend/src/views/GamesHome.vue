@@ -417,6 +417,29 @@
       </div>
     </section>
 
+    <!-- ── Continue playing / Recently played (ROMs) ──────────────────────
+         Same order as the emulation row so they sit right beneath it; equal
+         order means DOM order decides between them. Both follow the emulation
+         library's visibility, since that is all they can ever contain. -->
+    <!-- Rendered from an ordered list rather than as two fixed blocks, so the
+         arrows in Settings actually move them past each other: they share the
+         emulation library's flex order, and at equal order DOM order decides. -->
+    <template v-for="id in playRailOrder" :key="id">
+      <section
+        v-if="!searchActive && libShown('emulation') && playRail(id).length && !secHidden(id)"
+        class="home-play-wrap"
+        :style="{ order: orderOf('emulation') }"
+      >
+        <HomePlayRail
+          :title="id === 'continue_playing'
+            ? t('dashboard.continue_playing', 'Continue playing')
+            : t('dashboard.recently_played', 'Recently played')"
+          :items="playRail(id)"
+          :mode="id === 'continue_playing' ? 'resume' : 'open'"
+        />
+      </section>
+    </template>
+
     <!-- ── Recently Added - Custom collections ───────────────────────────── -->
     <template v-if="!searchActive">
       <section v-for="coll in collectionsWithRecent" :key="'r-' + coll.slug" class="home-recent-section" :style="{ order: orderOf(coll.slug) }">
@@ -476,7 +499,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, type CSSProperties } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, type CSSProperties } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useLibrariesStore } from '@/stores/libraries'
@@ -484,6 +507,8 @@ import { useThemeStore } from '@/stores/theme'
 import client from '@/services/api/client'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import CollectionCover from '@/components/collections/CollectionCover.vue'
+import HomePlayRail from '@/components/HomePlayRail.vue'
+import dashboardActions, { type RecentRom } from '@/lib/dashboardActions'
 import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
@@ -533,6 +558,29 @@ const rowRefs  = ref<Record<string, HTMLElement>>({})
 const libGames  = ref<LibGame[]>([])   // /library/games  (custom/shared)
 const gogGames  = ref<GogGame[]>([])   // /gog/library/games
 const emuRecent = ref<EmuRom[]>([])    // /roms/recent
+// The two personal ROM strips, moved here off the dashboard: what you have a
+// save for, and what you last launched.
+const continuePlaying = ref<RecentRom[]>([])
+const recentlyPlayed  = ref<RecentRom[]>([])
+// The sections themselves are declared by the LAYOUT, not here: Settings is a
+// different page, so this view is unmounted while you are looking at the
+// toggles - registering here would empty the list exactly when it is read.
+// This view only reads them; it is gated on their OWN switch rather than the
+// "recently added" one, since what you played is not what arrived.
+const secTick = ref(0)   // bumped on gd-theme-updated so the gates re-evaluate
+function secHidden(id: string): boolean {
+  void secTick.value
+  return themeStore.isHomeSectionHidden(id)
+}
+function onThemeUpdated(): void { secTick.value++ }
+const PLAY_RAILS = ['continue_playing', 'recently_played']
+const playRailOrder = computed(() => {
+  void secTick.value
+  return themeStore.orderHomeSections(PLAY_RAILS)
+})
+function playRail(id: string): RecentRom[] {
+  return id === 'continue_playing' ? continuePlaying.value : recentlyPlayed.value
+}
 
 const isAdmin    = computed(() => auth.user?.role === 'admin')
 
@@ -674,9 +722,21 @@ function romAspect(rom: EmuRom): string {
 
 // ── Fetch ────────────────────────────────────────────────────────────────────
 
+// The two personal ROM strips. Asks for only those two sections - the home has
+// no use for the download series or the request list the dashboard also carries.
+async function fetchPlayStrips() {
+  if (!libShown('emulation')) return
+  try {
+    const me = await dashboardActions.me({ sections: ['continue_playing', 'recently_played'] })
+    continuePlaying.value = me.continue_playing || []
+    recentlyPlayed.value  = me.recently_played  || []
+  } catch { /* a home without these strips is still a home */ }
+}
+
 async function fetchAll() {
   // All in parallel
   fetchEmulationSummary()
+  fetchPlayStrips()
   const [libRes, gogRes] = await Promise.allSettled([
     client.get('/library/games', { params: { limit: '500' } }),
     isAdmin.value ? client.get('/gog/library/games') : Promise.resolve({ data: [] }),
@@ -803,10 +863,14 @@ async function fetchCollections() {
 }
 
 onMounted(async () => {
+  document.documentElement.addEventListener('gd-theme-updated', onThemeUpdated)
   await libs.fetch()
   fetchAll()
   fetchCollections()
   fetchCollectionsSummary()
+})
+onUnmounted(() => {
+  document.documentElement.removeEventListener('gd-theme-updated', onThemeUpdated)
 })
 </script>
 

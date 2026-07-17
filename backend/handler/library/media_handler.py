@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 RESOURCES_PATH = Path(GD_BASE_PATH) / "resources" / "library"
 COLLECTION_COVERS_PATH = Path(GD_BASE_PATH) / "resources" / "collection-covers"
+REQUEST_COVERS_PATH = Path(GD_BASE_PATH) / "resources" / "request-covers"
 
 _HDRS = {
     "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -71,6 +72,39 @@ async def _download(url: str, dest: Path) -> bool:
     except Exception as exc:
         logger.warning("Download failed %s: %s", url, exc)
         return False
+
+
+async def download_request_cover(request_id: int, url: str | None) -> str | None:
+    """Download a game request's suggested cover -> resources/request-covers/.
+
+    The suggestion's URL comes straight out of a scraper search. A ScreenScraper
+    one carries ssid/sspassword/devpassword in its query string, so rendering it
+    in an <img> sent the server's scraper password to screenscraper.fr from every
+    admin's browser and left it in history and DevTools. Fetching it here once,
+    server-side, keeps the credential on the server and serves the art locally
+    like every other cover.
+
+    Returns the local path, or None when there is nothing usable to store.
+    """
+    # The picked suggestion now arrives as an opaque /api/media/proxy URL, which
+    # is neither local nor external - resolve it back to the real scraper URL so
+    # the _is_external gate lets it through and we fetch it server-side.
+    from utils.media_proxy import resolve_proxy_url
+    url = resolve_proxy_url(url)
+    if not _is_external(url):
+        return url  # already local, or nothing
+    REQUEST_COVERS_PATH.mkdir(parents=True, exist_ok=True)
+    try:
+        content, ctype = await fetch_media_bytes(url, headers=_HDRS, timeout=20)
+        ext = _ext_from(url, ctype)
+        dest = REQUEST_COVERS_PATH / f"{request_id}{ext}"
+        dest.write_bytes(content)
+        return f"/resources/request-covers/{request_id}{ext}"
+    except Exception as exc:
+        # A cover is decoration; a request without one is fine. What must not
+        # happen is falling back to the remote URL.
+        logger.warning("Request cover download failed id=%s: %s", request_id, exc)
+        return None
 
 
 async def download_cover(game_id: int, url: str, overwrite: bool = False) -> str | None:

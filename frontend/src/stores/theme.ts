@@ -235,6 +235,48 @@ export const useThemeStore = defineStore("theme", () => {
     );
   }
 
+  // The order this user dragged the theme's home sections into. Ids absent from
+  // the list keep the theme's own order, after the ones that are listed - so a
+  // theme adding a section later does not need everyone's setting rewritten.
+  function getHomeSectionOrder(): string[] {
+    const v = themeSettings.value[themeId.value]?.homeSectionOrder;
+    return Array.isArray(v) ? (v as string[]) : [];
+  }
+  function setHomeSectionOrder(ids: string[]) {
+    setThemeSettingValue("homeSectionOrder", [...ids]);
+  }
+  // Per-section switches (e.g. which side a Vapor rail's big card sits on).
+  // Stored as {sectionId: {optId: bool}} so an option the user never touched
+  // can fall back to the theme's default rather than to "off".
+  function getHomeSectionOptions(): Record<string, Record<string, boolean>> {
+    const v = themeSettings.value[themeId.value]?.homeSectionOptions;
+    return v && typeof v === "object" ? (v as Record<string, Record<string, boolean>>) : {};
+  }
+  function isHomeSectionOptionOn(sectionId: string, optId: string, dflt = false): boolean {
+    const v = getHomeSectionOptions()[sectionId]?.[optId];
+    return typeof v === "boolean" ? v : dflt;
+  }
+  function setHomeSectionOption(sectionId: string, optId: string, on: boolean) {
+    const cur = getHomeSectionOptions();
+    setThemeSettingValue("homeSectionOptions", {
+      ...cur,
+      [sectionId]: { ...(cur[sectionId] || {}), [optId]: on },
+    });
+  }
+
+  /** `ids` sorted by this user's order (unlisted ids keep their relative order,
+   *  at the end). Themes call this to lay their sections out. */
+  function orderHomeSections(ids: string[]): string[] {
+    const pref = getHomeSectionOrder();
+    return [...ids].sort((a, b) => {
+      const ia = pref.indexOf(a), ib = pref.indexOf(b);
+      if (ia === -1 && ib === -1) return 0;      // both unlisted: keep as given
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+  }
+
   // Per-user library visibility (global across themes). Hiding a library only
   // removes it from this user's home page / nav; it does not change access.
   function getHiddenLibraries(): string[] { return hiddenLibraries.value; }
@@ -402,6 +444,8 @@ export const useThemeStore = defineStore("theme", () => {
     getThemeSettingValue, setThemeSettingValue, resetThemeSettings,
     getRecentLibraries, setRecentLibraries,
     getHiddenHomeSections, isHomeSectionHidden, toggleHomeSection,
+    getHomeSectionOrder, setHomeSectionOrder, orderHomeSections,
+    isHomeSectionOptionOn, setHomeSectionOption,
     getHiddenLibraries, isLibraryHidden, setHiddenLibraries, toggleHiddenLibrary,
     getLibraryOrder, setLibraryOrder,
     applyToDOM,

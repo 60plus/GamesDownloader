@@ -670,6 +670,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { registerHomeSections } from '@/themes'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useLibrariesStore } from '@/stores/libraries'
@@ -929,7 +930,9 @@ async function fetchGames() {
         id:           g.id,
         title:        g.name || g.fs_name_no_ext,
         downloaded:   false,
-        rating:       g.ss_score,
+        // The blended 0-5 score, so the star matches the "/5" this theme prints
+        // (ss_score is 0-20 and used to render as "17.0/5").
+        rating:       g.rating_agg,
         release_date: g.release_year ? String(g.release_year) : '',
         icon:         g.steamgrid_path || g.cover_path || `/platforms/icons/${activePlatformFsSlug.value}.png`,
         cover:        g.cover_path || '',
@@ -944,7 +947,7 @@ async function fetchGames() {
         id: g.id,
         title: g.title,
         downloaded: g.is_downloaded,
-        rating: g.rating,
+        rating: g.rating_agg,
         release_date: g.release_date,
         icon: resolveIcon(g),
         cover: resolveCover(g),
@@ -962,7 +965,7 @@ async function fetchGames() {
       id:           g.id,
       title:        g.title,
       downloaded:   (g.files as any[])?.some((f: any) => f.is_available) ?? false,
-      rating:       g.rating,
+      rating:       g.rating_agg,
       release_date: g.release_date,
       icon:         g.icon_path || g.cover_path || '',
       cover:        g.cover_path || '',
@@ -1667,6 +1670,18 @@ onUnmounted(() => {
   _stopTorrentListeners()
   _stopUrlUploadListeners()
 })
+
+// The home's two ROM play rails, declared here rather than in GamesHome: this
+// layout outlives every page, so the list is still registered while the user is
+// on Settings reading it. GamesHome only renders them.
+let _unregHomeSections: (() => void) | null = null
+onMounted(() => {
+  _unregHomeSections = registerHomeSections([
+    { id: 'continue_playing', label: 'dashboard.continue_playing' },
+    { id: 'recently_played',  label: 'dashboard.recently_played' },
+  ])
+})
+onUnmounted(() => { _unregHomeSections?.() })
 </script>
 
 <style scoped>

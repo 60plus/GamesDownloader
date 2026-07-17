@@ -175,6 +175,21 @@ class RomHandler(DBBaseHandler):
         return result.scalars().first()
 
     @begin_session
+    async def get_by_ids(
+        self, rom_ids: list[int], *, session: AsyncSession = None
+    ) -> dict[int, Rom]:
+        """Bulk fetch keyed by id - one query instead of N when a list of rows
+        (e.g. savestates) needs its ROMs' names and covers."""
+        if not rom_ids:
+            return {}
+        result = await session.execute(
+            select(Rom)
+            .options(selectinload(Rom.platform))
+            .where(Rom.id.in_(set(rom_ids)))
+        )
+        return {r.id: r for r in result.scalars().all()}
+
+    @begin_session
     async def get_recent(self, limit: int = 24, *, session: AsyncSession = None) -> list[Rom]:
         """Return the most recently added non-missing ROMs (newest id first)."""
         result = await session.execute(
@@ -241,6 +256,50 @@ class RomHandler(DBBaseHandler):
         )
         result = await session.execute(items_stmt)
         return list(result.scalars().all()), total
+
+    @begin_session
+    async def find_for_import(
+        self,
+        *,
+        sha1: str | None = None,
+        fs_name: str | None = None,
+        name: str | None = None,
+        platform_id: int | None = None,
+        session: AsyncSession = None,
+    ) -> Rom | None:
+        """Find the ROM a restored save belongs to, strongest evidence first.
+
+        The archive was written on another install, so ids mean nothing here.
+        The hash identifies the dump exactly; the filename survives a re-scan;
+        the title is the last resort and only within the right platform, since
+        the same title exists on several.
+        """
+        # platform is eager-loaded: the caller writes the save under the
+        # platform's folder, and by then this session is closed - a lazy load
+        # would raise DetachedInstanceError mid-import.
+        base = select(Rom).options(selectinload(Rom.platform))
+        if sha1:
+            hit = (await session.execute(
+                base.where(Rom.sha1_hash == sha1)
+            )).scalars().first()
+            if hit:
+                return hit
+        if platform_id is None:
+            return None
+        if fs_name:
+            hit = (await session.execute(
+                base.where(Rom.platform_id == platform_id, Rom.fs_name == fs_name)
+            )).scalars().first()
+            if hit:
+                return hit
+        if name:
+            return (await session.execute(
+                base.where(
+                    Rom.platform_id == platform_id,
+                    or_(Rom.name == name, Rom.fs_name_no_ext == name),
+                )
+            )).scalars().first()
+        return None
 
     @begin_session
     async def get_by_fs_name(

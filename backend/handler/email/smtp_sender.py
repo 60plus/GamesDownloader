@@ -50,6 +50,12 @@ async def send_email(
         None, _send_sync,
         host, port, user, password, from_addr, to_addr, subject, body_html, tls_mode, bcc, body_text,
     )
+    # Count what actually went out (recipients), for the admin dashboard. Only
+    # reached when the send above did not raise; best-effort, never blocks mail.
+    recipients = list(dict.fromkeys(a for a in (bcc if bcc else [to_addr]) if a))
+    if recipients:
+        from handler.email.email_stats import record_email_sent
+        await record_email_sent(len(recipients))
 
 
 def _send_sync(

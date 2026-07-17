@@ -13,20 +13,22 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from sqlalchemy import text
 
 import socketio
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi_pagination import add_pagination
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from config import DEBUG, DEV_HOST, DEV_PORT, GD_VERSION, RESOURCES_PATH
+from config import DEBUG, DEV_HOST, DEV_PORT, GD_VERSION, RESOURCES_PATH, SAVES_PATH
 from handler.auth.middleware import AuthMiddleware
 from middleware.ip_allowlist import IpAllowlistMiddleware
 from middleware.etag import ETagMiddleware
@@ -38,6 +40,7 @@ from models.base import Base
 from models.user import Role, User
 from plugins.manager import plugin_manager
 from utils.http import close_client
+from utils.save_paths import is_save_path, saves_root, saves_root_is_legacy, superseded_dir
 
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
@@ -47,6 +50,64 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+async def _relocate_saves() -> None:
+    """Move save files off the public resources mount and repoint their rows.
+
+    Idempotent by construction: only rows still under the old root match, so a
+    second boot finds nothing and does no work. A file that cannot be moved
+    keeps its row pointing at the old path - a save that still loads from the
+    wrong place beats a row pointing at nothing.
+    """
+    old_root = str(Path(RESOURCES_PATH) / "roms")
+    new_root = saves_root()
+    moved, failed = 0, 0
+    async with async_engine.begin() as conn:
+        for tbl, has_shot in (("rom_save_states", True), ("rom_saves", False)):
+            try:
+                cols = "id, file_path, file_name" + (", screenshot_path" if has_shot else "")
+                rows = (await conn.execute(
+                    text(f"SELECT {cols} FROM `{tbl}` WHERE file_path LIKE :p"),
+                    {"p": old_root + "%"},
+                )).all()
+                for row in rows:
+                    row_id, path, name = row[0], row[1], row[2]
+                    shot_path = row[3] if has_shot else None
+                    try:
+                        # resources/roms/<slug>/<rom>/<kind>/<user> becomes
+                        # saves/<slug>/<rom>/<kind>/<user>: same shape, new root.
+                        new_dir = new_root / Path(path).relative_to(old_root)
+                        new_dir.mkdir(parents=True, exist_ok=True)
+                        upd = {"p": str(new_dir), "i": row_id}
+                        src = Path(path) / name
+                        if src.exists() and not (new_dir / name).exists():
+                            shutil.move(str(src), str(new_dir / name))
+                        sets = "file_path = :p"
+                        if has_shot and shot_path:
+                            s_src = Path(shot_path)
+                            s_dst = new_dir / s_src.name
+                            if s_src.exists() and not s_dst.exists():
+                                shutil.move(str(s_src), str(s_dst))
+                            sets += ", screenshot_path = :s"
+                            upd["s"] = str(s_dst)
+                        await conn.execute(
+                            text(f"UPDATE `{tbl}` SET {sets} WHERE id = :i"), upd
+                        )
+                        moved += 1
+                    except (OSError, ValueError) as exc:
+                        failed += 1
+                        logger.warning(
+                            "Save relocation: leaving %s row %s at %s (%s)",
+                            tbl, row_id, path, exc,
+                        )
+            except Exception as exc:
+                logger.warning("Save relocation failed for %s: %s", tbl, exc)
+    if moved or failed:
+        logger.info(
+            "Migration: relocated %d save(s) out of the public resources mount%s",
+            moved, f", {failed} left in place" if failed else "",
+        )
 
 
 async def _init_db() -> None:
@@ -91,6 +152,7 @@ async def _init_db() -> None:
         ("download_jobs",  "verify_checksum",   "TINYINT(1) NOT NULL DEFAULT 0"),
         ("download_jobs",  "checksum",          "VARCHAR(64) NULL"),
         ("download_jobs",  "checksum_status",   "VARCHAR(16) NULL"),
+        ("download_stats", "duration_ms",       "BIGINT NULL"),
         ("users",          "permissions",       "JSON NULL"),
         ("users",          "preferences",       "JSON NULL"),
         # ROM extra media columns (added in migration 002)
@@ -159,6 +221,13 @@ async def _init_db() -> None:
         # Recently-added notification: one-shot guard (backfilled once below).
         ("library_games",  "announced_at",         "DATETIME NULL"),
         ("roms",           "announced_at",         "DATETIME NULL"),
+        # Savestates live in numbered slots (1-9) and are replaced in place.
+        # NULL marks legacy rows saved before slots existed.
+        ("rom_save_states", "slot",                "INT NULL"),
+        # Screenshot bytes count against the save quota like any other file.
+        # Legacy rows read 0 until their slot is next written - undercounting a
+        # thumbnail is not worth a disk walk at boot.
+        ("rom_save_states", "screenshot_size_bytes", "BIGINT NOT NULL DEFAULT 0"),
     ]
     async with async_engine.begin() as conn:
         for table, column, col_ddl in _COLUMN_MIGRATIONS:
@@ -179,6 +248,117 @@ async def _init_db() -> None:
             except Exception as exc:
                 logger.warning("Migration check failed for %s.%s: %s", table, column, exc)
 
+    # ── Relocate saves out of the public resources mount ──────────────────────
+    # RESOURCES_PATH is served as static files with no authentication, and save
+    # filenames are derived from the ROM and the slot - which made every user's
+    # saves fetchable by anyone who could guess a name. Saves now live under
+    # SAVES_PATH, reachable only through the authenticated routes. Move what is
+    # already on disk and repoint the rows.
+    #
+    # Idempotent by construction: it only matches rows still under the old root,
+    # so a second boot finds nothing and does no work. A file that cannot be
+    # moved keeps its row pointing at the old path - a save that still loads
+    # from the wrong place beats a row pointing at nothing.
+    #
+    # Skipped entirely when there is nowhere safe to move to: saves_root() falls
+    # back to the legacy location when /data/saves has no volume, and moving
+    # files into a directory that dies with the container would be far worse
+    # than leaving them where they are. The static mount refuses to serve them
+    # either way.
+    if saves_root_is_legacy():
+        logger.warning(
+            "Skipping save relocation: no persistent volume for the new "
+            "directory, so saves stay under %s (the resources mount refuses to "
+            "serve them).", Path(RESOURCES_PATH) / "roms",
+        )
+    else:
+        await _relocate_saves()
+
+    # ── Battery-save dedupe (must precede the unique index below) ─────────────
+    # A ROM has exactly one battery save per user - the .srm is the whole SRAM
+    # chip, and the game's own in-game slots live inside that single blob. Two
+    # things put extra rows in the table: the player's upload paths could race
+    # (EJS_onSaveSave and the 60s auto-sync both inserting), and older builds
+    # appended a row per distinct SRAM content, making the table a history.
+    # The unique index below cannot be created while those rows exist.
+    #
+    # This DOES NOT delete anyone's files. That history is the only copy of a
+    # playthrough somebody may still want; the superseded .srm files are parked
+    # under SAVES_PATH/_superseded and only the rows go. Runs once, behind a
+    # config flag, and GD_SKIP_SAVE_DEDUPE=1 stops it for an operator who wants
+    # to look first.
+    try:
+        from handler.config.config_handler import config_handler as _cfg
+        if os.environ.get("GD_SKIP_SAVE_DEDUPE", "").lower() in ("1", "true", "yes"):
+            logger.warning(
+                "GD_SKIP_SAVE_DEDUPE is set: leaving duplicate battery saves in "
+                "place. The ux_save_user_rom index will not be created."
+            )
+        elif not await _cfg.get_bool("_battery_dedupe_done", default=False):
+            async with async_engine.begin() as conn:
+                # ROW_NUMBER names each superseded row exactly once. The old
+                # self-join emitted a row per newer sibling, so 200 rows meant
+                # 19,900 records and ~40k queries - and the count it logged was
+                # the pair count, not the number of rows it actually removed.
+                doomed = (await conn.execute(text(
+                    "SELECT id, user_id, rom_id, file_path, file_name FROM ("
+                    "  SELECT id, user_id, rom_id, file_path, file_name,"
+                    "         ROW_NUMBER() OVER ("
+                    "           PARTITION BY user_id, rom_id"
+                    "           ORDER BY updated_at DESC, id DESC) AS rn"
+                    "  FROM rom_saves"
+                    ") t WHERE t.rn > 1"
+                ))).all()
+                if doomed:
+                    # What the survivors still point at must stay where it is;
+                    # rows that shared a filename share the file too.
+                    kept = {
+                        (r[0], r[1]) for r in (await conn.execute(text(
+                            "SELECT file_path, file_name FROM ("
+                            "  SELECT file_path, file_name,"
+                            "         ROW_NUMBER() OVER ("
+                            "           PARTITION BY user_id, rom_id"
+                            "           ORDER BY updated_at DESC, id DESC) AS rn"
+                            "  FROM rom_saves"
+                            ") t WHERE t.rn = 1"
+                        ))).all()
+                    }
+                    logger.info(
+                        "Migration: %d superseded battery save row(s) to remove; "
+                        "their files are being kept under %s",
+                        len(doomed), superseded_dir(),
+                    )
+                    park = superseded_dir()
+                    for _id, _uid, _rid, _path, _name in doomed:
+                        logger.info(
+                            "  battery row id=%s user=%s rom=%s file=%s",
+                            _id, _uid, _rid, Path(_path) / _name,
+                        )
+                        if (_path, _name) in kept:
+                            continue
+                        try:
+                            src = Path(_path) / _name
+                            if src.exists():
+                                park.mkdir(parents=True, exist_ok=True)
+                                # The id keeps two same-named saves apart.
+                                shutil.move(str(src), str(park / f"{_id} - {_name}"))
+                        except OSError as exc:
+                            logger.warning(
+                                "Dedupe: could not park %s/%s (%s) - leaving it",
+                                _path, _name, exc,
+                            )
+                    ids = ",".join(str(int(d[0])) for d in doomed)
+                    await conn.execute(
+                        text(f"DELETE FROM rom_saves WHERE id IN ({ids})")
+                    )
+                    logger.info(
+                        "Migration: removed %d superseded battery save row(s); "
+                        "files preserved in %s", len(doomed), park,
+                    )
+            await _cfg.set("_battery_dedupe_done", "true")
+    except Exception as exc:
+        logger.warning("Battery-save dedupe failed: %s", exc)
+
     # ── Index migrations ─────────────────────────────────────────────────────
     # Composite and single-column indexes that speed up common queries.
     # Safe to re-run - each checks information_schema.statistics first.
@@ -196,6 +376,14 @@ async def _init_db() -> None:
         # user_sessions: JTI lookup on every authenticated request
         ("ix_sessions_access_jti",   "user_sessions",   "CREATE INDEX ix_sessions_access_jti ON user_sessions (access_jti(64))"),
         ("ix_sessions_refresh_jti",  "user_sessions",   "CREATE INDEX ix_sessions_refresh_jti ON user_sessions (refresh_jti(64))"),
+        # A slot holds exactly one savestate. MySQL allows repeated NULLs in a
+        # unique index, so legacy slot-less rows survive this untouched.
+        ("ux_state_user_rom_slot",   "rom_save_states",
+         "CREATE UNIQUE INDEX ux_state_user_rom_slot ON rom_save_states (user_id, rom_id, slot)"),
+        # One battery save per user+ROM, enforced by the DB so the player's two
+        # concurrent upload paths cannot both insert. Deduped just above.
+        ("ux_save_user_rom",         "rom_saves",
+         "CREATE UNIQUE INDEX ux_save_user_rom ON rom_saves (user_id, rom_id)"),
     ]
     async with async_engine.begin() as conn:
         for index_name, table, ddl in _INDEX_MIGRATIONS:
@@ -252,6 +440,30 @@ async def _init_db() -> None:
             logger.info("Migration: backfilled announced_at for existing rows")
     except Exception as exc:
         logger.warning("announced_at backfill guard failed: %s", exc)
+
+    # ── NULL legacy remote request covers ─────────────────────────────────────
+    # A request's cover_url used to be stored exactly as the scraper search
+    # returned it and rendered straight into an <img>. A ScreenScraper URL
+    # carries ssid/sspassword/devpassword in its query string, so every admin's
+    # browser fetched it - password and all - from screenscraper.fr. New
+    # requests download the art locally (download_request_cover); existing rows
+    # drop the remote URL. Losing a thumbnail beats leaking the credential, and
+    # a remote CDN cover was against the serve-media-locally rule regardless.
+    async with async_engine.begin() as conn:
+        try:
+            count = (await conn.execute(text(
+                "SELECT COUNT(*) FROM game_requests WHERE cover_url LIKE 'http%'"
+            ))).scalar()
+            if count:
+                await conn.execute(text(
+                    "UPDATE game_requests SET cover_url = NULL WHERE cover_url LIKE 'http%'"
+                ))
+                logger.info(
+                    "Migration: nulled %d remote request cover(s) - serve-locally policy",
+                    count,
+                )
+        except Exception as exc:
+            logger.warning("Request cover migration failed: %s", exc)
 
     # ── SSRF hardening: NULL legacy http(s) avatar paths ──────────────────────
     # Older versions stored remote CDN URLs as avatar_path and the GET handler
@@ -417,6 +629,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _seed_task     = asyncio.create_task(seed_monitor_loop())
     _dl_mon_task   = asyncio.create_task(download_monitor_loop())
 
+    # Dashboard live-queue push (Socket.IO). No-op while no admin is watching.
+    from handler.dashboard.queue_broadcaster import queue_broadcaster_loop
+    _queue_task    = asyncio.create_task(queue_broadcaster_loop())
+
     yield
 
     # Shutdown
@@ -425,6 +641,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _digest_task.cancel()
     _seed_task.cancel()
     _dl_mon_task.cancel()
+    _queue_task.cancel()
     plugin_manager.hook.lifecycle_on_shutdown()
     await close_client()
     logger.info("GamesDownloaderV3 shut down.")
@@ -576,6 +793,11 @@ app.include_router(dl_router)
 app.include_router(transmission_router)
 app.include_router(torrent_router)
 
+# ── Media proxy (scraper thumbnails, credential-free) ─────────────────────────
+from endpoints.media_proxy_router import router as media_proxy_router  # noqa: E402
+
+app.include_router(media_proxy_router)
+
 # ── Game Requests ─────────────────────────────────────────────────────────────
 from endpoints.requests.requests_router import requests_router
 
@@ -595,6 +817,11 @@ from endpoints.search_router import router as search_router  # noqa: E402
 
 app.include_router(search_router)
 
+# ── Dashboard (role-aware admin/user overview; also exposed as __GD__.dashboard) ─
+from endpoints.dashboard.dashboard_router import router as dashboard_router  # noqa: E402
+
+app.include_router(dashboard_router)
+
 # ── WebSocket / Socket.IO ─────────────────────────────────────────────────────
 # socketio.ASGIApp wraps the FastAPI app so Socket.IO WS connections are handled
 # before regular HTTP traffic is forwarded to FastAPI.
@@ -609,8 +836,20 @@ async def health_check() -> dict:
 
 
 # ── Static: serve /resources/ ─────────────────────────────────────────────────
+# This mount has no authentication - it is the app's public media (covers, logos,
+# screenshots). Save data must never be reachable through it. Saves normally live
+# outside RESOURCES_PATH entirely, but an install whose compose has no volume for
+# the new directory keeps them here, so the mount refuses their paths itself
+# rather than trusting that they moved.
+class _ResourcesStatic(StaticFiles):
+    async def get_response(self, path: str, scope):
+        if is_save_path(path):
+            raise HTTPException(status_code=404, detail="Not found")
+        return await super().get_response(path, scope)
+
+
 os.makedirs(RESOURCES_PATH, exist_ok=True)
-app.mount("/resources", StaticFiles(directory=RESOURCES_PATH), name="resources")
+app.mount("/resources", _ResourcesStatic(directory=RESOURCES_PATH), name="resources")
 
 # ── Serve Vue SPA ─────────────────────────────────────────────────────────────
 STATIC_PATH = os.path.join(os.path.dirname(__file__), "static")

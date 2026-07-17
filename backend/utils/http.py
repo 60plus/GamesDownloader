@@ -53,7 +53,19 @@ async def fetch_media_bytes(
     the URL is blocked (a ValueError, so the media handlers' broad `except`
     catches it and falls back gracefully), or the usual httpx errors on a
     network/HTTP failure.
+
+    A ``/api/media/proxy/<token>`` URL (a scraper thumbnail a client picked and
+    handed back to be stored) is transparently decrypted to the real scraper URL
+    here, so every server-side media download resolves it without each call site
+    having to know about the proxy. A forged/undecodable token raises rather than
+    fetching anything.
     """
+    from utils.media_proxy import resolve_proxy_url
+    resolved = resolve_proxy_url(url)
+    if resolved is None:
+        from utils.net_guard import UnsafeURLError
+        raise UnsafeURLError("unresolvable media proxy token")
+    url = resolved
     assert_fetch_allowed(url)
     async with httpx.AsyncClient(
         headers=headers,

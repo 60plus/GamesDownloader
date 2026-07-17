@@ -587,11 +587,29 @@ export function resolveDetailRows(
 // theme remembers its own selection. A theme layout registers on mount and
 // unregisters on unmount, so only the ACTIVE layout's sections are listed.
 
+/** A per-section switch, offered next to the section in Settings (e.g. Vapor's
+ *  "big card on the left"). The theme reads it back with isOptionOn(). */
+export interface ThemeHomeSectionOption {
+  /** Stable id, unique within the section. */
+  id: string;
+  /** Display label: an i18n key when translatable, else shown verbatim. */
+  label: string;
+  /** On when the user has never touched it. */
+  default?: boolean;
+}
+
 export interface ThemeHomeSection {
   /** Stable section id - the per-user setting key (e.g. "trailers"). */
   id: string;
   /** Display label: an i18n key when translatable, else shown verbatim. */
   label: string;
+  /** Optional switches for this section alone. */
+  options?: ThemeHomeSectionOption[];
+  /** Whether Settings offers the reorder arrows for this section. Default true.
+   *  Set false when the theme lays this section out at a fixed spot and does
+   *  not route it through homeSections.order() - Settings must not show a
+   *  control that saves a preference nothing reads. */
+  orderable?: boolean;
 }
 
 const _homeSections = shallowReactive<ThemeHomeSection[]>([]);

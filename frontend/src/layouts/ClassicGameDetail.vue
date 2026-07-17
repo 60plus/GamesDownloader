@@ -90,17 +90,20 @@
         />
         <div v-else class="game-title">{{ game.title }}</div>
 
-        <!-- Ratings row (below title, above chips) -->
-        <div v-if="activeLib === 'roms' && game.ss_score != null" class="cover-ratings">
-          <div class="crating">
+        <!-- Ratings row (below title, above chips): the blended star first,
+             then each source's own mark on its own scale. -->
+        <div v-if="hasRatings" class="cover-ratings">
+          <div v-if="game.rating_agg" class="crating">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="#facc15"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-            <span>{{ game.ss_score }}<small>/20</small></span>
+            <span>{{ ratingVal(game.rating_agg).toFixed(1) }}<small>/5</small></span>
           </div>
-        </div>
-        <div v-else-if="activeLib !== 'roms' && hasRatings" class="cover-ratings">
-          <div v-if="game.rating" class="crating">
+          <div v-if="activeLib === 'roms' && game.ss_score != null" class="crating">
+            <img src="/icons/ScreenScraper.ico" class="crating-ico" title="ScreenScraper" />
+            <span>{{ ratingVal(game.ss_score).toFixed(1) }}<small>/20</small></span>
+          </div>
+          <div v-if="activeLib !== 'roms' && game.rating" class="crating">
             <img src="/icons/gog.ico" class="crating-ico" title="GOG" />
-            <span>{{ game.rating.toFixed(1) }}<small>/5</small></span>
+            <span>{{ ratingVal(game.rating).toFixed(1) }}<small>/5</small></span>
           </div>
           <div v-if="game.meta_ratings?.rawg != null" class="crating">
             <img src="/icons/RAWG.ico" class="crating-ico" title="RAWG" />
@@ -569,6 +572,7 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import client from '@/services/api/client'
 import { buildLanguageList } from '@/utils/langMap'
+import { ratingVal } from '@/utils/rating'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
 import PackageDialog from '@/components/games/PackageDialog.vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
@@ -600,6 +604,7 @@ interface LibFile {
 interface GameData {
   id: number; title: string; developer?: string; publisher?: string
   release_date?: string; rating?: number; genres?: string[]; tags?: string[]
+  rating_agg?: number   // blended 0-5 score - the one shown as the star
   cover_url?: string; cover_path?: string; background_url?: string; background_path?: string
   logo_url?: string; logo_path?: string
   description?: string; description_short?: string
@@ -817,7 +822,9 @@ const videoItem = computed(() => {
 const languageFlags = computed(() => buildLanguageList(game.value?.languages))
 
 const hasRatings = computed(() =>
-  !!(game.value?.rating
+  !!(game.value?.rating_agg
+    || game.value?.rating
+    || game.value?.ss_score != null
     || game.value?.meta_ratings?.rawg != null
     || game.value?.meta_ratings?.igdb != null
     || game.value?.meta_ratings?.steam != null)

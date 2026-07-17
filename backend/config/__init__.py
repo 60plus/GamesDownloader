@@ -33,6 +33,10 @@ GD_VERSION: Final[str] = "1.0.24"
 BASE_PATH: Final[str] = _env("GD_BASE_PATH", "/data")
 CONFIG_PATH: Final[Path] = Path(BASE_PATH) / "config"
 RESOURCES_PATH: Final[str] = str(Path(BASE_PATH) / "resources")
+# Emulator saves are private user data and must NOT sit under RESOURCES_PATH,
+# which is served as static files with no authentication. Their own directory
+# keeps the bytes reachable only through the authenticated savestate routes.
+SAVES_PATH: Final[str] = _env("GD_SAVES_PATH", str(Path(BASE_PATH) / "saves"))
 ROMS_PATH: Final[str] = _env("GD_ROMS_PATH", str(Path(BASE_PATH) / "games" / "roms"))
 GAMES_PATH: Final[str] = _env("GD_GAMES_PATH", str(Path(BASE_PATH) / "games"))
 DOWNLOADS_PATH: Final[str] = _env("GD_DOWNLOADS_PATH", str(Path(BASE_PATH) / "downloads"))

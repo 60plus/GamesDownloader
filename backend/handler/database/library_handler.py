@@ -268,6 +268,7 @@ class LibraryHandler(DBBaseHandler):
         file_id: int,
         filename: str,
         bytes_transferred: int | None = None,
+        duration_ms: int | None = None,
         *,
         session: AsyncSession = None,
     ) -> DownloadStat:
@@ -277,6 +278,7 @@ class LibraryHandler(DBBaseHandler):
             library_file_id=file_id,
             filename=filename,
             bytes_transferred=bytes_transferred,
+            duration_ms=duration_ms,
         )
         session.add(stat)
         await session.flush()

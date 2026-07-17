@@ -196,6 +196,26 @@ async def get_banned_ips() -> list[dict]:
     return sorted(result, key=lambda x: x["remaining_seconds"], reverse=True)
 
 
+async def get_recent_failures() -> dict:
+    """Snapshot of failed-login activity still inside the brute-force window, for
+    the admin dashboard: how many distinct IPs currently have failures on record
+    and the total number of failed attempts across them."""
+    r = _get_redis()
+    ips = 0
+    attempts = 0
+    try:
+        keys = await r.keys(f"{_ATT_PREFIX}*")
+        for key in keys:
+            ips += 1
+            try:
+                attempts += int(await r.get(key) or 0)
+            except (TypeError, ValueError):
+                pass
+    except Exception:
+        pass
+    return {"ips": ips, "attempts": attempts}
+
+
 _RATE_PREFIX = "gd:rl:"   # key: gd:rl:{prefix}:{ip}  value: count (TTL = window)
 
 

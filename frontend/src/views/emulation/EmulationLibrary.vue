@@ -232,9 +232,9 @@
         </div>
 
         <div class="emu-cover-title">{{ rom.name }}</div>
-        <div v-if="rom.release_year || rom.rating" class="emu-cover-meta">
+        <div v-if="rom.release_year || rom.rating_agg" class="emu-cover-meta">
           <span v-if="rom.release_year" class="emu-cover-year">{{ rom.release_year }}</span>
-          <span v-if="rom.rating" class="emu-cover-rating">★ {{ rom.rating.toFixed(1) }}</span>
+          <span v-if="rom.rating_agg" class="emu-cover-rating">★ {{ ratingVal(rom.rating_agg).toFixed(1) }}</span>
         </div>
       </div>
     </div>
@@ -276,6 +276,7 @@ const { t } = useI18n()
 const { gdConfirm } = useDialog()
 import { useThemeStore } from '@/stores/theme'
 import { getPlatformAssets } from '@/utils/platformMap'
+import { ratingVal } from '@/utils/rating'
 import { usePlatformMetaStore } from '@/stores/platformMeta'
 import GameRequestDialog from '@/components/GameRequestDialog.vue'
 import { useRequestNotify } from '@/composables/useRequestNotify'
@@ -304,7 +305,10 @@ interface Rom {
   id: number; name: string; fs_name_no_ext: string; fs_extension: string
   cover_path: string | null; cover_type: string | null; cover_aspect: string | null
   genres: string[] | null; regions: string[] | null
-  release_year: number | null; rating: number | null; is_identified: boolean
+  release_year: number | null; is_identified: boolean
+  // The blended 0-5 score. NOT `rating` - that column is the ScreenScraper note
+  // over 20, i.e. a 0-1 fraction that used to render here as a bogus "0.8".
+  rating_agg: number | null
 }
 
 const platform   = ref<PlatformInfo | null>(null)
@@ -518,18 +522,31 @@ function onCardEnter(e: MouseEvent) {
 }
 
 function onCardMove(e: MouseEvent) {
-  if (!themeStore.cardTilt && !themeStore.cardShine) return
+  if (!themeStore.cardTilt && !themeStore.cardShine && !themeStore.cardLift && !themeStore.cardZoom) return
   const el = e.currentTarget as HTMLElement
   const imgWrap = el.querySelector<HTMLElement>('.emu-cover-img-wrap')
   if (!imgWrap) return
   const rect = imgWrap.getBoundingClientRect()
+
+  // Fall through tilt -> lift -> zoom, as the GOG library does. Without the
+  // else-branches the lift and zoom toggles did nothing at all here whenever
+  // tilt was off, so ROM covers sat dead while GOG covers moved.
+  // The transform is on the FRAME, so the art scales with it and the crop
+  // window never changes - scaling the img inside the frame would eat its edges.
+  let transform = ''
   if (themeStore.cardTilt) {
     const cx = rect.width / 2, cy = rect.height / 2
     const dx = e.clientX - rect.left - cx, dy = e.clientY - rect.top - cy
     const ry = (dx / cx) * 8, rx = -(dy / cy) * 5
-    const zoom = themeStore.cardZoom ? 'scale3d(1.03,1.03,1.03)' : ''
-    imgWrap.style.transform = `perspective(600px) rotateX(${rx}deg) rotateY(${ry}deg) ${zoom}`
+    const scale = themeStore.cardZoom ? 1.04 : (themeStore.cardLift ? 1.01 : 1)
+    transform = `perspective(600px) rotateX(${rx}deg) rotateY(${ry}deg) scale3d(${scale},${scale},${scale})`
+  } else if (themeStore.cardLift) {
+    transform = `translateY(-2px) scale(1.04)`
+  } else if (themeStore.cardZoom) {
+    transform = `scale(1.04)`
   }
+  if (transform) imgWrap.style.transform = transform
+
   const sheen = imgWrap.querySelector<HTMLElement>('.emu-cover-sheen')
   if (sheen && themeStore.cardShine) {
     const mx = ((e.clientX - rect.left) / rect.width * 100).toFixed(1)
@@ -807,10 +824,16 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(var(--cover-min, 175px), 1fr));
   gap: var(--space-4, 16px);
+  /* Headroom for the top row's lift: the title bar above is overflow:hidden, so
+     without it a lifted first-row cover gets its top edge clipped. */
+  padding-top: 8px;
   padding-bottom: 20px;
 }
 
 .emu-cover-wrap { cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
+/* Raise the hovered card above its neighbours - paint order is DOM order, so
+   the one to its right would otherwise be drawn over the lifted card's glow. */
+.emu-cover-wrap:hover { position: relative; z-index: 2; }
 
 .emu-cover-img-wrap {
   position: relative; border-radius: var(--radius-sm); overflow: hidden;

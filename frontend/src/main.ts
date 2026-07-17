@@ -25,6 +25,7 @@ import { useCollectionsStore } from "./stores/collections";
 import { useNotificationStore } from "./stores/notifications";
 import { LIBRARY_ICONS, LIBRARY_ICON_NAMES, libraryIconMarkup } from "./lib/libraryIcons";
 import libraryActions from "./lib/libraryActions";
+import dashboardActions from "./lib/dashboardActions";
 import client from "./services/api/client";
 
 import DownloadManager from "./components/gog/DownloadManager.vue";
@@ -177,6 +178,22 @@ function createSafeSocketStore() {
     list: getHomeSections,
     /** Has this user switched the section off? (per-user, per-theme) */
     isHidden: (id: string) => useThemeStore().isHomeSectionHidden(id),
+    /** `ids` sorted into this user's chosen order (unmoved ones keep the
+     *  theme's own order, at the end). Lay sections out with this. */
+    order: (ids: string[]) => useThemeStore().orderHomeSections(ids),
+    /** A per-section switch this theme declared in register()'s `options`.
+     *  Falls back to the `default` declared there until the user touches it, so
+     *  register() stays the single source of truth - passing a different `dflt`
+     *  here is what let Settings show a switch off while the page rendered it
+     *  on. `dflt` remains for callers with no registration to read. */
+    isOptionOn: (sectionId: string, optId: string, dflt?: boolean) => {
+      const declared = getHomeSections()
+        .find((s) => s.id === sectionId)?.options
+        ?.find((o) => o.id === optId)?.default;
+      return useThemeStore().isHomeSectionOptionOn(
+        sectionId, optId, dflt ?? declared ?? false,
+      );
+    },
   },
   // Public, theme/plugin-facing API for the per-theme "recently added" home
   // feed. Themes call recentLibraries.get() to learn which library slugs the
@@ -237,6 +254,11 @@ function createSafeSocketStore() {
   //   library.scan(librarySlug?)                       -> {created, updated, ...}
   //   library.addByUpload({library, title, file, os, fileType, onProgress}) -> game
   library: libraryActions,
+  // Role-aware Dashboard data (built-in core overview). dashboard.me() returns
+  // the signed-in user's own stats; dashboard.admin() returns the server-wide
+  // admin overview (admin only). A plugin theme can render its own dashboard
+  // from these instead of the built-in DashboardView.
+  dashboard: dashboardActions,
   composables: {
     useCouchNav,
     couchNavPaused,

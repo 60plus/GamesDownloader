@@ -217,10 +217,35 @@
         @mouseenter="setHint(t('appearance.home_sections'), t('hint.home_sections'))"
         @mouseleave="clearHint()"
       >
-        <label v-for="s in themeHomeSections" :key="s.id" class="ls-recent-item">
-          <input type="checkbox" :checked="!themeStore.isHomeSectionHidden(s.id)" @change="themeStore.toggleHomeSection(s.id)" />
-          <span>{{ t(s.label, s.label) }}</span>
-        </label>
+        <div v-for="(s, i) in orderedHomeSections" :key="s.id" class="ls-sec-row">
+          <!-- Only for sections the theme actually lays out through
+               homeSections.order(). A theme that pins a section to one spot
+               declares orderable: false, and offering arrows there would save a
+               preference nothing ever reads. -->
+          <div v-if="s.orderable !== false" class="ls-reorder">
+            <button class="ls-arrow" :disabled="i === 0" @click="moveSection(i, -1)" :aria-label="t('libraries.move_up')">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+            </button>
+            <button class="ls-arrow" :disabled="i === orderedHomeSections.length - 1" @click="moveSection(i, 1)" :aria-label="t('libraries.move_down')">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+          </div>
+          <div v-else class="ls-reorder ls-reorder--none" aria-hidden="true" />
+          <label class="ls-recent-item">
+            <input type="checkbox" :checked="!themeStore.isHomeSectionHidden(s.id)" @change="themeStore.toggleHomeSection(s.id)" />
+            <span>{{ t(s.label, s.label) }}</span>
+          </label>
+          <!-- Switches this section declared for itself (e.g. which side a
+               Vapor rail's big card sits on). -->
+          <label v-for="o in (s.options || [])" :key="o.id" class="ls-recent-item ls-sec-opt">
+            <input
+              type="checkbox"
+              :checked="themeStore.isHomeSectionOptionOn(s.id, o.id, !!o.default)"
+              @change="themeStore.setHomeSectionOption(s.id, o.id, ($event.target as HTMLInputElement).checked)"
+            />
+            <span>{{ t(o.label, o.label) }}</span>
+          </label>
+        </div>
       </div>
     </div>
   </div>
@@ -259,6 +284,22 @@ function onIconHover(name: string | null) {
 
 // Home sections the ACTIVE theme registered (empty for themes without extras).
 const themeHomeSections = computed(() => getHomeSections())
+// Shown in this user's chosen order; sections they never moved keep the theme's.
+const orderedHomeSections = computed(() => {
+  const byId = new Map(themeHomeSections.value.map(s => [s.id, s]))
+  return themeStore.orderHomeSections(themeHomeSections.value.map(s => s.id))
+    .map(id => byId.get(id)!)
+    .filter(Boolean)
+})
+// Reorder by swapping the two adjacent ids in the displayed order, like the
+// library list above.
+function moveSection(i: number, dir: number) {
+  const order = orderedHomeSections.value.map(s => s.id)
+  const j = i + dir
+  if (j < 0 || j >= order.length) return
+  const tmp = order[i]; order[i] = order[j]; order[j] = tmp
+  themeStore.setHomeSectionOrder(order)
+}
 
 // Per-user "recently added" picker (per theme). Couch has no home feed.
 const recentLibs = computed(() => libsStore.visible.filter(l => l.kind !== 'couch'))
@@ -520,6 +561,9 @@ onMounted(() => {
 .ls-row--off { opacity: .5; }
 
 .ls-reorder { display: flex; flex-direction: column; gap: 2px; }
+/* Holds the column so a theme without reordering keeps its labels aligned with
+   one that has it. */
+.ls-reorder--none { width: 20px; }
 .ls-arrow {
   display: flex; align-items: center; justify-content: center;
   width: 20px; height: 16px;
@@ -632,6 +676,13 @@ onMounted(() => {
 .ls-vis-kind { font-size: var(--fs-xs, 11px); color: var(--muted); flex-shrink: 0; }
 .ls-recent-list { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; padding: 4px 2px; }
 .ls-recent-item { display: flex; align-items: center; gap: 7px; cursor: pointer; font-size: var(--fs-sm, 13px); color: var(--text); }
+/* Home sections carry reorder arrows, so each is a row rather than a bare
+   checkbox - the arrows need somewhere to sit. */
+.ls-sec-row { display: flex; align-items: center; gap: 8px; }
+/* A section's own switches sit beside it, dimmer - they qualify the section
+   rather than standing next to it as an equal. */
+.ls-sec-opt { opacity: .62; font-size: var(--fs-xs, 12px); }
+.ls-sec-opt:hover { opacity: 1; }
 
 /* Glass toggle */
 .ls-pill {

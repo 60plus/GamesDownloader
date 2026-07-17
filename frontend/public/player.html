@@ -449,6 +449,10 @@ const PLATFORM   = params.get('platform') || '';
 const BEZEL_URL      = params.get('bezel_url') || null;
 const BEZEL_FROM_API = params.get('bezel') === '1';   // fetch bezel_path from ROM API
 const AUTO_FULLSCREEN = params.get('autoFullscreen') === '1';
+const RESUME          = params.get('resume') === '1';   // auto-load a save (Continue playing)
+// Which save RESUME should load: "state:<id>" for one specific savestate (a Play
+// button on a slot tile), "battery", or empty for "newest, battery as fallback".
+const RESUME_SAVE     = params.get('save') || '';
 
 const API_BASE   = '';
 const TOKEN      = localStorage.getItem('gd3_token') || '';
@@ -527,11 +531,27 @@ function dataUrlToBlob(dataUrl) {
   } catch { return null; }
 }
 
+// The slot picked in Settings > Saves. Read straight off the emulator (rather
+// than through the menu helpers, which live in a separate IIFE) so every save
+// path - GD's menu item, Quick Save, EJS_onSaveState - lands in the same slot.
+function currentSlot() {
+  try {
+    const emu = window.EJS_emulator;
+    const raw = (emu && emu.allSettings && emu.allSettings['save-state-slot'])
+             || (emu && emu.settings && emu.settings['save-state-slot']);
+    const n = parseInt(raw, 10);
+    if (n >= 1 && n <= 9) return n;
+  } catch {}
+  return 1;
+}
+
 async function uploadState(stateBuffer, screenshotBuffer) {
   if (!stateBuffer || !stateBuffer.length) return false;
   const fd = new FormData();
+  const slot = currentSlot();
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  fd.append('stateFile', new File([stateBuffer], `${ROM_NAME} [${ts}].state`));
+  fd.append('slot', String(slot));
+  fd.append('stateFile', new File([stateBuffer], `${ROM_NAME} [slot ${slot}].state`));
   if (screenshotBuffer) {
     try {
       // EJS returns screenshot as data URL - convert to Blob
@@ -565,6 +585,60 @@ async function uploadSave(saveBuffer) {
     body: fd,
   });
   cachedSaves = null;
+}
+
+// ── Save state to the server (GD's own "Save state") ─────────────────────────
+// Grab the state straight from the emulator API (gameManager.getState) and upload
+// it, instead of clicking EmulatorJS's Save State toolbar button - which GD hides
+// (EJS_Buttons.saveState=false), so the old button-click path saved nothing. The
+// button/F2 path is kept only as a last-ditch fallback.
+async function saveStateToServer() {
+  try {
+    const gm = window.EJS_emulator && window.EJS_emulator.gameManager;
+    if (gm && typeof gm.getState === 'function') {
+      let state = null;
+      try { state = gm.getState(); } catch {}
+      if (state && state.length) {
+        const shot = (typeof window._captureScreenshot === 'function') ? window._captureScreenshot() : null;
+        const slot = currentSlot();
+        const ok = await uploadState(state, shot);
+        gdToast(ok ? 'Saved to slot ' + slot : 'Save failed - try again');
+        return ok;
+      }
+    }
+  } catch {}
+  // Fallback: fire EJS's own Save State so EJS_onSaveState -> uploadState still runs
+  try {
+    const btn = window._ejsSaveStateBtn || [...document.querySelectorAll('#game button')].find(b => {
+      const t = (b.title || b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
+      return t.includes('save state');
+    });
+    if (btn) { btn.click(); gdToast('Saving…'); return true; }
+    document.getElementById('game')?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'F2', keyCode: 113, bubbles: true })
+    );
+  } catch {}
+  return false;
+}
+
+// Tiny transient on-screen confirmation so the player knows a save happened.
+function gdToast(msg) {
+  try {
+    let el = document.getElementById('gd-toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'gd-toast';
+      el.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:99999;' +
+        'background:rgba(20,22,30,.92);color:#fff;padding:10px 18px;border-radius:10px;' +
+        'font:600 14px system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.5);opacity:0;' +
+        'transition:opacity .2s;pointer-events:none';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.style.opacity = '1';
+    clearTimeout(el._gdT);
+    el._gdT = setTimeout(() => { el.style.opacity = '0'; }, 1800);
+  } catch {}
 }
 
 // ── Auto-sync battery save (SRAM) while the game is running ─────────────────
@@ -730,6 +804,56 @@ async function loadItem(idx) {
     fs.writeFile(path, buf);
     window.EJS_emulator.gameManager.loadSaveFiles();
   }
+}
+
+// Auto-resume (?resume=1): load a save once the game has booted.
+//   ?save=state:<id>  one specific savestate - a slot tile's Play button
+//   ?save=battery     the battery save
+//   (omitted)         newest savestate, battery save as the fallback
+async function autoResume() {
+  try {
+    if (!window.EJS_emulator || !window.EJS_emulator.gameManager) return;
+    // Always fetch fresh here: the prefetch is fire-and-forget and may still be
+    // in flight (or have failed to []) when this runs, so relying on the cache
+    // would silently skip a resume. This runs once, so the cost is negligible.
+    await Promise.all([fetchStates(), fetchSaves()]);
+
+    const wantId      = RESUME_SAVE.indexOf('state:') === 0
+      ? parseInt(RESUME_SAVE.slice(6), 10) : null;
+    const wantBattery = RESUME_SAVE === 'battery';
+
+    const state = wantId
+      ? (cachedStates || []).filter((s) => s.id === wantId)[0]
+      : (wantBattery ? null : (cachedStates || [])[0]);   // API orders newest-first
+
+    if (state) {
+      const resp = await fetch(state.download_url, { headers: authHeaders() });
+      if (resp.ok) {
+        window.EJS_emulator.gameManager.loadState(new Uint8Array(await resp.arrayBuffer()));
+        gdToast(state.slot ? 'Resumed from slot ' + state.slot : 'Resumed from savestate');
+        return;
+      }
+    }
+    if (wantId) {
+      // The requested save is gone (deleted elsewhere?). Starting fresh is the
+      // honest outcome - silently loading a DIFFERENT save would be worse.
+      gdToast('That save is no longer available');
+      return;
+    }
+
+    const save = (cachedSaves || [])[0];      // battery: asked for, or fallback
+    if (save) {
+      const resp = await fetch(save.download_url, { headers: authHeaders() });
+      if (resp.ok) {
+        const gm = window.EJS_emulator.gameManager;
+        gm.FS.writeFile(gm.getSaveFilePath(), new Uint8Array(await resp.arrayBuffer()));
+        gm.loadSaveFiles();
+        gdToast('Battery save loaded');
+      }
+    } else if (wantBattery) {
+      gdToast('That save is no longer available');
+    }
+  } catch { /* best-effort resume - a failure just starts the game fresh */ }
 }
 
 async function deleteItem(id) {
@@ -1068,8 +1192,35 @@ function exitPlayer() {
     fetchStates();
     fetchSaves();
 
+    // Make EmulatorJS's NATIVE Quick Save also persist to the server, so it
+    // behaves like GD's own Save state (server-side, syncs across devices).
+    // Quick Save writes only to the browser and never fires EJS_onSaveState, so
+    // we wrap it: run the original, then pull the fresh state and upload it.
+    try {
+      const gm = window.EJS_emulator && window.EJS_emulator.gameManager;
+      if (gm && typeof gm.quickSave === 'function' && !gm._gdQuickPatched) {
+        const _origQuick = gm.quickSave.bind(gm);
+        gm.quickSave = function(...a) {
+          const r = _origQuick(...a);
+          try {
+            const state = gm.getState();
+            if (state && state.length) {
+              const shot = (typeof window._captureScreenshot === 'function') ? window._captureScreenshot() : null;
+              const slot = currentSlot();
+              uploadState(state, shot).then((ok) => gdToast(ok ? 'Saved to slot ' + slot : 'Save failed'));
+            }
+          } catch {}
+          return r;
+        };
+        gm._gdQuickPatched = true;
+      }
+    } catch {}
+
     // Start the SRAM auto-sync loop now that the emulator is running
     startAutoSync();
+
+    // Continue playing: auto-load the newest save once the core has settled.
+    if (RESUME) setTimeout(autoResume, 600);
   };
 
   // Callbacks may be called as (state, screenshot) OR ({ state, screenshot })
@@ -1179,19 +1330,7 @@ function exitPlayer() {
       closeMenu();
     } else if (action === 'savestate') {
       closeMenu();
-      setTimeout(() => {
-        try {
-          const btn = window._ejsSaveStateBtn ||
-            [...document.querySelectorAll('#game button')].find(b => {
-              const t = (b.title || b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
-              return t.includes('save state');
-            });
-          if (btn) { btn.click(); return; }
-          document.getElementById('game')?.dispatchEvent(
-            new KeyboardEvent('keydown', { key: 'F2', keyCode: 113, bubbles: true })
-          );
-        } catch {}
-      }, 100);
+      setTimeout(() => { saveStateToServer(); }, 100);
     } else if (action === 'loadstate') {
       closeMenu();
       setTimeout(() => openPicker('states'), 150);

@@ -89,20 +89,27 @@
               <span v-if="game.release_date" class="gd-meta-item">{{ game.release_date.slice(0, 4) }}</span>
             </div>
 
-            <!-- GOG Rating stars -->
-            <div v-if="ratingVal(game.rating) > 0" class="gd-rating-row">
+            <!-- Blended rating stars (every source this game carries, 0-5) -->
+            <div v-if="ratingVal(game.rating_agg) > 0" class="gd-rating-row">
               <svg v-for="i in 5" :key="i" width="16" height="16" viewBox="0 0 24 24"
-                :fill="i <= Math.round(ratingVal(game.rating)) ? '#f59e0b' : 'rgba(255,255,255,.12)'"
-                :stroke="i <= Math.round(ratingVal(game.rating)) ? '#f59e0b' : 'rgba(255,255,255,.2)'"
+                :fill="i <= Math.round(ratingVal(game.rating_agg)) ? '#f59e0b' : 'rgba(255,255,255,.12)'"
+                :stroke="i <= Math.round(ratingVal(game.rating_agg)) ? '#f59e0b' : 'rgba(255,255,255,.2)'"
                 stroke-width="1"
               >
                 <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/>
               </svg>
-              <span class="gd-rating-num">{{ ratingVal(game.rating).toFixed(1) }}</span>
+              <span class="gd-rating-num">{{ ratingVal(game.rating_agg).toFixed(1) }}</span>
             </div>
 
-            <!-- External ratings (RAWG / IGDB / Metacritic) -->
-            <div v-if="externalRatings.rawg || externalRatings.igdb || externalRatings.steam || externalRatings.plugins?.length" class="gd-ext-ratings">
+            <!-- Per-source scores (GOG / RAWG / IGDB / Metacritic) -->
+            <div v-if="ratingVal(game.rating) > 0 || externalRatings.rawg || externalRatings.igdb || externalRatings.steam || externalRatings.plugins?.length" class="gd-ext-ratings">
+              <div v-if="ratingVal(game.rating) > 0" class="gd-ext-score">
+                <img src="/icons/gog.ico" class="gd-ext-ico" width="42" height="42" alt="GOG" />
+                <div class="gd-ext-info">
+                  <span class="gd-ext-val">{{ ratingVal(game.rating).toFixed(1) }}<span class="gd-ext-max">/5</span></span>
+                  <span class="gd-ext-lbl">GOG</span>
+                </div>
+              </div>
               <div v-if="externalRatings.rawg" class="gd-ext-score">
                 <img src="/icons/RAWG.ico" class="gd-ext-ico" width="42" height="42" alt="RAWG" />
                 <div class="gd-ext-info">
@@ -654,6 +661,7 @@ interface LibGame {
   tags: string[] | null
   features: string[] | null
   rating: number | null
+  rating_agg: number | null   // blended 0-5 score - the one shown as stars
   meta_ratings: Record<string, number> | null
   os_windows: boolean
   os_mac: boolean

@@ -12,6 +12,9 @@ export const useSocketStore = defineStore("socket", () => {
   const downloadJobUpdate = ref<Record<string, unknown> | null>(null);
   const downloadJobCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const packagingCallbacks: Array<(data: Record<string, unknown>) => void> = [];
+  const dashboardQueueCallbacks: Array<(data: Record<string, unknown>) => void> = [];
+  const dashboardHealthCallbacks: Array<(data: Record<string, unknown>) => void> = [];
+  let liveSubs = 0; // dashboard-live consumers sharing this per-tab socket
 
   function onDownloadJob(cb: (data: Record<string, unknown>) => void) {
     downloadJobCallbacks.push(cb);
@@ -23,8 +26,30 @@ export const useSocketStore = defineStore("socket", () => {
     return () => { const i = packagingCallbacks.indexOf(cb); if (i >= 0) packagingCallbacks.splice(i, 1) }
   }
 
+  // One "dashboard live" subscription feeds both the transfer queue and the
+  // server-health heartbeat. It is reference-counted across every onDashboard*
+  // consumer (the store socket is a per-tab singleton), so the server joins the
+  // room on the FIRST consumer and leaves on the LAST - and the broadcaster loop
+  // stays completely idle while nobody is watching.
+  function _subscribeLive() { if (liveSubs++ === 0) socket.value?.emit("dashboard:subscribe"); }
+  function _unsubscribeLive() { if (liveSubs > 0 && --liveSubs === 0) socket.value?.emit("dashboard:unsubscribe"); }
+
+  function onDashboardQueue(cb: (data: Record<string, unknown>) => void) {
+    dashboardQueueCallbacks.push(cb);
+    _subscribeLive();
+    return () => { const i = dashboardQueueCallbacks.indexOf(cb); if (i >= 0) dashboardQueueCallbacks.splice(i, 1); _unsubscribeLive(); };
+  }
+  function onDashboardHealth(cb: (data: Record<string, unknown>) => void) {
+    dashboardHealthCallbacks.push(cb);
+    _subscribeLive();
+    return () => { const i = dashboardHealthCallbacks.indexOf(cb); if (i >= 0) dashboardHealthCallbacks.splice(i, 1); _unsubscribeLive(); };
+  }
+
   function connect() {
-    if (socket.value?.connected) return;
+    // Guard on existence, not connected-state: socket.io-client auto-reconnects
+    // the existing instance, so calling connect() again mid-handshake must NOT
+    // spin up a second orphaned socket (with a duplicate listener set).
+    if (socket.value) return;
 
     const token = localStorage.getItem(TOKEN_KEY) || "";
     if (!token) {
@@ -44,6 +69,12 @@ export const useSocketStore = defineStore("socket", () => {
       console.warn("Socket.IO connect_error:", err?.message || err);
     });
 
+    socket.value.on("connect", () => {
+      // A (re)connect gets a fresh sid, so re-assert the dashboard-live
+      // subscription if anyone is still watching (survives token-refresh reconnects).
+      if (liveSubs > 0) socket.value?.emit("dashboard:subscribe");
+    });
+
     socket.value.on("sync_progress", (data) => {
       syncProgress.value = data;
     });
@@ -60,6 +91,12 @@ export const useSocketStore = defineStore("socket", () => {
     socket.value.on("download:packaging", (data) => {
       packagingCallbacks.forEach(cb => cb(data));
     });
+    socket.value.on("dashboard:queue", (data) => {
+      dashboardQueueCallbacks.forEach(cb => cb(data));
+    });
+    socket.value.on("dashboard:health", (data) => {
+      dashboardHealthCallbacks.forEach(cb => cb(data));
+    });
   }
 
   function reconnectWithFreshToken() {
@@ -73,7 +110,11 @@ export const useSocketStore = defineStore("socket", () => {
   function disconnect() {
     socket.value?.disconnect();
     socket.value = null;
+    // The refcount has to go with the socket. A leftover count made the next
+    // connect() re-assert dashboard:subscribe for consumers that no longer
+    // exist - a phantom subscription surviving a logout.
+    liveSubs = 0;
   }
 
-  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, connect, disconnect, reconnectWithFreshToken };
+  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onDashboardQueue, onDashboardHealth, connect, disconnect, reconnectWithFreshToken };
 });

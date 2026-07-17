@@ -2147,6 +2147,7 @@ async def download_file(request: Request, file_id: int):
     #        client disconnect mid-download.
     import asyncio as _asyncio
     from utils.throttle import effective_chunk_size, effective_speed_kbps, throttle_sleep
+    from handler.dashboard import active_downloads as _active_downloads
 
     _user_id   = user.id if user else None
     _username  = user.username if user else None
@@ -2159,6 +2160,8 @@ async def download_file(request: Request, file_id: int):
     async def _stream():
         bytes_sent = 0
         loop = _asyncio.get_running_loop()
+        _t0 = loop.time()
+        _ad_sid = _active_downloads.register(_username, _filename, file_size)
         try:
             with open(abs_path, "rb") as fh:
                 while True:
@@ -2166,9 +2169,11 @@ async def download_file(request: Request, file_id: int):
                     if not chunk:
                         break
                     bytes_sent += len(chunk)
+                    _active_downloads.update(_ad_sid, bytes_sent)
                     yield chunk
                     await throttle_sleep(len(chunk), _speed_kbps)
         finally:
+            _active_downloads.unregister(_ad_sid)
             # Record only if at least something was transferred
             if bytes_sent > 0:
                 try:
@@ -2178,6 +2183,7 @@ async def download_file(request: Request, file_id: int):
                         file_id=_file_id,
                         filename=_filename,
                         bytes_transferred=bytes_sent,
+                        duration_ms=int((loop.time() - _t0) * 1000),
                     )
                 except Exception:
                     pass
@@ -2269,6 +2275,7 @@ async def native_download_file(request: Request, file_id: int, dl_token: str = _
 
     import asyncio as _asyncio
     from utils.throttle import effective_chunk_size, effective_speed_kbps, throttle_sleep
+    from handler.dashboard import active_downloads as _active_downloads
 
     _username   = user.username if user else stored_username
     _speed_kbps = await effective_speed_kbps(_username)
@@ -2281,6 +2288,8 @@ async def native_download_file(request: Request, file_id: int, dl_token: str = _
     async def _stream():
         bytes_sent = 0
         loop = _asyncio.get_running_loop()
+        _t0 = loop.time()
+        _ad_sid = _active_downloads.register(_username, _filename, file_size)
         try:
             with open(abs_path, "rb") as fh:
                 while True:
@@ -2288,9 +2297,11 @@ async def native_download_file(request: Request, file_id: int, dl_token: str = _
                     if not chunk:
                         break
                     bytes_sent += len(chunk)
+                    _active_downloads.update(_ad_sid, bytes_sent)
                     yield chunk
                     await throttle_sleep(len(chunk), _speed_kbps)
         finally:
+            _active_downloads.unregister(_ad_sid)
             if bytes_sent > 0:
                 try:
                     await _lib.record_download(
@@ -2299,6 +2310,7 @@ async def native_download_file(request: Request, file_id: int, dl_token: str = _
                         file_id=_file_id,
                         filename=_filename,
                         bytes_transferred=bytes_sent,
+                        duration_ms=int((loop.time() - _t0) * 1000),
                     )
                 except Exception:
                     pass

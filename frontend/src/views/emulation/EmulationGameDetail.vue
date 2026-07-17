@@ -121,20 +121,28 @@
               <span v-if="rom.release_year" class="gd-meta-item">{{ rom.release_year }}</span>
             </div>
 
-            <!-- Rating stars (SS score 0–20, map to 0–5 stars) -->
-            <div v-if="rom.ss_score != null" class="gd-rating-row">
+            <!-- Blended rating stars (every source this ROM carries, 0-5).
+                 ScreenScraper's own note keeps its /20 scale in the row below. -->
+            <div v-if="rom.rating_agg != null" class="gd-rating-row">
               <svg v-for="i in 5" :key="i" width="16" height="16" viewBox="0 0 24 24"
-                :fill="i <= Math.round(rom.ss_score / 4) ? '#f59e0b' : 'rgba(255,255,255,.12)'"
-                :stroke="i <= Math.round(rom.ss_score / 4) ? '#f59e0b' : 'rgba(255,255,255,.2)'"
+                :fill="i <= Math.round(ratingVal(rom.rating_agg)) ? '#f59e0b' : 'rgba(255,255,255,.12)'"
+                :stroke="i <= Math.round(ratingVal(rom.rating_agg)) ? '#f59e0b' : 'rgba(255,255,255,.2)'"
                 stroke-width="1"
               >
                 <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/>
               </svg>
-              <span class="gd-rating-num">{{ rom.ss_score }}<span style="font-size:11px;opacity:.5">/20</span></span>
+              <span class="gd-rating-num">{{ ratingVal(rom.rating_agg).toFixed(1) }}<span style="font-size:11px;opacity:.5">/5</span></span>
             </div>
 
-            <!-- External ratings (IGDB, LaunchBox, plugins) -->
-            <div v-if="rom.igdb_rating != null || rom.lb_rating != null || Object.keys(rom.plugin_ratings || {}).length" class="gd-ext-ratings">
+            <!-- Per-source scores (ScreenScraper, IGDB, LaunchBox, plugins) -->
+            <div v-if="rom.ss_score != null || rom.igdb_rating != null || rom.lb_rating != null || Object.keys(rom.plugin_ratings || {}).length" class="gd-ext-ratings">
+              <div v-if="rom.ss_score != null" class="gd-ext-score">
+                <img src="/icons/ScreenScraper.ico" class="gd-ext-ico" width="42" height="42" alt="ScreenScraper" />
+                <div class="gd-ext-info">
+                  <span class="gd-ext-val">{{ ratingVal(rom.ss_score).toFixed(1) }}<span class="gd-ext-max">/20</span></span>
+                  <span class="gd-ext-lbl">ScreenScraper</span>
+                </div>
+              </div>
               <div v-if="rom.igdb_rating != null" class="gd-ext-score">
                 <img src="/icons/igdb.ico" class="gd-ext-ico" width="42" height="42" alt="IGDB" />
                 <div class="gd-ext-info">
@@ -562,7 +570,8 @@ interface RomDetail {
   regions: string[] | null
   languages: string[] | null
   tags: string[] | null
-  rating: number | null
+  rating: number | null       // ScreenScraper note / 20 - a 0-1 fraction, never shown
+  rating_agg: number | null   // blended 0-5 score - the one shown as stars
   ss_score: number | null
   igdb_rating: number | null
   lb_rating: number | null
@@ -624,6 +633,13 @@ const ejsCore = computed(() =>
   rom.value?.platform_fs_slug ? getEjsCore(rom.value.platform_fs_slug) : null
 )
 
+// Arriving from the dashboard "Continue playing" tile (?resume=1) asks the player
+// to auto-load a save once the game boots. An optional ?save= names WHICH one
+// ("state:<id>" from a slot tile's Play button, or "battery"); without it the
+// player takes the newest savestate.
+const wantResume = computed(() => route.query.resume === '1')
+const resumeSave = computed(() => String(route.query.save || ''))
+
 const playerUrl = computed(() => {
   if (!rom.value || !ejsCore.value) return ''
   const p = new URLSearchParams({
@@ -633,6 +649,8 @@ const playerUrl = computed(() => {
     platform: rom.value.platform_fs_slug || '',
   })
   if (rom.value.bezel_path && bezelEnabled.value) p.set('bezel_url', rom.value.bezel_path)
+  if (wantResume.value) p.set('resume', '1')
+  if (wantResume.value && resumeSave.value) p.set('save', resumeSave.value)
   return `/player.html?${p.toString()}`
 })
 
@@ -648,6 +666,9 @@ function requestPlay() {
     pendingMode.value = saved
     launchPlayer()
   } else {
+    // Ask for the display mode (fullscreen / window / tab + bezel). This applies
+    // to Continue-playing resume too - only the SAVE is auto-loaded, the window
+    // choice still belongs to the user (resume=1 rides on playerUrl regardless).
     pendingMode.value = 'full'
     rememberMode.value = false
     showPlayerDialog.value = true
@@ -661,8 +682,14 @@ function launchPlayer() {
   showPlayerDialog.value = false
 
   if (pendingMode.value === 'full') {
-    // Fullscreen: same-tab navigation (like Couch Mode) - enables COOP/COEP + auto-fullscreen
-    const returnTo = window.location.pathname + window.location.search
+    // Fullscreen: same-tab navigation (like Couch Mode) - enables COOP/COEP + auto-fullscreen.
+    // Strip resume from returnTo so exiting the game returns to a clean detail URL
+    // and does NOT re-trigger the auto-resume launch (which would trap the user in
+    // an exit->relaunch loop, since a full-page reload resets the in-memory guard).
+    const back = new URL(window.location.href)
+    back.searchParams.delete('resume')
+    back.searchParams.delete('save')
+    const returnTo = back.pathname + back.search
     window.location.href = playerUrl.value + '&returnTo=' + encodeURIComponent(returnTo) + '&autoFullscreen=1'
     return
   }
@@ -846,9 +873,16 @@ function onPlayerMessage(e: MessageEvent) {
   if (e.data?.type === 'gd-game-started') nextTick(() => playerIframe.value?.focus())
 }
 
-onMounted(() => {
+let _resumeLaunched = false
+onMounted(async () => {
   window.addEventListener('message', onPlayerMessage)
-  fetchRom()
+  await fetchRom()
+  // Continue playing: kick off the launch flow (asks display mode if none saved),
+  // then the game auto-resumes from the save (resume=1 is on playerUrl).
+  if (wantResume.value && ejsCore.value && !_resumeLaunched) {
+    _resumeLaunched = true
+    nextTick(() => requestPlay())
+  }
 })
 onUnmounted(() => {
   window.removeEventListener('message', onPlayerMessage)

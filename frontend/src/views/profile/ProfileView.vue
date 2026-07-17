@@ -28,14 +28,6 @@
         </svg>
         {{ t('profile.security') }}
       </button>
-      <button class="pv-tab" :class="{ active: tab === 'saves' }" @click="tab = 'saves'; loadSavesIfNeeded()">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-          <polyline points="17 21 17 13 7 13 7 21"/>
-          <polyline points="7 3 7 8 15 8"/>
-        </svg>
-        {{ t('profile.game_saves', 'Game Saves') }}
-      </button>
     </div>
 
     <div class="pv-body">
@@ -521,124 +513,6 @@
 
       </template>
 
-      <!-- ══════════════════════════════════════════════════════════════════════ -->
-      <!-- GAME SAVES TAB                                                        -->
-      <!-- ══════════════════════════════════════════════════════════════════════ -->
-      <template v-else-if="tab === 'saves'">
-
-        <!-- Loading -->
-        <div v-if="savesLoading" class="pv-saves-loading">
-          <span class="spinner" />
-        </div>
-
-        <template v-else-if="savesData">
-
-          <!-- Quota -->
-          <div class="pv-section">
-            <div class="pv-section-title">{{ t('profile.storage_quota') }}</div>
-            <div class="pv-quota-wrap">
-              <div class="pv-quota-bar">
-                <div class="pv-quota-fill" :style="{ width: Math.min(quotaPercent, 100) + '%' }" :class="quotaPercent >= 90 ? 'pv-quota-fill--warn' : ''" />
-              </div>
-              <div class="pv-quota-text">
-                <span>{{ formatBytes(savesData.used_bytes) }} {{ t('profile.used_of') }} {{ formatBytes(savesData.limit_bytes) }}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Savestates -->
-          <div class="pv-section">
-            <div class="pv-section-title">
-              {{ t('profile.save_states') }}
-              <span class="pv-saves-count">{{ savesData.states.length }}</span>
-            </div>
-            <div v-if="savesData.states.length === 0" class="pv-saves-empty">
-              {{ t('profile.no_save_states', 'No save states yet. Save states are created while playing in the browser emulator.') }}
-            </div>
-            <div v-else class="pv-saves-list">
-              <div v-for="s in savesData.states" :key="s.id" class="pv-save-row">
-                <div class="pv-save-thumb-wrap">
-                  <img v-if="s.screenshot_url" :src="s.screenshot_url" class="pv-save-thumb" :alt="s.file_name" />
-                  <div v-else class="pv-save-thumb-ph">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:.3">
-                      <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/>
-                      <polyline points="21 15 16 10 5 21"/>
-                    </svg>
-                  </div>
-                </div>
-                <div class="pv-save-info">
-                  <div class="pv-save-name">{{ stripExt(s.file_name) }}</div>
-                  <div class="pv-save-meta">
-                    <span>{{ formatDate(s.created_at ?? undefined) }}</span>
-                    <span class="pv-save-sep">·</span>
-                    <span>{{ formatBytes(s.file_size_bytes) }}</span>
-                    <span v-if="s.emulator_core" class="pv-save-sep">·</span>
-                    <span v-if="s.emulator_core" class="pv-save-core">{{ s.emulator_core }}</span>
-                  </div>
-                </div>
-                <button
-                  class="pv-save-del"
-                  :disabled="deletingStateId === s.id"
-                  @click="deleteState(s.id)"
-                  :title="t('profile.delete_save')"
-                >
-                  <span v-if="deletingStateId === s.id" class="spinner spinner--sm" />
-                  <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>
-                    <path d="M9 6V4h6v2"/>
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Battery Saves -->
-          <div class="pv-section">
-            <div class="pv-section-title">
-              {{ t('profile.battery_saves') }}
-              <span class="pv-saves-count">{{ savesData.saves.length }}</span>
-            </div>
-            <div v-if="savesData.saves.length === 0" class="pv-saves-empty">
-              {{ t('profile.no_saves') }}
-            </div>
-            <div v-else class="pv-saves-list">
-              <div v-for="s in savesData.saves" :key="s.id" class="pv-save-row">
-                <div class="pv-save-thumb-wrap">
-                  <div class="pv-save-thumb-ph pv-save-thumb-ph--srm">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:.5">
-                      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                      <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
-                    </svg>
-                  </div>
-                </div>
-                <div class="pv-save-info">
-                  <div class="pv-save-name">{{ stripExt(s.file_name) }}</div>
-                  <div class="pv-save-meta">
-                    <span>{{ formatDate(s.created_at ?? undefined) }}</span>
-                    <span class="pv-save-sep">·</span>
-                    <span>{{ formatBytes(s.file_size_bytes) }}</span>
-                    <span v-if="s.emulator_core" class="pv-save-sep">·</span>
-                    <span v-if="s.emulator_core" class="pv-save-core">{{ s.emulator_core }}</span>
-                  </div>
-                </div>
-                <button
-                  class="pv-save-del"
-                  :disabled="deletingSaveId === s.id"
-                  @click="deleteSave(s.id)"
-                  :title="t('profile.delete_battery')"
-                >
-                  <span v-if="deletingSaveId === s.id" class="spinner spinner--sm" />
-                  <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>
-                    <path d="M9 6V4h6v2"/>
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
-
-        </template>
-      </template>
 
       </div><!-- /pv-content -->
     </div>
@@ -682,7 +556,7 @@ interface GogStatus {
   created_date?: string
 }
 
-const tab        = ref<'account' | 'security' | 'saves'>('account')
+const tab        = ref<'account' | 'security'>('account')
 const user       = ref<UserInfo | null>(null)
 const avatarUrl  = ref('')
 const fileInput  = ref<HTMLInputElement | null>(null)
@@ -851,101 +725,6 @@ async function confirmManage() {
     manageError.value = e?.response?.data?.detail || t('profile.totp_manage_failed')
   } finally {
     manageLoading.value = false
-  }
-}
-
-// ── Game Saves tab ─────────────────────────────────────────────────────────
-interface SaveState {
-  id: number
-  rom_id: number
-  file_name: string
-  file_size_bytes: number
-  emulator_core: string | null
-  screenshot_url: string | null
-  created_at: string | null
-  download_url: string
-}
-interface BatterySave {
-  id: number
-  rom_id: number
-  file_name: string
-  file_size_bytes: number
-  emulator_core: string | null
-  slot: string | null
-  created_at: string | null
-  download_url: string
-}
-interface SavesData {
-  states: SaveState[]
-  saves: BatterySave[]
-  used_bytes: number
-  limit_bytes: number
-}
-
-const savesData       = ref<SavesData | null>(null)
-const savesLoading    = ref(false)
-const savesLoaded     = ref(false)
-const deletingStateId = ref<number | null>(null)
-const deletingSaveId  = ref<number | null>(null)
-
-const quotaPercent = computed(() => {
-  if (!savesData.value || savesData.value.limit_bytes === 0) return 0
-  return (savesData.value.used_bytes / savesData.value.limit_bytes) * 100
-})
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function stripExt(filename: string): string {
-  return filename.replace(/\.(state|srm)$/, '')
-}
-
-async function loadSavesIfNeeded() {
-  if (savesLoaded.value || savesLoading.value) return
-  savesLoading.value = true
-  try {
-    const { data } = await client.get('/savestates/my')
-    savesData.value  = data
-    savesLoaded.value = true
-  } catch { /* silent */ } finally {
-    savesLoading.value = false
-  }
-}
-
-async function deleteState(id: number) {
-  if (deletingStateId.value !== null) return
-  deletingStateId.value = id
-  try {
-    await client.delete(`/savestates/states/${id}`)
-    if (savesData.value) {
-      savesData.value.states = savesData.value.states.filter(s => s.id !== id)
-      // recalculate used_bytes from remaining items
-      const used = savesData.value.states.reduce((a, s) => a + s.file_size_bytes, 0)
-               + savesData.value.saves.reduce((a, s) => a + s.file_size_bytes, 0)
-      savesData.value.used_bytes = used
-    }
-  } catch { /* silent */ } finally {
-    deletingStateId.value = null
-  }
-}
-
-async function deleteSave(id: number) {
-  if (deletingSaveId.value !== null) return
-  deletingSaveId.value = id
-  try {
-    await client.delete(`/savestates/saves/${id}`)
-    if (savesData.value) {
-      savesData.value.saves = savesData.value.saves.filter(s => s.id !== id)
-      const used = savesData.value.states.reduce((a, s) => a + s.file_size_bytes, 0)
-               + savesData.value.saves.reduce((a, s) => a + s.file_size_bytes, 0)
-      savesData.value.used_bytes = used
-    }
-  } catch { /* silent */ } finally {
-    deletingSaveId.value = null
   }
 }
 

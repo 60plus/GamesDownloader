@@ -136,6 +136,7 @@ async def search_games_for_request(
             import re
             return re.sub(r"[^a-z0-9]", "", (t or "").lower())
 
+        from utils.media_proxy import proxy_url
         seen: set[str] = set()
         merged: list[dict] = []
         for item in (ss_results + igdb_results + lb_results):
@@ -146,7 +147,9 @@ async def search_games_for_request(
                     "title":     item.get("name", ""),
                     "year":      item.get("year"),
                     "developer": item.get("developer"),
-                    "cover_url": item.get("cover_url"),
+                    # A ScreenScraper cover URL carries the server's password;
+                    # hand the browser a credential-free proxy URL instead.
+                    "cover_url": proxy_url(item.get("cover_url")),
                     "url":       item.get("url"),
                     "source":    item.get("source", ""),
                 })
@@ -241,6 +244,7 @@ async def search_games_for_request(
         import re
         return re.sub(r"[^a-z0-9]", "", (t or "").lower())
 
+    from utils.media_proxy import proxy_url
     seen: set[str] = set()
     merged: list[dict] = []
     # GOG first (own library), then IGDB, then RAWG
@@ -252,7 +256,7 @@ async def search_games_for_request(
                 "title":       item.get("name") or item.get("title", ""),
                 "year":        item.get("year"),
                 "developer":   item.get("developer"),
-                "cover_url":   item.get("cover_url"),
+                "cover_url":   proxy_url(item.get("cover_url")),
                 "url":         item.get("url"),
                 "source":      item.get("source", "igdb"),
                 "description": item.get("description", ""),
@@ -320,6 +324,16 @@ async def create_request(request: Request, body: RequestCreate) -> dict:
             )
             session.add(gr)
         await session.refresh(gr)
+        # Pull the suggested cover onto this server and keep the local path.
+        # The row must never hold the scraper URL: it is rendered in an <img> on
+        # the dashboard and in the request dialog, and a ScreenScraper URL has
+        # the server's password in its query string.
+        if gr.cover_url:
+            from handler.library.media_handler import download_request_cover
+            local = await download_request_cover(gr.id, gr.cover_url)
+            async with session.begin():
+                gr.cover_url = local
+            await session.refresh(gr)
         # Capture data before closing session
         gr_data = {
             "id": gr.id, "title": gr.title, "description": gr.description,

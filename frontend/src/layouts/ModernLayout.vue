@@ -121,7 +121,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { registerHomeSections } from '@/themes'
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { useSocketStore } from "@/stores/socket";
@@ -218,6 +219,18 @@ const vClickOutside = {
     if (el._clickOutside) document.removeEventListener("click", el._clickOutside);
   },
 };
+
+// The home's two ROM play rails, declared here rather than in GamesHome: this
+// layout outlives every page, so the list is still registered while the user is
+// on Settings reading it. GamesHome only renders them.
+let _unregHomeSections: (() => void) | null = null
+onMounted(() => {
+  _unregHomeSections = registerHomeSections([
+    { id: 'continue_playing', label: 'dashboard.continue_playing' },
+    { id: 'recently_played',  label: 'dashboard.recently_played' },
+  ])
+})
+onUnmounted(() => { _unregHomeSections?.() })
 </script>
 
 <style scoped>

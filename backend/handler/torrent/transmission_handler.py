@@ -69,7 +69,7 @@ class TransmissionHandler:
         "id", "name", "hashString", "status", "percentDone",
         "downloadDir", "totalSize", "sizeWhenDone", "error", "errorString",
         "rateDownload", "rateUpload", "eta", "labels",
-        "uploadedEver", "isFinished", "addedDate",
+        "uploadedEver", "isFinished", "addedDate", "peersGettingFromUs",
     ]
 
     async def add_torrent_file(

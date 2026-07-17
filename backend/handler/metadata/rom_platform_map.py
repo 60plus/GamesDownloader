@@ -218,6 +218,20 @@ def get_cover_aspect(fs_slug: str) -> str:
     return _COVER_ASPECT.get(fs_slug, "3/4")
 
 
+def rom_cover_aspect(
+    cover_type: str | None, cover_aspect: str | None, fs_slug: str | None
+) -> str:
+    """Effective CSS aspect-ratio for one ROM's cover art: box-3D renders wide,
+    otherwise the per-ROM aspect wins, then the platform default.
+
+    Every surface showing a ROM cover must use this - SNES boxes are 4/3 while
+    the CSS default is 3/4, so a hardcoded box crops them.
+    """
+    if cover_type == "box-3D":
+        return "16/9"
+    return cover_aspect or (get_cover_aspect(fs_slug) if fs_slug else None) or "3/4"
+
+
 # ── HLTB platform name mapping ────────────────────────────────────────────────
 _HLTB_PLATFORM: dict[str, str] = {
     "nes":          "NES",

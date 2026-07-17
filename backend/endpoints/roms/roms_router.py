@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -27,6 +28,7 @@ from handler.database.rom_handler import rom_handler, rom_platform_handler
 from handler.filesystem.rom_scanner import scan_roms_path
 from handler.metadata.rom_scrape_handler import scrape_roms_batch
 from handler.metadata.rom_platform_map import PLATFORM_MAP, get_cover_aspect as _get_cover_aspect
+from utils.ratings import rom_rating_agg_of
 
 logger = logging.getLogger(__name__)
 
@@ -275,24 +277,9 @@ async def stream_rom(request: Request, rom_id: int):
 # ── Home literal routes (MUST be before /{rom_id} to avoid route capture) ──────
 
 def _rom_rating_agg(rom) -> float | None:
-    """Aggregate 0-5 score across the ROM's rating sources (SS /20, IGDB /100,
-    LaunchBox /10, plugin ratings /10) - the emulation twin of the library's
-    aggregate_rating."""
-    vals: list[float] = []
-    if rom.ss_score is not None:
-        vals.append(rom.ss_score / 4)
-    if rom.igdb_rating is not None:
-        vals.append(rom.igdb_rating / 20)
-    if rom.lb_rating is not None:
-        vals.append(rom.lb_rating / 2)
-    for entry in (rom.plugin_ratings or {}).values():
-        try:
-            vals.append(float(entry.get("rating")) / 2)
-        except (TypeError, ValueError, AttributeError):
-            continue
-    if not vals:
-        return None
-    return round(min(5.0, max(0.0, sum(vals) / len(vals))), 1)
+    """Aggregate 0-5 score across the ROM's rating sources - the emulation twin
+    of the library's aggregate_rating. Shared with the dashboard via utils."""
+    return rom_rating_agg_of(rom)
 
 
 # Fields the fill-missing scrape mode treats as "gaps": a ROM missing ANY of
@@ -468,7 +455,18 @@ async def search_roms_metadata(
                     _games = _rs.json().get("data", [])[:6]
                     logger.info("[SGDB search] found %d games", len(_games))
 
-                    async def _fetch_cover(_gid: int, _gname: str, _gdate: str | None) -> dict:
+                    def _sgdb_year(_raw) -> str | None:
+                        """SteamGridDB dates release_date as a Unix timestamp, not a
+                        string - slicing it raised and, since gather propagates,
+                        took every SGDB result down with it."""
+                        if not _raw:
+                            return None
+                        try:
+                            return str(datetime.fromtimestamp(int(_raw), tz=timezone.utc).year)
+                        except (TypeError, ValueError, OSError, OverflowError):
+                            return str(_raw)[:4] or None
+
+                    async def _fetch_cover(_gid: int, _gname: str, _gdate) -> dict:
                         _cover_url = None
                         try:
                             _rg = await _c.get(
@@ -488,7 +486,7 @@ async def search_roms_metadata(
                             "ss_id":     None,
                             "igdb_id":   None,
                             "name":      _gname,
-                            "year":      (_gdate or "")[:4] or None,
+                            "year":      _sgdb_year(_gdate),
                             "developer": None,
                             "cover_url": _cover_url,
                             "regions":   [],
@@ -501,7 +499,13 @@ async def search_roms_metadata(
     except Exception as _e:
         logger.warning("SGDB search error: %s", _e)
 
-    return ss_results + igdb_results + lb_results + sgdb_results
+    # ScreenScraper cover URLs carry the server's password; wrap them so the
+    # browser only ever sees a credential-free proxy URL. Public covers pass
+    # through unchanged.
+    from utils.media_proxy import proxy_media_list
+    return proxy_media_list(
+        ss_results + igdb_results + lb_results + sgdb_results, key="cover_url"
+    )
 
 
 # ── ROM detail ────────────────────────────────────────────────────────────────
@@ -582,6 +586,27 @@ async def update_rom_metadata(
     platform_slug = rom.platform.slug if rom.platform else "unknown"
     media_dir = _rom_media_dir(platform_slug, rom_id)
 
+    # A scraper thumbnail the user picked in the editor arrives as an opaque
+    # /api/media/proxy path (it is not "http://", so the editor routed it to a
+    # *_path field, not a *_url one). That is REMOTE media, not a stored local
+    # file: route it to the download branch so it is fetched to disk and served
+    # locally. A proxy token must NEVER be persisted - it would serve live
+    # through the unauthenticated proxy on every render (hitting the scraper with
+    # the account password each time) and would break for good if the app secret
+    # were ever rotated. The cover especially goes into Discord/email, where a
+    # root-relative proxy path is useless.
+    from utils.media_proxy import PROXY_PREFIX
+    for _pf, _uf in (
+        ("cover_path", "cover_url"), ("background_path", "background_url"),
+        ("support_path", "support_url"), ("wheel_path", "wheel_url"),
+        ("bezel_path", "bezel_url"), ("steamgrid_path", "steamgrid_url"),
+        ("video_path", "video_url"),
+    ):
+        _pv = getattr(body, _pf, None)
+        if isinstance(_pv, str) and PROXY_PREFIX in _pv:
+            setattr(body, _uf, _pv)     # download it via the *_url branch below
+            setattr(body, _pf, None)    # never store the token as a path
+
     data: dict = {}
     if body.name is not None:         data["name"] = body.name
     if body.summary is not None:      data["summary"] = body.summary
@@ -637,7 +662,11 @@ async def update_rom_metadata(
     # Download cover if URL provided
     if body.cover_url:
         import re
-        ext = re.sub(r"\?.*", "", body.cover_url.rsplit(".", 1)[-1]).lower() or "jpg"
+        from utils.media_proxy import resolve_proxy_url
+        # A proxy token has no ".ext"; derive the extension from the real source
+        # (the download itself resolves the token inside fetch_media_bytes).
+        _cu = resolve_proxy_url(body.cover_url) or body.cover_url
+        ext = re.sub(r"\?.*", "", _cu.rsplit(".", 1)[-1]).lower() or "jpg"
         if media_dir.exists():
             for old in media_dir.glob("cover.*"):
                 old.unlink(missing_ok=True)
@@ -647,9 +676,14 @@ async def update_rom_metadata(
             data["cover_path"] = _resource_url(platform_slug, rom_id, saved.name) + _bust
             # Persist the (credential-free) source URL so a recently-added
             # notification can fall back to it when public_base_url is unset.
-            # A credentialed source (ScreenScraper) is never stored/sent.
+            # A credentialed source (ScreenScraper) is never stored/sent - and
+            # the picked cover now arrives as an opaque /api/media/proxy URL, so
+            # resolve it back to the real source before judging leakiness (else a
+            # useless relative proxy path would be stored as the fallback).
             from handler.notifications.recently_added import _is_leaky_url
-            data["cover_url"] = None if _is_leaky_url(body.cover_url) else body.cover_url
+            from utils.media_proxy import resolve_proxy_url
+            _src = resolve_proxy_url(body.cover_url)
+            data["cover_url"] = None if (not _src or _is_leaky_url(_src)) else _src
 
     # Download background if URL provided
     if body.background_url:
@@ -675,7 +709,9 @@ async def update_rom_metadata(
         url_val = getattr(body, url_field)
         if url_val:
             import re as _re
-            _ext = _re.sub(r"\?.*", "", url_val.rsplit(".", 1)[-1]).lower() or "jpg"
+            from utils.media_proxy import resolve_proxy_url as _rpu
+            _ext_src = _rpu(url_val) or url_val
+            _ext = _re.sub(r"\?.*", "", _ext_src.rsplit(".", 1)[-1]).lower() or "jpg"
             # Remove existing files so _download_image doesn't skip them
             for _old in media_dir.glob(f"{fname}.*"):
                 _old.unlink(missing_ok=True)
@@ -1242,15 +1278,20 @@ async def get_rom_all_media(
     except Exception as _e:
         logger.debug("SGDB fetch error in all-media: %s", _e)
 
+    # ScreenScraper media URLs (covers/fanarts/screenshots/supports/wheels/
+    # bezels/videos...) carry the server's password in their query string. Wrap
+    # every list so the metadata editor renders credential-free proxy URLs;
+    # public IGDB/LB/SGDB/plugin URLs pass through untouched.
+    from utils.media_proxy import proxy_media_list
     return {
-        "covers":         combined_covers + plugin_covers + sgdb_covers,
-        "fanarts":        combined_fanarts + plugin_fanarts + sgdb_heroes,
-        "screenshots":    combined_screenshots,
-        "supports":       supports,
-        "wheels":         wheels + plugin_wheels + sgdb_logos,
-        "bezels":         bezels,
-        "steamgrids":     steamgrids + sgdb_icons,
-        "videos":         videos,
+        "covers":         proxy_media_list(combined_covers + plugin_covers + sgdb_covers),
+        "fanarts":        proxy_media_list(combined_fanarts + plugin_fanarts + sgdb_heroes),
+        "screenshots":    proxy_media_list(combined_screenshots),
+        "supports":       proxy_media_list(supports),
+        "wheels":         proxy_media_list(wheels + plugin_wheels + sgdb_logos),
+        "bezels":         proxy_media_list(bezels),
+        "steamgrids":     proxy_media_list(steamgrids + sgdb_icons),
+        "videos":         proxy_media_list(videos),
         "details":        details,
         "detail_sources": detail_sources,
     }
@@ -1599,9 +1640,16 @@ class _RomPlayEnd(BaseModel):
 
 @protected_route(router.post, "/{rom_id}/play/start", scopes=[Scopes.LIBRARY_READ])
 async def rom_play_start(request: Request, rom_id: int) -> dict:
-    """Fire lifecycle_on_play_start when the in-browser player launches a ROM.
-    Called by player.html once EmulatorJS reports the game has started."""
+    """Record play history + fire lifecycle_on_play_start when the in-browser
+    player launches a ROM. Called by player.html once EmulatorJS reports start.
+    The play-history row is what powers the dashboard "Recently played" section
+    (every launched ROM, save or not - distinct from save-based Continue playing)."""
     from plugins import events as _pe
+    from handler.database.play_handler import play_handler
+    try:
+        await play_handler.record_start(request.state.user.id, rom_id)
+    except Exception:
+        logger.exception("play/start: failed to record play for rom %s", rom_id)
     title = None
     try:
         rom = await rom_handler.get_by_id(rom_id)
@@ -1614,10 +1662,17 @@ async def rom_play_start(request: Request, rom_id: int) -> dict:
 
 @protected_route(router.post, "/{rom_id}/play/end", scopes=[Scopes.LIBRARY_READ])
 async def rom_play_end(request: Request, rom_id: int, body: _RomPlayEnd | None = None) -> dict:
-    """Fire lifecycle_on_play_end when a ROM play session ends (player closed).
-    `seconds` is the elapsed play time reported by player.html."""
+    """Record elapsed play time + fire lifecycle_on_play_end when a session ends.
+    `seconds` is the elapsed play time reported by player.html. last_played_at is
+    already set at play/start, so Recently played survives a lost play/end POST."""
     from plugins import events as _pe
-    _pe.play_end({"id": rom_id, "source": "rom"}, (body.seconds if body else 0) or 0)
+    from handler.database.play_handler import play_handler
+    secs = (body.seconds if body else 0) or 0
+    try:
+        await play_handler.record_end(request.state.user.id, rom_id, secs)
+    except Exception:
+        logger.exception("play/end: failed to record play time for rom %s", rom_id)
+    _pe.play_end({"id": rom_id, "source": "rom"}, secs)
     return {"ok": True}
 
 

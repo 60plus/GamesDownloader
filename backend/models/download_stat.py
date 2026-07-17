@@ -22,4 +22,8 @@ class DownloadStat(Base):
     )
 
     bytes_transferred: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Wall-clock time the transfer took, in milliseconds, so the dashboard can
+    # report effective throughput (bytes / duration). Nullable: older rows and
+    # any path that does not measure it leave it unset.
+    duration_ms:       Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     filename:          Mapped[str | None] = mapped_column(String(512), nullable=True)

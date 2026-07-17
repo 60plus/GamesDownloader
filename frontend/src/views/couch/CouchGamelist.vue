@@ -175,10 +175,10 @@
                 </span>
               </div>
 
-              <!-- Stars (ss_score is 0-20) -->
-              <div v-if="detail?.ss_score != null" class="cgl-stars">
-                <span v-for="s in 5" :key="s" class="cgl-star" :class="{ on: s <= Math.round(detail.ss_score / 4) }">★</span>
-                <span class="cgl-rating-num">{{ detail.ss_score }}<span style="opacity:.4">/20</span></span>
+              <!-- Stars: the blended 0-5 score across every rating source -->
+              <div v-if="detail?.rating_agg != null" class="cgl-stars">
+                <span v-for="s in 5" :key="s" class="cgl-star" :class="{ on: s <= Math.round(detail.rating_agg) }">★</span>
+                <span class="cgl-rating-num">{{ detail.rating_agg.toFixed(1) }}<span style="opacity:.4">/5</span></span>
               </div>
 
               <!-- Screenshots strip - click or press X to open fullscreen viewer -->
@@ -279,10 +279,10 @@
               </span>
             </div>
 
-            <!-- Stars - centered -->
-            <div v-if="detail?.ss_score != null" class="cgl-stars cgl-gright-center">
-              <span v-for="s in 5" :key="s" class="cgl-star" :class="{ on: s <= Math.round(detail.ss_score / 4) }">★</span>
-              <span class="cgl-rating-num">{{ detail.ss_score }}<span style="opacity:.4">/20</span></span>
+            <!-- Stars - centered; blended 0-5 score across every rating source -->
+            <div v-if="detail?.rating_agg != null" class="cgl-stars cgl-gright-center">
+              <span v-for="s in 5" :key="s" class="cgl-star" :class="{ on: s <= Math.round(detail.rating_agg) }">★</span>
+              <span class="cgl-rating-num">{{ detail.rating_agg.toFixed(1) }}<span style="opacity:.4">/5</span></span>
             </div>
 
             <!-- Time to Beat (HLTB) -->
@@ -400,6 +400,7 @@ interface RomDetail {
   publisher_ss_id:   number | null
   genres:            string[] | null
   ss_score:          number | null   // 0-20 scale (ScreenScraper)
+  rating_agg:        number | null   // blended 0-5 score - the one shown as stars
   video_path:        string | null
   wheel_path:        string | null   // clear logo / name logo for showcase title
   hltb_main_s:     number | null
@@ -548,6 +549,7 @@ async function loadDetail(rom: CouchRom) {
       publisher_ss_id:   data.publisher_ss_id   ?? null,
       genres:            Array.isArray(data.genres) && data.genres.length ? data.genres : null,
       ss_score:          data.ss_score          ?? null,
+      rating_agg:        data.rating_agg        ?? null,
       video_path:        data.video_path        ?? null,
       wheel_path:        data.wheel_path        || null,
       hltb_main_s:     data.hltb_main_s     ?? null,

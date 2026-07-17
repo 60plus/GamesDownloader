@@ -115,13 +115,16 @@
       </div>
     </div>
 
-    <!-- Right column: ratings (primary mark is source-aware) -->
+    <!-- Right column: the blended star first, then each source's own mark -->
     <div class="list-right">
-      <div v-if="game.rating || game.meta_ratings?.rawg || game.meta_ratings?.igdb || game.meta_ratings?.steam" class="list-scores">
-        <div v-if="game.rating" class="list-score" :title="isGogRating ? 'GOG Rating' : 'Rating'">
-          <img v-if="isGogRating" src="/icons/gog.ico" alt="GOG" class="list-primary-ico" />
-          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg>
-          {{ Number(game.rating).toFixed(1) }}
+      <div v-if="game.rating_agg || game.rating || game.meta_ratings?.rawg || game.meta_ratings?.igdb || game.meta_ratings?.steam" class="list-scores">
+        <div v-if="game.rating_agg" class="list-score" title="Rating">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg>
+          {{ ratingVal(game.rating_agg).toFixed(1) }}
+        </div>
+        <div v-if="isGogRating && game.rating" class="list-score" title="GOG Rating">
+          <img src="/icons/gog.ico" alt="GOG" class="list-primary-ico" />
+          {{ ratingVal(game.rating).toFixed(1) }}
         </div>
         <div v-if="game.meta_ratings?.rawg" class="list-score" title="RAWG">
           <img src="/icons/RAWG.ico" width="20" height="20" alt="RAWG" class="score-ico" />
@@ -144,6 +147,7 @@
 import { computed } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { buildLanguageList } from '@/utils/langMap'
+import { ratingVal } from '@/utils/rating'
 import { useI18n } from '@/i18n'
 
 const props = defineProps<{ game: any; idx?: number; isGog?: boolean }>()
@@ -156,9 +160,9 @@ const listHeroAnimClass = computed(() => {
   if (!themeStore.heroAnim || !themeStore.animations) return ''
   return `list-hero-img--${themeStore.heroAnimStyle}`
 })
-// GOG-sourced games show the GOG mark on their primary rating; everything else
-// uses a star. Items from the GOG library carry no `source`, so the host marks
-// them with the is-gog prop.
+// The star always carries the blended score; GOG's own mark sits beside it as
+// one more source. Items from the GOG library carry no `source`, so the host
+// marks them with the is-gog prop.
 const isGogRating = computed(() => props.isGog || props.game?.source === 'gog')
 const langs = computed(() => buildLanguageList(props.game?.languages))
 

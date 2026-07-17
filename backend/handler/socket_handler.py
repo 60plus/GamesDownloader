@@ -176,4 +176,11 @@ async def connect(sid: str, environ: dict, auth: dict | None = None) -> None:
 
 @sio.event
 async def disconnect(sid: str) -> None:
+    # Drop the socket from any live-queue subscription so the broadcaster loop
+    # goes idle once the last watcher's tab closes. Lazy import avoids a cycle.
+    try:
+        from handler.dashboard.queue_broadcaster import handle_disconnect
+        handle_disconnect(sid)
+    except Exception:
+        pass
     logger.debug("WebSocket disconnected: %s", sid)

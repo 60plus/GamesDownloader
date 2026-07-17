@@ -250,9 +250,15 @@
               {{ game.owner_username }}
             </div>
             <div class="cover-scores">
+              <!-- Star = the blended score; GOG's own mark keeps its icon and
+                   moves in with the other per-source badges below. -->
+              <div v-if="game.rating_agg" class="cover-score" title="Rating">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style="color:#facc15"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                {{ ratingVal(game.rating_agg).toFixed(1) }}
+              </div>
               <div v-if="game.rating" class="cover-score cover-score--gog" title="GOG Rating">
                 <img src="/icons/gog.ico" width="24" height="24" alt="GOG" class="score-ico" />
-                {{ game.rating.toFixed(1) }}
+                {{ ratingVal(game.rating).toFixed(1) }}
               </div>
               <div v-if="game.meta_ratings?.rawg" class="cover-score cover-score--ext" title="RAWG Rating">
                 <img src="/icons/RAWG.ico" width="24" height="24" alt="RAWG" class="score-ico" />
@@ -310,6 +316,7 @@ import libraryActions from '@/lib/libraryActions'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
 import GameListRow from '@/components/games/GameListRow.vue'
 import { useI18n } from '@/i18n'
+import { ratingVal } from '@/utils/rating'
 
 const { t } = useI18n()
 
@@ -325,6 +332,7 @@ interface Game {
   background_path?: string
   download_status?: string
   rating?: number
+  rating_agg?: number   // blended 0-5 score - the one shown as the star
   meta_ratings?: { rawg?: number; igdb?: number; steam?: number }
   release_date?: string
   developer?: string
@@ -612,7 +620,7 @@ const displayedGames = computed(() => {
     case 'title_desc':  list.sort((a, b) => b.title.localeCompare(a.title)); break
     case 'release':     list.sort((a, b) => (b.release_date || '').localeCompare(a.release_date || '')); break
     case 'release_asc': list.sort((a, b) => (a.release_date || '').localeCompare(b.release_date || '')); break
-    case 'rating':      list.sort((a, b) => (b.rating || 0) - (a.rating || 0)); break
+    case 'rating':      list.sort((a, b) => (b.rating_agg || 0) - (a.rating_agg || 0)); break
     case 'purchased':   list.sort((a, b) => b.id - a.id); break
   }
   return list
