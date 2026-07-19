@@ -570,6 +570,39 @@ async def get_rom(request: Request, rom_id: int) -> dict:
 
 # ── ROM metadata update ───────────────────────────────────────────────────────
 
+def _media_ext(url: str) -> str:
+    """File extension to save a picked media URL under.
+
+    A picked scraper image now arrives as an opaque /api/media/proxy/<token>
+    URL, which carries no ".ext" - so resolve it back to the real source first
+    (the download itself resolves the token again inside fetch_media_bytes).
+
+    The result is then reduced to plain alphanumerics. Without that, a URL with
+    no dot at all yields the whole URL as the "extension", and a path built from
+    it turns every slash into a directory: a proxy URL once produced a
+    "background./api/media/proxy/" tree, which then broke every later save,
+    because the cleanup below tried to unlink a directory.
+    """
+    import re
+    from utils.media_proxy import resolve_proxy_url
+    src = resolve_proxy_url(url) or url
+    last = re.sub(r"[?#].*", "", src).rsplit("/", 1)[-1]
+    # No dot in the filename means no extension to read - guessing one out of
+    # the rest of the URL is what produced "background./api/media/proxy/".
+    if "." not in last:
+        return "jpg"
+    return re.sub(r"[^a-z0-9]", "", last.rsplit(".", 1)[-1].lower())[:5] or "jpg"
+
+
+def _clear_media(media_dir, stem: str) -> None:
+    """Drop the existing files for one media slot, so the download does not skip
+    them. Only files: a stray directory that happens to match must not take the
+    whole request down with it."""
+    for old in media_dir.glob(f"{stem}.*"):
+        if old.is_file():
+            old.unlink(missing_ok=True)
+
+
 @protected_route(router.patch, "/{rom_id}", scopes=[Scopes.LIBRARY_WRITE])
 async def update_rom_metadata(
     request: Request,
@@ -650,8 +683,7 @@ async def update_rom_metadata(
             if _field == "cover_path":
                 data["cover_url"] = None   # drop the notification fallback too
             if media_dir.exists():
-                for _old in media_dir.glob(f"{_fname}.*"):
-                    _old.unlink(missing_ok=True)
+                _clear_media(media_dir, _fname)
 
     # Replaced media keeps its filename (cover.png -> cover.png), so the URL
     # alone would let the browser serve the STALE cached image and the save
@@ -661,19 +693,20 @@ async def update_rom_metadata(
 
     # Download cover if URL provided
     if body.cover_url:
-        import re
-        from utils.media_proxy import resolve_proxy_url
-        # A proxy token has no ".ext"; derive the extension from the real source
-        # (the download itself resolves the token inside fetch_media_bytes).
-        _cu = resolve_proxy_url(body.cover_url) or body.cover_url
-        ext = re.sub(r"\?.*", "", _cu.rsplit(".", 1)[-1]).lower() or "jpg"
+        ext = _media_ext(body.cover_url)
         if media_dir.exists():
-            for old in media_dir.glob("cover.*"):
-                old.unlink(missing_ok=True)
+            _clear_media(media_dir, "cover")
         dest = media_dir / f"cover.{ext}"
         saved = await _download_image(body.cover_url, dest)
         if saved:
             data["cover_path"] = _resource_url(platform_slug, rom_id, saved.name) + _bust
+            # Re-read the proportions from the file we just wrote. Leaving the
+            # previous value behind means the grid keeps drawing the old box
+            # shape around new art, and crops whatever does not fit.
+            from handler.metadata.rom_scrape_handler import _detect_cover_aspect
+            _asp = _detect_cover_aspect(saved)
+            if _asp:
+                data["cover_aspect"] = _asp
             # Persist the (credential-free) source URL so a recently-added
             # notification can fall back to it when public_base_url is unset.
             # A credentialed source (ScreenScraper) is never stored/sent - and
@@ -687,11 +720,9 @@ async def update_rom_metadata(
 
     # Download background if URL provided
     if body.background_url:
-        import re
-        ext = re.sub(r"\?.*", "", body.background_url.rsplit(".", 1)[-1]).lower() or "jpg"
+        ext = _media_ext(body.background_url)
         if media_dir.exists():
-            for old in media_dir.glob("background.*"):
-                old.unlink(missing_ok=True)
+            _clear_media(media_dir, "background")
         dest = media_dir / f"background.{ext}"
         saved = await _download_image(body.background_url, dest)
         if saved:
@@ -708,13 +739,9 @@ async def update_rom_metadata(
     for url_field, fname in _extra_media:
         url_val = getattr(body, url_field)
         if url_val:
-            import re as _re
-            from utils.media_proxy import resolve_proxy_url as _rpu
-            _ext_src = _rpu(url_val) or url_val
-            _ext = _re.sub(r"\?.*", "", _ext_src.rsplit(".", 1)[-1]).lower() or "jpg"
+            _ext = _media_ext(url_val)
             # Remove existing files so _download_image doesn't skip them
-            for _old in media_dir.glob(f"{fname}.*"):
-                _old.unlink(missing_ok=True)
+            _clear_media(media_dir, fname)
             _dest = media_dir / f"{fname}.{_ext}"
             saved = await _download_image(url_val, _dest)
             if saved:
@@ -778,8 +805,7 @@ async def upload_rom_media(
             idx += 1
         dest = media_dir / f"screenshot_{idx}.{ext}"
     else:
-        for _old in media_dir.glob(f"{kind if kind != 'video' else 'video'}.*"):
-            _old.unlink(missing_ok=True)
+        _clear_media(media_dir, kind)
         dest = media_dir / f"{kind}.{ext}"
 
     with dest.open("wb") as out:
@@ -795,6 +821,11 @@ async def upload_rom_media(
         _upd = {_UPLOAD_KINDS[kind]: url}
         if kind == "cover":
             _upd["cover_url"] = None   # an uploaded file has no clean remote source
+            # Same reason as the download path: new art, new proportions.
+            from handler.metadata.rom_scrape_handler import _detect_cover_aspect
+            _asp = _detect_cover_aspect(dest)
+            if _asp:
+                _upd["cover_aspect"] = _asp
         await rom_handler.update_metadata(rom_id, _upd)
     return {"ok": True, "path": url}
 

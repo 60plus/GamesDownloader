@@ -32,23 +32,43 @@ from models.rom_platform import RomPlatform
 logger = logging.getLogger(__name__)
 
 
+# Standard box-art proportions a cover is snapped to. Snapping (rather than
+# storing the exact ratio) keeps a shelf of the same platform's boxes aligned
+# instead of jittering by a few pixels per scan.
+_COVER_RATIOS: tuple[tuple[str, float], ...] = (
+    ("16/9",  16 / 9),    # 1.778  widescreen / box-3D perspective
+    ("16/11", 16 / 11),   # 1.455  SNES / PC Engine horizontal box
+    ("4/3",   4 / 3),     # 1.333  Genesis / Mega Drive, Saturn
+    ("7/6",   7 / 6),     # 1.167  near-square, e.g. PlayStation jewel case
+    ("1/1",   1.0),       # square (GB, GBC, Atari)
+    ("4/5",   0.8),       # slightly portrait
+    ("3/4",   0.75),      # standard modern portrait
+    ("2/3",   2 / 3),     # tall movie-style box
+)
+
+
 def _detect_cover_aspect(path: Path) -> str | None:
-    """Read image dimensions and snap to the nearest standard CSS aspect-ratio string."""
+    """Read image dimensions and snap to the nearest standard CSS aspect-ratio.
+
+    This used to be a ladder of thresholds, and three of its rungs returned a
+    ratio that lay outside the range that selected it - so the "nearest" ratio
+    was sometimes the worst of the list. A 3/4 cover, the commonest portrait
+    box there is, came out as 4/5; a 792x680 PlayStation box (1.165) came out
+    as 16/11 (1.455), a quarter too wide. The grid draws its box from this
+    value and fits the art with object-fit: cover, so the difference was eaten
+    off the top and bottom of the art; the detail page fits with contain, so
+    the same mismatch showed up there as bars down the sides.
+
+    Picking the closest entry outright cannot drift like that.
+    """
     try:
         from PIL import Image
         with Image.open(path) as img:
             w, h = img.size
-        if h == 0:
+        if not w or not h:
             return None
         ratio = w / h
-        # Snap to nearest standard box-art proportions
-        if   ratio > 1.55: return "16/9"    # widescreen / box-3D perspective
-        elif ratio > 1.25: return "4/3"     # Genesis/MD, old consoles (landscape)
-        elif ratio > 1.05: return "16/11"   # SNES horizontal box
-        elif ratio > 0.92: return "1/1"     # square (GB, GBC, Atari)
-        elif ratio > 0.72: return "4/5"     # slightly portrait
-        elif ratio > 0.57: return "3/4"     # standard modern portrait
-        else:              return "2/3"     # tall movie-style box
+        return min(_COVER_RATIOS, key=lambda rv: abs(rv[1] - ratio))[0]
     except Exception as e:
         logger.debug("Could not detect cover aspect from %s: %s", path, e)
         return None
@@ -279,8 +299,26 @@ async def scrape_rom(
                                 if _P(_PP2, _pid + _sfx).is_dir():
                                     _plid = _pid + _sfx
                                     break
+                        # The label names the SOURCE, not the game. `_best`
+                        # comes from metadata_search_game, whose contract says
+                        # `name` is the matched game's title - storing that put
+                        # a game title where the provider belongs, so a rating
+                        # from PPE.pl read as "GLORY OF HERACLES II". The
+                        # provider's own name has a dedicated hook.
+                        _pname = None
+                        try:
+                            for _plug in plugin_manager.get_plugin_instances():
+                                _idf = getattr(_plug, "metadata_provider_id", None)
+                                if callable(_idf) and _idf() == _pid:
+                                    _nf = getattr(_plug, "metadata_provider_name", None)
+                                    _pname = _nf() if callable(_nf) else None
+                                    break
+                        except Exception:
+                            _pname = None
                         _p_ratings[_pid] = {
-                            "name": _best.get("name", _pid).upper(),
+                            # Only the fallback is upper-cased: a provider name
+                            # is already in its presentation form ("PPE.pl").
+                            "name": _pname or _pid.upper(),
                             "rating": round(float(_r), 1),
                             "logo_url": f"/api/plugins/{_plid}/logo",
                         }

@@ -672,7 +672,7 @@
 
                 <div class="mep-form-row" style="flex-wrap:wrap;">
                   <div v-for="r in pluginRatingRows" :key="r.key" class="mep-field">
-                    <label class="mep-field-label">{{ r.key.toUpperCase() }} <span class="mep-field-hint">(0–10)</span></label>
+                    <label class="mep-field-label">{{ pluginProviderName(r.key) }} <span class="mep-field-hint">(0–10)</span></label>
                     <input v-model.number="r.value" class="mep-input" type="number" min="0" max="10" step="0.1" placeholder="e.g. 8.5" />
                   </div>
                 </div>
@@ -2311,6 +2311,12 @@ const metadataProviders = ref<{id: string; name: string; logo_url: string}[]>([]
 function pluginLogoUrl(providerId: string): string {
   const mp = metadataProviders.value.find(p => p.id === providerId)
   return mp?.logo_url || `/api/plugins/${providerId}/logo`
+}
+
+/** What the provider calls itself ("PPE.pl"), not its id shouted ("PPE"). */
+function pluginProviderName(providerId: string): string {
+  const mp = metadataProviders.value.find(p => p.id === providerId)
+  return mp?.name || providerId.toUpperCase()
 }
 
 onMounted(async () => {

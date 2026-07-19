@@ -969,12 +969,30 @@ const externalRatings = computed(() => ({
   plugins: pluginRatings.value,
 }))
 
+// meta_ratings is keyed by provider id ("ppe"), which is not what the provider
+// calls itself ("PPE.pl"). Ask the plugins for their own names, as the ROM
+// detail does, and fall back to the shouted id if the list cannot be read.
+const providerNames = ref<Record<string, string>>({})
+async function loadProviderNames() {
+  try {
+    const { data } = await client.get('/plugins/metadata/providers')
+    if (!Array.isArray(data)) return
+    const out: Record<string, string> = {}
+    for (const p of data) if (p?.id && p?.name) out[p.id] = p.name
+    providerNames.value = out
+  } catch { /* no read access to plugins: the id stands in */ }
+}
+function providerLabel(id: string) {
+  return providerNames.value[id] || (id || 'plugin').toUpperCase()
+}
+
 async function fetchPluginRatings(title: string) {
+  await loadProviderNames()
   // Check DB cache first (meta_ratings has plugin keys like "ppe")
   const cached = game.value?.meta_ratings || {}
   for (const [k, v] of Object.entries(cached)) {
     if (k !== 'rawg' && k !== 'igdb' && k !== 'steam' && typeof v === 'number') {
-      pluginRatings.value.push({ id: k, name: k.toUpperCase(), rating: v, logo: `/api/plugins/${k}-metadata/logo` })
+      pluginRatings.value.push({ id: k, name: providerLabel(k), rating: v, logo: `/api/plugins/${k}-metadata/logo` })
     }
   }
   if (pluginRatings.value.length) return  // already cached
@@ -991,7 +1009,7 @@ async function fetchPluginRatings(title: string) {
         if (detail?.rating) {
           pluginRatings.value.push({
             id: detail.provider_id,
-            name: (detail.provider_id || 'plugin').toUpperCase(),
+            name: providerLabel(detail.provider_id),
             rating: detail.rating,
             logo: `/api/plugins/${detail.provider_id}-metadata/logo`,
           })
