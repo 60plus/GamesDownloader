@@ -4,7 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>GamesDownloaderV3</title>
-    <link rel="icon" href="/images/logo.png" />
+    <!-- /images/logo.png did not exist: the SPA catch-all answered the request
+         with index.html, so the tab fell back to the browser's default mark. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   </head>
   <body>
     <div id="app"></div>
