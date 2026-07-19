@@ -4,6 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>GamesDownloader - Player</title>
+  <!-- The player is its own top-level page in fullscreen and new-tab modes, so
+       it needs the mark itself; it inherits nothing from the app shell. -->
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -15,46 +19,129 @@
     }
 
     /* ── Branded splash / loading screen ────────────────────────────────────── */
+    /* Layered: artwork -> colour glow -> readability scrim -> content.
+       Everything below the scrim is decoration and may never arrive; the screen
+       is designed to read correctly on the very first paint, when all we have is
+       the game name and platform from the query string. */
     #gd-loading {
       position: fixed; inset: 0;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
-      gap: 0; background: #06060f; color: #a0a0c0;
+      background: #06060b; color: #a0a0c0;
       z-index: 100; transition: opacity .7s ease;
+      overflow: hidden;
     }
     #gd-loading.hidden  { display: none; }
     #gd-loading.fading  { opacity: 0; pointer-events: none; }
 
-    /* Logo mark */
-    .gd-splash-logo {
-      font-size: 11px; font-weight: 800; letter-spacing: .25em; text-transform: uppercase;
-      color: rgba(167,139,250,.5); margin-bottom: 40px;
+    /* Artwork: hero (background_path) -> platform fanart -> blurred cover */
+    .gd-sp-bg {
+      position: absolute; inset: -2%;
+      background-position: center; background-size: cover; background-repeat: no-repeat;
+      opacity: 0; transition: opacity 1.1s ease;
+      animation: gd-sp-drift 46s ease-in-out infinite alternate;
     }
-    /* Big game title */
-    .gd-splash-game {
-      font-size: clamp(18px, 3vw, 28px); font-weight: 900; color: #fff;
-      text-align: center; max-width: min(80vw, 520px); line-height: 1.2;
-      text-shadow: 0 2px 30px rgba(0,0,0,.8); margin-bottom: 8px;
-      letter-spacing: -.01em;
+    .gd-sp-bg.ready { opacity: 1; }
+    .gd-sp-bg.blur  { filter: blur(26px) saturate(1.3); }
+    @keyframes gd-sp-drift {
+      from { transform: scale(1.02); }
+      to   { transform: scale(1.09) translateY(-1.2%); }
     }
-    /* Platform label */
-    .gd-splash-platform {
-      font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
-      color: rgba(167,139,250,.55); margin-bottom: 44px;
+    /* Glow tinted with the average colour of the artwork */
+    .gd-sp-glow {
+      position: absolute; left: 50%; top: 44%;
+      width: 58%; height: 29%; transform: translate(-50%, -50%);
+      border-radius: 50%; opacity: 0; transition: opacity 1.4s ease;
+      background: radial-gradient(closest-side, var(--gd-glow, rgba(167,139,250,.28)), transparent 72%);
+      filter: blur(10px);
     }
-    /* Spinner + status */
-    .gd-splash-status { display: flex; flex-direction: column; align-items: center; gap: 14px; }
-    .gd-spinner {
-      width: 36px; height: 36px;
-      border: 2px solid rgba(167,139,250,.15);
-      border-top-color: #a78bfa;
-      border-radius: 50%;
-      animation: spin .8s linear infinite;
+    .gd-sp-glow.ready { opacity: 1; }
+    /* Keeps the text legible over any artwork. Sized for the worst case, which
+       is a bright saturated hero - a flat wash plus a vignette plus a foot
+       gradient, so the title and the progress row always have contrast. */
+    .gd-sp-scrim {
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(58% 58% at 50% 45%, rgba(4,4,10,.38) 0%, rgba(4,4,10,.74) 62%, rgba(4,4,10,.96) 100%),
+        linear-gradient(to top, rgba(4,4,10,.88) 0%, rgba(4,4,10,.2) 30%, transparent 52%),
+        rgba(4,4,10,.22);
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
 
-    .gd-load-title { font-size: 13px; font-weight: 600; color: rgba(196,181,253,.7); }
-    .gd-load-sub   { font-size: 11px; color: rgba(160,160,192,.4); }
+    .gd-sp-center {
+      position: relative; z-index: 2;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 0 6%; max-width: 100%;
+    }
+    /* Fixed slot: wheel art ranges from wide marquees to nearly square logos, so
+       the box is constant and the image is contained inside it - otherwise the
+       layout jumps around depending on which game is loading. Width leads and
+       height is the ceiling: constraining by height alone leaves a typical
+       1.8:1 marquee far smaller than the plain text title it replaces. */
+    .gd-sp-logo {
+      width: min(52vw, 620px);
+      height: clamp(90px, 22vh, 240px);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .gd-sp-logo img { max-height: 100%; max-width: 100%; object-fit: contain; filter: drop-shadow(0 6px 26px rgba(0,0,0,.85)); }
+    .gd-sp-title {
+      font-size: clamp(22px, 4.6vw, 54px); font-weight: 900; color: #fff;
+      letter-spacing: -.03em; line-height: .96; text-align: center;
+      text-shadow: 0 4px 40px rgba(0,0,0,.95);
+    }
+    .gd-sp-sub {
+      margin-top: 6px; font-size: clamp(11px, 1.5vw, 17px); font-weight: 500;
+      color: rgba(255,255,255,.6); text-align: center; letter-spacing: -.01em;
+    }
+    .gd-sp-plat { margin-top: clamp(16px, 3vh, 34px); display: flex; align-items: center; gap: clamp(14px, 1.6vw, 22px); }
+    .gd-sp-plat .rule { width: clamp(20px, 3.2vw, 46px); height: 1px; background: rgba(255,255,255,.2); }
+    .gd-sp-plat img   {
+      height: clamp(24px, 3.6vh, 46px); width: auto; opacity: .82;
+      filter: drop-shadow(0 2px 12px rgba(0,0,0,.85));
+    }
+    .gd-sp-plat .txt  {
+      font-size: clamp(11px, 1.35vw, 16px); font-weight: 800; letter-spacing: .24em;
+      color: rgba(255,255,255,.72); text-transform: uppercase;
+      text-shadow: 0 1px 10px rgba(0,0,0,.8);
+    }
+
+    .gd-sp-foot {
+      position: absolute; left: 50%; bottom: 11%; transform: translateX(-50%);
+      width: min(34%, 460px); min-width: 190px; z-index: 2;
+    }
+    .gd-bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,.11); overflow: hidden; }
+    .gd-bar-fill {
+      width: 0%; height: 100%; border-radius: 2px;
+      background: linear-gradient(90deg, #7c6cf0, #b9a5ff);
+      box-shadow: 0 0 14px rgba(167,139,250,.9);
+      transition: width .25s ease;
+    }
+    /* Emulator boot reports no progress, so the bar sweeps instead of sitting
+       at 100% looking stuck. */
+    .gd-bar.indet .gd-bar-fill {
+      width: 100%; transition: none; box-shadow: none;
+      background: linear-gradient(90deg, rgba(124,108,240,.1) 0%, rgba(185,165,255,.85) 50%, rgba(124,108,240,.1) 100%);
+      background-size: 220% 100%;
+      animation: gd-sweep 1.5s linear infinite;
+    }
+    @keyframes gd-sweep { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+
+    .gd-sp-row { margin-top: 9px; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+    .gd-load-title {
+      font-size: clamp(8px, .95vw, 11px); font-weight: 600; letter-spacing: .1em;
+      text-transform: uppercase; color: rgba(255,255,255,.55);
+    }
+    .gd-load-sub {
+      font-size: clamp(8px, .95vw, 11px); color: rgba(255,255,255,.34);
+      font-variant-numeric: tabular-nums; white-space: nowrap;
+    }
+    .gd-sp-resume {
+      margin-top: 12px; text-align: center;
+      font-size: clamp(9px, 1.05vw, 12px); color: rgba(196,181,253,.82);
+    }
+
+    /* Anything that resolves after the first paint fades in instead of popping */
+    .gd-fade { opacity: 0; transition: opacity .5s ease; }
+    .gd-fade.ready { opacity: 1; }
 
     /* ── Error screen ─────────────────────────────────────────────────────── */
     #gd-error {
@@ -333,13 +420,30 @@
 
 <!-- Branded splash / loading -->
 <div id="gd-loading">
-  <div class="gd-splash-logo">GamesDownloader</div>
-  <div class="gd-splash-game" id="gd-splash-game"></div>
-  <div class="gd-splash-platform" id="gd-splash-platform"></div>
-  <div class="gd-splash-status">
-    <div class="gd-spinner"></div>
-    <div class="gd-load-title" id="gd-load-title">Loading ROM…</div>
-    <div class="gd-load-sub" id="gd-load-sub">Fetching game data</div>
+  <div class="gd-sp-bg"    id="gd-sp-bg"></div>
+  <div class="gd-sp-glow"  id="gd-sp-glow"></div>
+  <div class="gd-sp-scrim"></div>
+
+  <div class="gd-sp-center">
+    <!-- Wheel art when the game has one, otherwise the title as type -->
+    <div class="gd-sp-logo gd-fade" id="gd-sp-logo" style="display:none"><img id="gd-sp-wheel" alt="" /></div>
+    <div class="gd-sp-title" id="gd-splash-game"></div>
+    <div class="gd-sp-sub gd-fade" id="gd-sp-sub" style="display:none"></div>
+    <div class="gd-sp-plat" id="gd-sp-plat" style="display:none">
+      <span class="rule"></span>
+      <img class="gd-fade" id="gd-sp-plat-logo" alt="" style="display:none" />
+      <span class="txt" id="gd-splash-platform"></span>
+      <span class="rule"></span>
+    </div>
+  </div>
+
+  <div class="gd-sp-foot">
+    <div class="gd-bar" id="gd-bar"><div class="gd-bar-fill" id="gd-bar-fill"></div></div>
+    <div class="gd-sp-row">
+      <span class="gd-load-title" id="gd-load-title">Loading ROM…</span>
+      <span class="gd-load-sub"   id="gd-load-sub"></span>
+    </div>
+    <div class="gd-sp-resume gd-fade" id="gd-sp-resume" style="display:none"></div>
   </div>
 </div>
 
@@ -461,20 +565,168 @@ let pickerMode   = 'states';   // 'states' | 'saves'
 let cachedStates = [];
 let cachedSaves  = [];
 
-// ── Populate branded splash with game info ───────────────────────────────────
+// ── Splash: first paint ──────────────────────────────────────────────────────
+// Runs synchronously with only what the query string gives us, so the screen is
+// complete (just plain) before any request comes back. Artwork upgrades it later.
 ;(function() {
   const gameEl = document.getElementById('gd-splash-game');
+  const subEl  = document.getElementById('gd-sp-sub');
   const platEl = document.getElementById('gd-splash-platform');
-  if (gameEl) gameEl.textContent = ROM_NAME || '';
-  if (platEl && PLATFORM) {
+  const platWr = document.getElementById('gd-sp-plat');
+
+  // "Pitfall - The Mayan Adventure" reads better split across two lines. Only
+  // split on a clear separator and when both halves look like real text.
+  let title = ROM_NAME || '', subtitle = '';
+  const m = title.match(/^(.{3,}?)\s+(?:-|:)\s+(.{2,60})$/);
+  if (m) { title = m[1]; subtitle = m[2]; }
+
+  if (gameEl) gameEl.textContent = title;
+  if (subtitle && subEl) { subEl.textContent = subtitle; subEl.style.display = ''; requestAnimationFrame(() => subEl.classList.add('ready')); }
+
+  if (PLATFORM && platEl) {
     platEl.textContent = PLATFORM.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    if (platWr) platWr.style.display = '';
+    // Wordmark SVG when one exists for this platform; the text stays as fallback.
+    // Slug remap mirrors NAME_LOGO_SLUG in frontend/src/utils/platformMap.ts.
+    const REMAP = { sfc:'snes', snesna:'snes', famicom:'nes', megadrive:'genesis', megacdjp:'megacd', saturnjp:'saturn', neogeocdjp:'neogeocd' };
+    const logoEl = document.getElementById('gd-sp-plat-logo');
+    if (logoEl) {
+      logoEl.onload  = () => { platEl.style.display = 'none'; logoEl.style.display = ''; requestAnimationFrame(() => logoEl.classList.add('ready')); };
+      logoEl.onerror = () => { logoEl.remove(); };
+      logoEl.src = `/platforms/names/${REMAP[PLATFORM] || PLATFORM}.svg`;
+    }
   }
 })();
 
 // ── UI Helpers ───────────────────────────────────────────────────────────────
 function setLoad(title, sub) {
   document.getElementById('gd-load-title').textContent = title;
-  document.getElementById('gd-load-sub').textContent   = sub;
+  document.getElementById('gd-load-sub').textContent   = sub || '';
+}
+
+function _fmtMB(n) { return (n / 1048576).toFixed(1) + ' MB'; }
+
+// Download progress. total === 0 means the size is unknown, so we stay sweeping
+// rather than showing a bar that cannot be trusted.
+function setProgress(received, total) {
+  const bar  = document.getElementById('gd-bar');
+  const fill = document.getElementById('gd-bar-fill');
+  if (!bar || !fill) return;
+  if (!total) { bar.classList.add('indet'); setLoad('Downloading ROM…', _fmtMB(received)); return; }
+  bar.classList.remove('indet');
+  fill.style.width = Math.min(100, (received / total) * 100).toFixed(1) + '%';
+  setLoad('Downloading ROM…', `${_fmtMB(received)} / ${_fmtMB(total)}`);
+}
+
+function setIndeterminate(title, sub) {
+  const bar = document.getElementById('gd-bar');
+  if (bar) bar.classList.add('indet');
+  setLoad(title, sub);
+}
+
+// ── Splash artwork ───────────────────────────────────────────────────────────
+// Average colour of the artwork, used to tint the glow behind the logo. Every
+// image we load here is same-origin (/resources, /platforms), so the canvas is
+// never tainted and getImageData is safe.
+function _avgColor(img) {
+  try {
+    const c = document.createElement('canvas');
+    c.width = c.height = 16;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, 16, 16);
+    const d = ctx.getImageData(0, 0, 16, 16).data;
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] < 128) continue;              // skip transparent pixels
+      r += d[i]; g += d[i + 1]; b += d[i + 2]; n++;
+    }
+    if (!n) return null;
+    return `rgba(${Math.round(r/n)},${Math.round(g/n)},${Math.round(b/n)},.36)`;
+  } catch { return null; }
+}
+
+function _trySplashBg(url, blur) {
+  return new Promise(resolve => {
+    if (!url) return resolve(false);
+    const img = new Image();
+    img.onload = () => {
+      const bg = document.getElementById('gd-sp-bg');
+      if (bg) {
+        bg.style.backgroundImage = 'url("' + String(url).replace(/"/g, '%22') + '")';
+        if (blur) bg.classList.add('blur');
+        bg.classList.add('ready');
+      }
+      const col = _avgColor(img);
+      if (col) {
+        document.documentElement.style.setProperty('--gd-glow', col);
+        const gl = document.getElementById('gd-sp-glow');
+        if (gl) gl.classList.add('ready');
+      }
+      resolve(true);
+    };
+    img.onerror = () => resolve(false);
+    img.src = url;
+  });
+}
+
+// Ladder: hero -> platform fanart -> blurred cover. The generic platform fanart
+// is the last rung so a game never falls all the way back to a bare gradient.
+async function applySplashArtwork(rom) {
+  if (!rom) return;
+  const wheel = document.getElementById('gd-sp-wheel');
+  const slot  = document.getElementById('gd-sp-logo');
+  if (rom.wheel_path && wheel && slot) {
+    wheel.onload = () => {
+      slot.style.display = '';
+      requestAnimationFrame(() => slot.classList.add('ready'));
+      // The wheel IS the title once it renders, so drop the type version.
+      const t = document.getElementById('gd-splash-game');
+      const s = document.getElementById('gd-sp-sub');
+      if (t) t.style.display = 'none';
+      if (s) s.style.display = 'none';
+    };
+    wheel.src = rom.wheel_path;
+  }
+
+  const fan = PLATFORM ? `/platforms/fanart/${PLATFORM}.webp` : null;
+  const ladder = [
+    [rom.background_path, false],
+    [rom.steamgrid_path,  false],
+    [fan,                 false],
+    [rom.cover_path,      true ],
+    ['/platforms/fanart/_default.webp', false],
+  ];
+  for (const [url, blur] of ladder) {
+    if (await _trySplashBg(url, blur)) return;
+  }
+}
+
+// Tell the player which save is about to be restored. Today this only shows up
+// as a toast 600 ms after the game has already started.
+function showResumeNotice(states, saves) {
+  if (!RESUME && !RESUME_SAVE) return;
+  const el = document.getElementById('gd-sp-resume');
+  if (!el) return;
+  let text = '';
+  // Savestates written before slots existed carry a null slot, so name the
+  // save without a number rather than printing "slot null" - same guard the
+  // in-game toast uses.
+  const slotText = (st) => st.slot ? `Resuming from slot ${st.slot}` : 'Resuming from your savestate';
+  if (RESUME_SAVE.startsWith('state:')) {
+    const id = RESUME_SAVE.slice(6);
+    const st = (states || []).find(s => String(s.id) === String(id));
+    if (st) text = slotText(st);
+  } else if (RESUME_SAVE === 'battery') {
+    if ((saves || []).length) text = 'Resuming from the battery save';
+  } else if ((states || []).length) {
+    text = slotText(states[0]);   // API sorts newest first
+  } else if ((saves || []).length) {
+    text = 'Resuming from the battery save';
+  }
+  if (!text) return;
+  el.textContent = text;
+  el.style.display = '';
+  requestAnimationFrame(() => el.classList.add('ready'));
 }
 
 function showError(title, msg) {
@@ -494,14 +746,39 @@ function authHeaders(extra) {
 }
 
 // ── Fetch ROM as Blob URL ────────────────────────────────────────────────────
+// Read the body as a stream rather than blob(), so the longest phase of loading
+// can report itself. Content-Length comes from the FileResponse on the backend.
 async function fetchRomBlobUrl() {
-  setLoad('Downloading ROM…', ROM_NAME);
+  setLoad('Downloading ROM…', '');
   const resp = await fetch(`${API_BASE}/api/roms/stream/${ROM_ID}`, {
     headers: authHeaders(),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status} - ${resp.statusText}`);
-  const blob = await resp.blob();
-  return URL.createObjectURL(blob);
+
+  const type  = resp.headers.get('Content-Type') || 'application/octet-stream';
+  const total = Number(resp.headers.get('Content-Length')) || 0;
+
+  // Where the body is not readable, fall back to the old one-shot read.
+  if (!resp.body || typeof resp.body.getReader !== 'function') {
+    setProgress(0, 0);
+    return URL.createObjectURL(await resp.blob());
+  }
+
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0, lastPaint = 0;
+  setProgress(0, total);
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    // Painting on every chunk is wasted work on a fast local transfer.
+    const now = performance.now();
+    if (now - lastPaint > 80) { setProgress(received, total); lastPaint = now; }
+  }
+  setProgress(received, total || received);
+  return URL.createObjectURL(new Blob(chunks, { type }));
 }
 
 // ── Fetch states/saves ───────────────────────────────────────────────────────
@@ -948,6 +1225,20 @@ function exitPlayer() {
     return;
   }
 
+  // Fired off BEFORE the ROM transfer, never awaited here: the artwork and the
+  // resume notice land while the (much longer) download is still running. Doing
+  // this serially would make loading slower, not prettier.
+  const romMetaP = fetch(`${API_BASE}/api/roms/${ROM_ID}`, { headers: authHeaders() })
+    .then(r => (r.ok ? r.json() : null))
+    .catch(() => null);
+  romMetaP.then(rom => { if (rom) applySplashArtwork(rom); });
+
+  // Pre-fetch states so the picker is instant on first open, and so the splash
+  // can name the save it is about to restore.
+  Promise.all([fetchStates(), fetchSaves()])
+    .then(() => showResumeNotice(cachedStates, cachedSaves))
+    .catch(() => {});
+
   let romUrl;
   try {
     romUrl = await fetchRomBlobUrl();
@@ -956,11 +1247,7 @@ function exitPlayer() {
     return;
   }
 
-  setLoad('Starting emulator…', ROM_NAME);
-
-  // Pre-fetch states so the picker is instant on first open
-  fetchStates();
-  fetchSaves();
+  setIndeterminate('Starting emulator…', '');
 
   // ── EmulatorJS config ────────────────────────────────────────────────────
   window.EJS_player        = '#game';
@@ -1029,14 +1316,10 @@ function exitPlayer() {
   // Bezel: object-fit:cover fills viewport, clips overflow - perfect alignment
   let resolvedBezelUrl = BEZEL_URL;
   if (!resolvedBezelUrl && BEZEL_FROM_API) {
-    // Fetch bezel_path from ROM detail (couch mode: bezel toggle ON)
-    try {
-      const bezelResp = await fetch(`${API_BASE}/api/roms/${ROM_ID}`, { headers: authHeaders() });
-      if (bezelResp.ok) {
-        const romData = await bezelResp.json();
-        if (romData.bezel_path) resolvedBezelUrl = romData.bezel_path;
-      }
-    } catch {}
+    // Couch mode with the bezel toggle on. The splash already asked for the ROM
+    // detail, so reuse that promise instead of making the same call twice.
+    const romData = await romMetaP;
+    if (romData && romData.bezel_path) resolvedBezelUrl = romData.bezel_path;
   }
   if (resolvedBezelUrl) {
     document.getElementById('gd-bezel').src = resolvedBezelUrl;
