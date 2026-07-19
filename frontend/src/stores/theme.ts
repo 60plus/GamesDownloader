@@ -234,6 +234,17 @@ export const useThemeStore = defineStore("theme", () => {
       cur.includes(id) ? cur.filter(s => s !== id) : [...cur, id],
     );
   }
+  /** Explicit set, for a checkbox or an eye toggle that knows the state it
+   *  wants. Writing the value it already holds is skipped, so an editor that
+   *  re-applies its whole state does not trigger a save per section. */
+  function setHomeSectionHidden(id: string, hidden: boolean) {
+    const cur = getHiddenHomeSections();
+    if (hidden === cur.includes(id)) return;
+    setThemeSettingValue(
+      "hiddenHomeSections",
+      hidden ? [...cur, id] : cur.filter(s => s !== id),
+    );
+  }
 
   // The order this user dragged the theme's home sections into. Ids absent from
   // the list keep the theme's own order, after the ones that are listed - so a
@@ -242,8 +253,30 @@ export const useThemeStore = defineStore("theme", () => {
     const v = themeSettings.value[themeId.value]?.homeSectionOrder;
     return Array.isArray(v) ? (v as string[]) : [];
   }
+  /** Merges rather than replaces: a caller only ever knows the sections of the
+   *  page it is drawing, and a theme may make several pages arrangeable into
+   *  this one key. Replacing here would let arranging one page drop every id
+   *  the caller has never heard of, silently resetting the other pages. Ids
+   *  not mentioned keep their saved positions, ahead of the incoming ones -
+   *  relative order across pages is meaningless, since each page only ever
+   *  sorts its own ids through orderHomeSections. Settings, which passes the
+   *  full registered list, is unaffected. */
   function setHomeSectionOrder(ids: string[]) {
-    setThemeSettingValue("homeSectionOrder", [...ids]);
+    const incoming = new Set(ids);
+    const saved = getHomeSectionOrder();
+    // Refill the slots the incoming ids already held, and leave every other id
+    // exactly where it was. Putting the untouched ids first instead would
+    // promote a section that is merely absent right now - a collection rail
+    // whose library is hidden, or one whose fetch has not landed - to the top
+    // of the page the moment anything else is moved.
+    const queue = [...ids];
+    const out: string[] = [];
+    for (const id of saved) {
+      if (!incoming.has(id)) { out.push(id); continue; }
+      const next = queue.shift();
+      if (next !== undefined) out.push(next);   // a duplicate slot just closes up
+    }
+    setThemeSettingValue("homeSectionOrder", [...out, ...queue]);
   }
   // Per-section switches (e.g. which side a Vapor rail's big card sits on).
   // Stored as {sectionId: {optId: bool}} so an option the user never touched
@@ -262,6 +295,22 @@ export const useThemeStore = defineStore("theme", () => {
       ...cur,
       [sectionId]: { ...(cur[sectionId] || {}), [optId]: on },
     });
+  }
+
+  /** Clear just this theme's section layout - order, hidden and per-section
+   *  options - and leave its other settings (skin, cover size, recent
+   *  libraries) alone. resetThemeSettings() wipes the lot, which is far too
+   *  blunt for a "reset layout" button inside an editor. Written in one go so
+   *  the page rebuilds its sections once rather than three times. */
+  function resetHomeSectionLayout() {
+    const cur = themeSettings.value[themeId.value];
+    if (!cur) return;
+    delete cur.hiddenHomeSections;
+    delete cur.homeSectionOrder;
+    delete cur.homeSectionOptions;
+    localStorage.setItem(LS_THEME_SETTINGS, JSON.stringify(themeSettings.value));
+    applyToDOM();
+    schedulePreferencesSave();
   }
 
   /** `ids` sorted by this user's order (unlisted ids keep their relative order,
@@ -443,9 +492,9 @@ export const useThemeStore = defineStore("theme", () => {
     setTheme, setSkin, toggleAnimations, toggleAmbient, toggleGrid, toggleOrbMotion,
     getThemeSettingValue, setThemeSettingValue, resetThemeSettings,
     getRecentLibraries, setRecentLibraries,
-    getHiddenHomeSections, isHomeSectionHidden, toggleHomeSection,
+    getHiddenHomeSections, isHomeSectionHidden, toggleHomeSection, setHomeSectionHidden,
     getHomeSectionOrder, setHomeSectionOrder, orderHomeSections,
-    isHomeSectionOptionOn, setHomeSectionOption,
+    isHomeSectionOptionOn, setHomeSectionOption, resetHomeSectionLayout,
     getHiddenLibraries, isLibraryHidden, setHiddenLibraries, toggleHiddenLibrary,
     getLibraryOrder, setLibraryOrder,
     applyToDOM,

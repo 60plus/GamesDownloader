@@ -160,7 +160,10 @@
     </template>
 
     <!-- ── Everyone: my home / navigation view ──────────────────────────── -->
-    <div class="ls-section">
+    <!-- The active theme may ship its own editor for the blocks below. When it
+         claims one, Settings stands down rather than offering a second place to
+         change the same thing. -->
+    <div v-if="!isSettingManaged('libraryVisibility')" class="ls-section">
       <div class="ls-sec-title">{{ t('appearance.lib_visibility') }}</div>
       <div class="ls-sec-desc">{{ t('appearance.lib_visibility_desc') }}</div>
       <div class="ls-vis-list">
@@ -191,7 +194,7 @@
     </div>
 
     <!-- Recently-added picker (per theme; themes with a home feed only) -->
-    <div v-if="themeStore.currentLayout !== 'classic'" class="ls-section">
+    <div v-if="themeStore.currentLayout !== 'classic' && !isSettingManaged('recentLibraries')" class="ls-section">
       <div class="ls-sec-title">{{ t('appearance.recent_libs') }}</div>
       <div class="ls-sec-desc">{{ t('appearance.recent_libs_desc') }}</div>
       <div
@@ -209,7 +212,7 @@
     </div>
 
     <!-- Theme home sections (only when the active theme registered any) -->
-    <div v-if="themeHomeSections.length" class="ls-section">
+    <div v-if="themeHomeSections.length && !isSettingManaged('homeSections')" class="ls-section">
       <div class="ls-sec-title">{{ t('appearance.home_sections') }}</div>
       <div class="ls-sec-desc">{{ t('appearance.home_sections_desc') }}</div>
       <div
@@ -262,7 +265,7 @@ import { useDialog } from '@/composables/useDialog'
 import { useI18n } from '@/i18n'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import LibraryIconPicker from '@/components/common/LibraryIconPicker.vue'
-import { getHomeSections } from '@/themes'
+import { getHomeSections, isSettingManaged } from '@/themes'
 import type { LibraryInfo } from '@/stores/libraries'
 
 const { t } = useI18n()

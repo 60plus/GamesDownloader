@@ -636,6 +636,35 @@ export function getHomeSections(): ThemeHomeSection[] {
   return _homeSections;
 }
 
+/** Settings blocks a theme can take over. A theme that ships its own on-page
+ *  editor claims the ones it covers, and Settings stops rendering its controls
+ *  for them - the same state offered in two places is how the two drift apart,
+ *  and how a user ends up wondering which one actually applies. */
+export type ManagedSettingKey =
+  | "libraryVisibility"   // Settings -> Libraries: per-user library on/off
+  | "recentLibraries"     // Settings -> Libraries: which libraries feed "recently added"
+  | "homeSections";       // Settings -> Libraries: theme home section order/visibility/options
+
+const _managedSettings = shallowReactive<string[]>([]);
+
+/** Claim settings this theme edits itself. Returns an unclaim fn, so a theme
+ *  that unmounts hands the controls back to Settings. */
+export function registerManagedSettings(keys: ManagedSettingKey[]): () => void {
+  const added = (keys || []).filter((k) => k && !_managedSettings.includes(k));
+  _managedSettings.push(...added);
+  return () => {
+    for (const k of added) {
+      const i = _managedSettings.indexOf(k);
+      if (i >= 0) _managedSettings.splice(i, 1);
+    }
+  };
+}
+
+/** Does the active theme edit this setting itself? (reactive) */
+export function isSettingManaged(key: ManagedSettingKey | string): boolean {
+  return _managedSettings.includes(key);
+}
+
 // ── Plugin route registry (custom plugin pages) ──────────────────────────────
 // A plugin declares a custom page two ways that meet here:
 //   1. backend hook frontend_get_routes -> nav metadata {path, label, icon}

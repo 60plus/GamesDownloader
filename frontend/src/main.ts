@@ -9,7 +9,7 @@ import "flag-icons/css/flag-icons.min.css";
 import { createAppRouter, addPluginRoutes } from "./plugins/router";
 import { createAppPinia } from "./plugins/pinia";
 import { vuetify } from "./plugins/vuetify";
-import { registerTheme, registerPluginLayout, registerPluginCouchMode, registerMetadataTab, registerDetailRow, resolveDetailRows, registerHomeSections, getHomeSections, registerPluginRoute, pluginNavRoutes, setPluginNavRoutes } from "./themes/index";
+import { registerTheme, registerPluginLayout, registerPluginCouchMode, registerMetadataTab, registerDetailRow, resolveDetailRows, registerHomeSections, getHomeSections, registerManagedSettings, isSettingManaged, registerPluginRoute, pluginNavRoutes, setPluginNavRoutes } from "./themes/index";
 import { useCouchNav, navPaused as couchNavPaused } from "./composables/useCouchNav";
 import { useDialog } from "./composables/useDialog";
 import { useCouchTheme } from "./composables/useCouchTheme";
@@ -194,6 +194,35 @@ function createSafeSocketStore() {
         sectionId, optId, dflt ?? declared ?? false,
       );
     },
+    // ── Writes, for a theme with its own on-page layout editor ──────────────
+    // Persisted per-user, per-theme and synced to the server like every other
+    // theme setting, so a layout follows the user to another browser. Ids the
+    // user never arranged keep the theme's own order (see order()), which is
+    // what lets sections that come and go at runtime - a new collection, a
+    // library you just created - appear without disturbing the saved layout.
+    /** Persist the section order the user arranged. */
+    setOrder: (ids: string[]) => useThemeStore().setHomeSectionOrder(ids),
+    /** Show or hide one section (explicit, unlike toggle). */
+    setHidden: (id: string, hidden: boolean) =>
+      useThemeStore().setHomeSectionHidden(id, hidden),
+    /** Flip one section's visibility. */
+    toggle: (id: string) => useThemeStore().toggleHomeSection(id),
+    /** Set one of the per-section switches declared in register(). */
+    setOption: (sectionId: string, optId: string, on: boolean) =>
+      useThemeStore().setHomeSectionOption(sectionId, optId, on),
+    /** Drop the user's whole layout (order, hidden, options) for this theme and
+     *  fall back to what register() declared. Leaves the theme's other
+     *  settings, such as skin or cover size, untouched. */
+    reset: () => useThemeStore().resetHomeSectionLayout(),
+  },
+  // A theme that ships its own editor for these settings claims them here, and
+  // Settings stops drawing its own controls for them. Without this the same
+  // switches live in two places and quietly drift apart.
+  managedSettings: {
+    /** claim(["homeSections", ...]) -> unclaim(). */
+    register: registerManagedSettings,
+    /** Is this setting handled by the active theme? */
+    isManaged: isSettingManaged,
   },
   // Public, theme/plugin-facing API for the per-theme "recently added" home
   // feed. Themes call recentLibraries.get() to learn which library slugs the
