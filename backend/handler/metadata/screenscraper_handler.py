@@ -127,7 +127,11 @@ async def _ss_jeu_infos(
                 logger.debug("ScreenScraper matched via %s", label)
                 return jeu
         elif r.status_code not in (404, 400):
-            logger.warning("ScreenScraper %d for %s - %s", r.status_code, label, r.text[:200])
+            # Never log the body: ScreenScraper echoes the request back in
+            # `commandRequested`, password and all, so r.text can carry the
+            # account credentials straight into the logs. The status and the
+            # lookup label are enough to tell what failed.
+            logger.warning("ScreenScraper %d for %s", r.status_code, label)
     except Exception as e:
         logger.warning("ScreenScraper error (%s): %s", label, e)
     return None
@@ -251,7 +255,8 @@ async def search_games(
         async with httpx.AsyncClient(timeout=20) as c:
             r = await c.get(f"{_BASE}/jeuRecherche.php", params=params)
             if r.status_code != 200:
-                logger.warning("SS jeuRecherche returned %d: %s", r.status_code, r.text[:200])
+                # No body: it echoes the request (password included) back.
+                logger.warning("SS jeuRecherche returned %d", r.status_code)
                 return []
             data = r.json()
             jeux = data.get("response", {}).get("jeux") or []
@@ -333,8 +338,9 @@ async def get_game_by_id(
         async with httpx.AsyncClient(timeout=20) as c:
             r = await c.get(f"{_BASE}/jeuInfos.php", params=params)
             if r.status_code != 200:
-                logger.warning("SS get_game_by_id returned %d for gameid=%s - %s",
-                               r.status_code, ss_game_id, r.text[:200])
+                # No body: it echoes the request (password included) back.
+                logger.warning("SS get_game_by_id returned %d for gameid=%s",
+                               r.status_code, ss_game_id)
                 return None
             data = r.json()
             return data.get("response", {}).get("jeu")

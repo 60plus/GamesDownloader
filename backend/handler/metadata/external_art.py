@@ -266,4 +266,31 @@ async def search_cover_options(
         except Exception as exc:
             logger.warning("Plugin cover search failed: %s", exc)
 
+    elif source == "screenscraper":
+        # ScreenScraper indexes the console originals these ports come from, so
+        # it has proper box art and heroes for them. Its media URLs carry the
+        # account password in the query string, so every one is handed to the
+        # browser only as a credential-free /api/media/proxy token (or dropped).
+        try:
+            from handler.config.config_handler import config_handler
+            from handler.metadata import screenscraper_handler as _ss
+            from utils.media_proxy import proxy_url
+            ss_user = await config_handler.get("screenscraper_username") or ""
+            ss_pass = await config_handler.get("screenscraper_password") or ""
+            bucket = {"grids": "covers", "heroes": "fanarts", "logos": "wheels"}.get(asset_type)
+            if ss_user and ss_pass and bucket:
+                jeu = await _ss.search_game(
+                    search_term, None, username=ss_user, password=ss_pass,
+                )
+                for m in (_ss.extract_media_urls(jeu).get(bucket, []) if jeu else []):
+                    safe = proxy_url(m.get("url"))
+                    if not safe:
+                        continue
+                    results.append({
+                        "url": safe, "thumb": safe, "type": "static",
+                        "label": f"ScreenScraper - {m.get('label') or 'Cover'}",
+                    })
+        except Exception as exc:
+            logger.warning("ScreenScraper cover search failed: %s", exc)
+
     return results

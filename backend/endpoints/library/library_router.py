@@ -315,11 +315,13 @@ def _merged_meta(game, gog_game) -> dict | None:
     return merged or None
 
 
-def _game_to_tile(game: LibraryGame, gog_game=None, *, with_media: bool = False) -> dict:
+def _game_to_tile(game: LibraryGame, gog_game=None, *, with_media: bool = False,
+                  catalog_origin: str | None = None) -> dict:
     """Slim storefront tile (?fields=tile): everything a rail card / hover card
     header needs, without the heavy files / screenshots / requirements payload
     of _game_to_dict. `with_media` adds a screenshot + video sample for the
-    featured hero slides."""
+    featured hero slides. `catalog_origin` is the name of the store a game was
+    downloaded from ("PC Ports"), for the corner badge - None for the rest."""
     g = gog_game
 
     def _fb(field: str, default=None):
@@ -337,6 +339,7 @@ def _game_to_tile(game: LibraryGame, gog_game=None, *, with_media: bool = False)
         "gog_game_id":       game.gog_game_id,
         "source":            game.source,
         "title":             game.title,
+        "subtitle":          getattr(game, "subtitle", None),
         "slug":              game.slug,
         "description_short": _fb("description_short"),
         "developer":         _fb("developer"),
@@ -362,6 +365,9 @@ def _game_to_tile(game: LibraryGame, gog_game=None, *, with_media: bool = False)
         "file_count":        len(avail),
         "size_bytes":        sum(f.size_bytes or 0 for f in avail),
         "created_at":        game.created_at.isoformat() if game.created_at else None,
+        # The store a game came from, for a small corner badge in the Games
+        # library. None for anything not downloaded from a plugin catalogue.
+        "catalog_origin":    catalog_origin,
     }
     if with_media:
         tile["screenshots"] = (_fb("screenshots") or [])[:4]
@@ -383,10 +389,35 @@ async def _gog_fallback_map(games) -> dict[int, object]:
         return {gg.id: gg for gg in rows}
 
 
-def _game_to_dict(game: LibraryGame, owner_username: str | None = None, gog_game=None) -> dict:
+async def _catalog_origin_map(games) -> dict[int, str]:
+    """game_id -> the store name a game was downloaded from ("PC Ports"), for the
+    corner badge. Batched like _gog_fallback_map so the list stays one query.
+    A game with no catalogue origin is simply absent from the map."""
+    from handler.database.session import async_session_factory as _asf
+    from models.catalog_entry import CatalogEntry as _CE
+    from models.library import Library as _L
+    from sqlalchemy import select as _sel
+    ids = [g.id for g in games if getattr(g, "id", None)]
+    if not ids:
+        return {}
+    async with _asf() as _s:
+        rows = (await _s.execute(
+            _sel(_CE.library_game_id, _CE.catalog_id).where(_CE.library_game_id.in_(ids))
+        )).all()
+        if not rows:
+            return {}
+        names = dict((await _s.execute(
+            _sel(_L.catalog_id, _L.name).where(_L.catalog_id.in_({c for _, c in rows}))
+        )).all())
+        return {gid: names[cid] for gid, cid in rows if cid in names}
+
+
+def _game_to_dict(game: LibraryGame, owner_username: str | None = None, gog_game=None,
+                  catalog_origin: str | None = None) -> dict:
     """Convert LibraryGame to API dict.
     For source='gog' games, fallback to GogGame data for any NULL fields
     so we don't duplicate metadata - GOG is the single source of truth.
+    `catalog_origin` is the store a game was downloaded from ("PC Ports").
     """
     g = gog_game  # GogGame object or None
 
@@ -405,7 +436,9 @@ def _game_to_dict(game: LibraryGame, owner_username: str | None = None, gog_game
         "id":                game.id,
         "gog_game_id":       game.gog_game_id,
         "source":            game.source,
+        "catalog_origin":    catalog_origin,
         "title":             game.title,
+        "subtitle":          getattr(game, "subtitle", None),
         "slug":              game.slug,
         "description":       _fb("description"),
         "description_short": _fb("description_short"),
@@ -456,6 +489,9 @@ def _file_to_dict(f: LibraryFile) -> dict:
         "checksum_md5": f.checksum_md5,
         "source":       f.source,
         "is_available": f.is_available,
+        # True when the packer produced this file. A game counts as packaged
+        # for a platform when one of its files carries this.
+        "is_archive":   bool(f.is_archive),
     }
 
 
@@ -488,27 +524,29 @@ async def list_library_games(
     if _target is not None and not await library_registry_handler.user_can_access(user, _target):
         return {"items": [], "total": 0, "limit": limit, "offset": offset}
 
+    # Games this user is denied are excluded inside the query, so a page is
+    # never short and the total never counts rows the user cannot receive.
+    # Subtracting them afterwards was wrong twice over: it left holes in every
+    # page that happened to contain one, and it took the user's whole denied
+    # set off a total that may not have included those games at all.
+    denied = [] if is_admin else list(await _lib.get_denied_game_ids_for_user(user.id))
+
     if library and library != "games":
         if _target is None:
             return {"items": [], "total": 0, "limit": limit, "offset": offset}
-        games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset, library_id=_target.id, sort=sort)
-        total = await _lib.count_active(search=search or None, library_id=_target.id)
+        games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset, library_id=_target.id, sort=sort, exclude_ids=denied)
+        total = await _lib.count_active(search=search or None, library_id=_target.id, exclude_ids=denied)
     else:
-        games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset, in_default_only=True, sort=sort)
-        total = await _lib.count_active(search=search or None, in_default_only=True)
-
-    # For non-admins, filter out per-game denied games and adjust total accordingly
-    if not is_admin:
-        denied = await _lib.get_denied_game_ids_for_user(user.id)
-        if denied:
-            games = [g for g in games if g.id not in denied]
-            total = max(0, total - len(denied))
+        games = await _lib.get_all_active(search=search or None, limit=limit, offset=offset, in_default_only=True, sort=sort, exclude_ids=denied)
+        total = await _lib.count_active(search=search or None, in_default_only=True, exclude_ids=denied)
 
     # Slim tile projection: no owner lookup (tiles do not carry owner_username)
     if fields == "tile":
         gog_map = await _gog_fallback_map(games)
+        cat_map = await _catalog_origin_map(games)
         return {
-            "items":  [_game_to_tile(g, gog_map.get(g.gog_game_id)) for g in games],
+            "items":  [_game_to_tile(g, gog_map.get(g.gog_game_id),
+                                     catalog_origin=cat_map.get(g.id)) for g in games],
             "total":  total,
             "limit":  limit,
             "offset": offset,
@@ -546,9 +584,11 @@ async def list_library_games(
             )).scalars().all()
             gog_map = {gg.id: gg for gg in gog_rows}
 
+    cat_map = await _catalog_origin_map(games)
     return {
         "items":  [_game_to_dict(g, owner_username=pub_map.get(g.published_by, pub_map[None]),
-                                 gog_game=gog_map.get(g.gog_game_id)) for g in games],
+                                 gog_game=gog_map.get(g.gog_game_id),
+                                 catalog_origin=cat_map.get(g.id)) for g in games],
         "total":  total,
         "limit":  limit,
         "offset": offset,
@@ -585,7 +625,9 @@ async def get_library_game(request: Request, game_id: int) -> dict:
         from models.gog_game import GogGame as _GG
         async with _asf3() as _s:
             gog_game = await _s.get(_GG, game.gog_game_id)
-    return _game_to_dict(game, owner_username=owner_name, gog_game=gog_game)
+    cat_origin = (await _catalog_origin_map([game])).get(game.id)
+    return _game_to_dict(game, owner_username=owner_name, gog_game=gog_game,
+                         catalog_origin=cat_origin)
 
 
 # ── Games - lookup by GOG game ID ─────────────────────────────────────────────
@@ -769,18 +811,17 @@ def _delete_files_on_disk(files) -> int:
     return removed
 
 
-async def _clear_gog_owned(gog_game_id: int, *, clear_path: bool) -> None:
-    """Reset the linked GOG game's downloaded flag so the GOG library stops marking
-    it as owned once it is removed from the games library."""
-    from handler.database.session import async_session_factory
-    from models.gog_game import GogGame
-    async with async_session_factory() as session:
-        gg = await session.get(GogGame, gog_game_id)
-        if gg:
-            gg.is_downloaded = False
-            if clear_path:
-                gg.download_path = None
-            await session.commit()
+async def _refresh_gog_owned(gog_game_id: int) -> None:
+    """Re-read the linked GOG game's downloaded flag from disk after a deletion.
+
+    Deliberately asks the disk instead of clearing the flag outright. Deleting a
+    library entry while leaving the installers in place used to report the game
+    as not downloaded even though it still occupied the same tens of gigabytes,
+    and a shared product has a row per owner, so clearing by row id only ever
+    reached one of them.
+    """
+    from handler.gog.gog_download_handler import refresh_downloaded_state
+    await refresh_downloaded_state(gog_game_id=gog_game_id)
 
 
 @protected_route(library_router.delete, "/games/{game_id}", scopes=[Scope.LIBRARY_ADMIN])
@@ -798,10 +839,10 @@ async def delete_library_game(
         files = await _lib.get_files_for_game(game_id)
         removed = _delete_files_on_disk(files)
 
-    # Always clear the GOG "owned" flag for a linked game; only wipe the stored
-    # download path when the files were actually deleted from disk.
+    # Re-read the GOG "downloaded" flag from disk: gone when the files went with
+    # the entry, still set when they were left in place.
     if gog_game_id:
-        await _clear_gog_owned(gog_game_id, clear_path=delete_files)
+        await _refresh_gog_owned(gog_game_id)
 
     await _lib.delete(game)
     return {"ok": True, "files_deleted": removed}
@@ -902,6 +943,13 @@ async def library_get_cover_options(
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
+    # ScreenScraper is a catalogue-editor-only source. Its results are proxy
+    # tokens, and this games-editor save path (download_all_media) does not
+    # resolve them, so a hand-crafted call could persist a token verbatim.
+    # Refuse it here; the catalogue editor has the resolving save path.
+    if source == "screenscraper":
+        return []
+
     from handler.metadata.external_art import search_cover_options
     return await search_cover_options(
         source, q or game.title, asset_type, animated, gog_game_id=game.gog_game_id,
@@ -921,8 +969,25 @@ async def library_get_screenshot_options(
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    # Catalogue-editor-only source (see the cover route); the games save path
+    # cannot resolve its proxy tokens. `source=all` here never includes it either
+    # (include_screenscraper defaults False).
+    if source == "screenscraper":
+        return []
+    return await search_screenshot_options(q or game.title, source, gog_game_id=game.gog_game_id)
 
-    search_term = q or game.title
+
+async def search_screenshot_options(
+    search_term: str, source: str, *, gog_game_id: int | None = None,
+    include_screenscraper: bool = False,
+) -> list:
+    """Screenshot options for a title from external sources.
+
+    Shared by the library-game route and the catalogue-entry route (PC Ports
+    store editor), the way search_cover_options already backs both cover
+    searches. A catalogue entry has no game row until it is downloaded, so it
+    passes gog_game_id=None and the GOG branch resolves the product by title.
+    """
     results: list = []
 
     if source == "igdb":
@@ -998,19 +1063,42 @@ async def library_get_screenshot_options(
         except Exception as exc:
             logger.warning("RAWG screenshot search failed: %s", exc)
 
+    elif source == "screenscraper":
+        # SS screenshots for the console original. Its URLs carry the account
+        # password, so each is proxied (or dropped) before the browser sees it.
+        try:
+            from handler.config.config_handler import config_handler
+            from handler.metadata import screenscraper_handler as _ss
+            from utils.media_proxy import proxy_url
+            ss_user = await config_handler.get("screenscraper_username") or ""
+            ss_pass = await config_handler.get("screenscraper_password") or ""
+            if ss_user and ss_pass:
+                jeu = await _ss.search_game(
+                    search_term, None, username=ss_user, password=ss_pass,
+                )
+                for m in (_ss.extract_media_urls(jeu).get("screenshots", []) if jeu else []):
+                    safe = proxy_url(m.get("url"))
+                    if not safe:
+                        continue
+                    results.append({
+                        "url": safe, "thumb": safe, "type": "static",
+                        "label": m.get("label") or "Screenshot", "author": "ScreenScraper",
+                    })
+        except Exception as exc:
+            logger.warning("ScreenScraper screenshot search failed: %s", exc)
+
     elif source == "gog":
-        search_term = q or game.title
         try:
             from handler.library.library_scrape_handler import _abs_url
             _GOG_CATALOG = "https://catalog.gog.com/v1/catalog"
             _GOG_V1 = "https://api.gog.com/products/{gog_id}?expand=screenshots&locale=en-US"
             _HDRS = {"User-Agent": "Mozilla/5.0 GOGGalaxy/2.0", "Accept": "application/json"}
             gog_product_id = None
-            if game.gog_game_id:
+            if gog_game_id:
                 from models.gog_game import GogGame
                 from handler.database.session import async_session_factory
                 async with async_session_factory() as s:
-                    gog_game = await s.get(GogGame, game.gog_game_id)
+                    gog_game = await s.get(GogGame, gog_game_id)
                     if gog_game:
                         gog_product_id = gog_game.gog_id
             if not gog_product_id:
@@ -1033,7 +1121,6 @@ async def library_get_screenshot_options(
             logger.warning("GOG screenshot search failed: %s", exc)
 
     elif source == "steam":
-        search_term = q or game.title
         try:
             from handler.gog.steam_scraper import search_steam_app, fetch_steam_app_details
             app_id = await search_steam_app(search_term)
@@ -1045,7 +1132,6 @@ async def library_get_screenshot_options(
             logger.warning("Steam screenshot search failed: %s", exc)
 
     elif source == "launchbox":
-        search_term = q or game.title
         try:
             from handler.metadata.launchbox_handler import search_candidates, get_lb_screenshots
             candidates = await search_candidates(search_term, None, max_results=3)
@@ -1060,12 +1146,15 @@ async def library_get_screenshot_options(
 
     elif source == "all":
         import asyncio
-        search_term = q or game.title
-        sub_sources = ["gog", "igdb", "rawg", "steam", "launchbox"]
-        tasks = [library_get_screenshot_options(request, game_id, source=s, q=search_term) for s in sub_sources]
+        # ScreenScraper only when the caller asks (the catalogue editor). It is
+        # left out of the ordinary games editor, whose screenshot save path does
+        # not resolve the credential-free proxy tokens SS results come back as.
+        _ss = ["screenscraper"] if include_screenscraper else []
+        sub_sources = ["gog", "igdb", "rawg", "steam", "launchbox"] + _ss
+        tasks = [search_screenshot_options(search_term, s, gog_game_id=gog_game_id) for s in sub_sources]
         all_results = await asyncio.gather(*tasks, return_exceptions=True)
-        source_names = ["GOG", "IGDB", "RAWG", "Steam", "LaunchBox"]
-        icons = ["gog.ico", "igdb.ico", "RAWG.ico", "Steam.ico", "launchbox.ico"]
+        source_names = ["GOG", "IGDB", "RAWG", "Steam", "LaunchBox"] + (["ScreenScraper"] if _ss else [])
+        icons = ["gog.ico", "igdb.ico", "RAWG.ico", "Steam.ico", "launchbox.ico"] + (["ScreenScraper.ico"] if _ss else [])
         for i, res in enumerate(all_results):
             if isinstance(res, list):
                 for r in res:
@@ -1303,6 +1392,13 @@ async def _publish_gog_core(
     lib_game = await _lib.get_by_id(lib_game.id)
     total_files = len(await _lib.get_files_for_game(lib_game.id))
 
+    # Files found by scanning the folder count as downloaded just as much as
+    # files fetched by the downloader. Without this, everything adopted from
+    # disk sat in the library flagged as not downloaded, which made the store
+    # offer it again and refused to package it.
+    from handler.gog.gog_download_handler import refresh_downloaded_state
+    await refresh_downloaded_state(gog_game_id=gog_game.id)
+
     # GOG-published games carry their cover/description from the linked GogGame,
     # so they are "ready" right away - fire the one-shot recently-added card
     # (idempotent: a re-publish of an already-announced game is a no-op).
@@ -1433,8 +1529,14 @@ async def _scan_one_folder(root: Path, user_id: int, target_lib) -> tuple[int, i
                     slug=slug,
                     is_active=True,
                     published_by=user_id,
-                    # New games scanned into a custom library live only there.
-                    in_default_library=not is_custom_lib,
+                    # A custom library keeps its games to itself unless it was
+                    # set up to feed the default one. Before that flag existed
+                    # this was an unconditional False, which is why a shelf of
+                    # games added this way never reached the home rails.
+                    in_default_library=(
+                        not is_custom_lib
+                        or bool(getattr(target_lib, "adds_to_default_library", False))
+                    ),
                 )
                 lib_game = await _lib.create(lib_game)
                 created += 1
@@ -1737,269 +1839,16 @@ async def library_game_meta_sources(
     await _check_user_can_access(request, game)
 
     search_term = q or game.title or ""
-    result: dict = {"source": source, "found": False}
-
-    # ── GOG public catalog (no auth) ──────────────────────────────────────────
-    if source == "gog":
-        from handler.library.library_scrape_handler import (
-            _HDRS, _abs_url,
-            _search_gog_catalog, _fetch_gog_v1, _fetch_gog_v2, _fetch_gog_rating,
-        )
-        import asyncio as _aio
-        try:
-            async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=20) as c:
-                # Use linked gog_id if game was published from GOG
-                gog_id = None
-                if game.gog_game_id:
-                    from models.gog_game import GogGame
-                    gog_game = await session.get(GogGame, game.gog_game_id)
-                    if gog_game:
-                        gog_id = gog_game.gog_id
-                if not gog_id:
-                    gog_id = await _search_gog_catalog(search_term, c)
-                if not gog_id:
-                    return {"source": "gog", "found": False, "error": "No GOG match found for this title"}
-                v1, v2, rating = await _aio.gather(
-                    _fetch_gog_v1(gog_id, c),
-                    _fetch_gog_v2(gog_id, c),
-                    _fetch_gog_rating(gog_id, c),
-                    return_exceptions=True,
-                )
-                v1     = v1     if not isinstance(v1,     Exception) else {}
-                v2     = v2     if not isinstance(v2,     Exception) else {}
-                rating = rating if not isinstance(rating, Exception) else None
-
-                desc_data = v1.get("description") or {}
-                if isinstance(desc_data, dict):
-                    full_desc  = desc_data.get("full")  or ""
-                    short_desc = desc_data.get("short") or ""
-                elif isinstance(desc_data, str):
-                    full_desc  = desc_data
-                    short_desc = ""
-                else:
-                    full_desc = short_desc = ""
-
-                embedded = v2.get("_embedded") or {}
-                devs     = embedded.get("developers") or []
-                developer = ", ".join(d["name"] for d in devs if isinstance(d, dict) and d.get("name"))
-                pub_data  = embedded.get("publisher") or {}
-                publisher = pub_data.get("name", "") if isinstance(pub_data, dict) else ""
-                all_tags  = embedded.get("tags") or []
-                genres    = [t["name"] for t in all_tags
-                             if isinstance(t, dict) and t.get("type") == "genre" and t.get("name")]
-
-                links  = v2.get("_links") or {}
-                images = v1.get("images")  or {}
-                cover  = ((links.get("boxArtImage") or {}).get("href")
-                          or images.get("coverLarge") or images.get("cover") or "")
-                cover  = _abs_url(str(cover)) if cover else ""
-
-                release = ""
-                rd = v1.get("release_date")
-                if rd:
-                    if isinstance(rd, dict):
-                        release = (rd.get("date") or "")[:10]
-                    else:
-                        release = str(rd)[:10]
-
-                gog_rating = float(rating) if rating is not None else None
-
-                compat = v1.get("content_system_compatibility") or {}
-                raw_langs = v1.get("languages") or {}
-                result.update({
-                    "found":             True,
-                    "gog_id":            gog_id,
-                    "name":              v2.get("title") or v1.get("title") or search_term,
-                    "description":       full_desc,
-                    "description_short": short_desc,
-                    "developer":         developer,
-                    "publisher":         publisher,
-                    "release_date":      release,
-                    "genres":            genres,
-                    "rating":            gog_rating,
-                    "cover_url":         cover,
-                    "os_windows":        bool(compat.get("windows")),
-                    "os_mac":            bool(compat.get("osx")),
-                    "os_linux":          bool(compat.get("linux")),
-                    "languages":         raw_langs if isinstance(raw_langs, dict) else {},
-                })
-        except Exception as exc:
-            result["error"] = str(exc)
-
-    # ── RAWG search (returns candidates list) ─────────────────────────────────
-    elif source == "rawg":
-        try:
-            from handler.config.config_handler import config_handler
-            api_key = await config_handler.get("rawg_api_key")
-            if not api_key:
-                return {"source": "rawg", "found": False, "error": "RAWG API key not configured"}
-            async with httpx.AsyncClient(timeout=20) as c:
-                sr = await c.get(
-                    "https://api.rawg.io/api/games",
-                    params={"key": api_key, "search": search_term, "page_size": 5},
-                )
-                if sr.status_code != 200:
-                    return {"source": "rawg", "found": False, "error": f"RAWG search returned {sr.status_code}"}
-                items = sr.json().get("results", [])
-                if not items:
-                    return {"source": "rawg", "found": False, "error": "No results found"}
-                candidates = [
-                    {"id": i.get("id"), "slug": i.get("slug", ""), "name": i.get("name", ""),
-                     "released": i.get("released", ""), "background_image": i.get("background_image", ""),
-                     "rating": i.get("rating")}
-                    for i in items
-                ]
-                result["found"] = True
-                result["candidates"] = candidates
-        except Exception as exc:
-            result["error"] = str(exc)
-
-    # ── RAWG detail fetch (q = slug or numeric id) ────────────────────────────
-    elif source == "rawg-detail":
-        try:
-            from handler.config.config_handler import config_handler
-            api_key = await config_handler.get("rawg_api_key")
-            if not api_key:
-                return {"source": "rawg-detail", "found": False, "error": "RAWG API key not configured"}
-            async with httpx.AsyncClient(timeout=20) as c:
-                dr = await c.get(f"https://api.rawg.io/api/games/{q}", params={"key": api_key})
-                if dr.status_code != 200:
-                    return {"source": "rawg-detail", "found": False}
-                d = dr.json()
-                requirements: dict = {}
-                for pdata in d.get("platforms", []):
-                    pname = (pdata.get("platform") or {}).get("name", "")
-                    reqs  = pdata.get("requirements") or {}
-                    if reqs and ("minimum" in reqs or "recommended" in reqs):
-                        requirements[pname] = reqs
-                developers = [c_i.get("name", "") for c_i in d.get("developers", []) if isinstance(c_i, dict)]
-                publishers = [c_i.get("name", "") for c_i in d.get("publishers", []) if isinstance(c_i, dict)]
-                platforms  = [p.get("platform", {}).get("slug", "") for p in d.get("platforms", []) if isinstance(p, dict)]
-                result.update({
-                    "found":             True,
-                    "name":              d.get("name", ""),
-                    "description":       d.get("description_raw") or d.get("description") or "",
-                    "description_short": "",
-                    "cover_url":         d.get("background_image") or "",
-                    "developer":         ", ".join(developers),
-                    "publisher":         ", ".join(publishers),
-                    "release_date":      d.get("released") or "",
-                    "rating":            (d.get("rating") or 0) * 2,
-                    "genres":            [g.get("name", "") for g in d.get("genres", []) if isinstance(g, dict)],
-                    "requirements":      requirements,
-                    "os_windows":        any("pc" in p or "windows" in p for p in platforms),
-                    "os_mac":            any("mac" in p for p in platforms),
-                    "os_linux":          any("linux" in p for p in platforms),
-                    "languages":         {},
-                })
-        except Exception as exc:
-            result["error"] = str(exc)
-
-    # ── IGDB ─────────────────────────────────────────────────────────────────
-    elif source == "igdb":
-        try:
-            from handler.config.config_handler import config_handler
-            client_id     = await config_handler.get("igdb_client_id")
-            client_secret = await config_handler.get("igdb_client_secret")
-            if not client_id or not client_secret:
-                return {"source": "igdb", "found": False, "error": "IGDB keys not configured"}
-            safe_q = re.sub(r'["\';]', '', search_term)[:128]
-            async with httpx.AsyncClient(timeout=20) as c:
-                tr = await c.post("https://id.twitch.tv/oauth2/token", params={
-                    "client_id": client_id, "client_secret": client_secret,
-                    "grant_type": "client_credentials",
-                })
-                if tr.status_code != 200:
-                    return {"source": "igdb", "found": False, "error": "Twitch auth failed"}
-                token = tr.json().get("access_token", "")
-                if not token:
-                    return {"source": "igdb", "found": False, "error": "No token"}
-                gr = await c.post(
-                    "https://api.igdb.com/v4/games",
-                    headers={"Client-ID": client_id, "Authorization": f"Bearer {token}"},
-                    content=(
-                        f'fields id,name,summary,storyline,cover.image_id,'
-                        f'involved_companies.company.name,involved_companies.developer,involved_companies.publisher,'
-                        f'genres.name,first_release_date,total_rating,aggregated_rating;'
-                        f' search "{safe_q}"; limit 5;'
-                    ),
-                )
-                if gr.status_code != 200:
-                    return {"source": "igdb", "found": False, "error": f"IGDB returned {gr.status_code}"}
-                igdb_games = gr.json()
-                if not igdb_games:
-                    return {"source": "igdb", "found": False, "error": "No results"}
-                candidates = []
-                for ig in igdb_games:
-                    cov     = ig.get("cover") or {}
-                    img_id  = cov.get("image_id")
-                    cov_url = f"https://images.igdb.com/igdb/image/upload/t_cover_big/{img_id}.jpg" if img_id else ""
-                    devs_ig = [ic["company"]["name"] for ic in ig.get("involved_companies", [])
-                               if isinstance(ic, dict) and ic.get("developer") and isinstance(ic.get("company"), dict)]
-                    pubs_ig = [ic["company"]["name"] for ic in ig.get("involved_companies", [])
-                               if isinstance(ic, dict) and ic.get("publisher") and isinstance(ic.get("company"), dict)]
-                    genres  = [g["name"] for g in ig.get("genres", []) if isinstance(g, dict)]
-                    rel_ts  = ig.get("first_release_date")
-                    rel_str = ""
-                    if rel_ts:
-                        from datetime import datetime, timezone
-                        rel_str = datetime.fromtimestamp(rel_ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                    candidates.append({
-                        "id":                ig.get("id"),
-                        "name":              ig.get("name", ""),
-                        "summary":           ig.get("summary", ""),
-                        "description":       ig.get("storyline") or ig.get("summary") or "",
-                        "description_short": ig.get("summary") or "",
-                        "cover_url":         cov_url,
-                        "developer":         ", ".join(devs_ig),
-                        "publisher":         ", ".join(pubs_ig),
-                        "release_date":      rel_str,
-                        "genres":            genres,
-                        "rating":            ig.get("total_rating") or ig.get("aggregated_rating"),
-                        "os_windows":        False,
-                        "os_mac":            False,
-                        "os_linux":          False,
-                        "languages":         {},
-                    })
-                result["found"] = True
-                result["candidates"] = candidates
-        except Exception as exc:
-            result["error"] = str(exc)
-
-    # ── Steam ────────────────────────────────────────────────────────────────
-    elif source == "steam":
-        try:
-            from handler.gog.steam_scraper import search_steam_app, fetch_steam_app_details, parse_steam_app_id
-            # If q looks like a Steam App ID or URL, skip title search
-            app_id: int | None = parse_steam_app_id(q) if q else None
-            if not app_id:
-                app_id = await search_steam_app(search_term)
-            if not app_id:
-                return {"source": "steam", "found": False, "error": "No Steam match found - try entering the Steam App ID or URL directly"}
-            steam = await fetch_steam_app_details(app_id)
-            if not steam:
-                return {"source": "steam", "found": False, "error": f"Steam App {app_id} not found or API error"}
-            result.update({
-                "found":             True,
-                "app_id":            app_id,
-                "name":              steam.get("name") or search_term,
-                "description":       steam.get("description", ""),
-                "description_short": steam.get("description_short", ""),
-                "developer":         steam.get("developer", ""),
-                "publisher":         steam.get("publisher", ""),
-                "release_date":      steam.get("release_date", ""),
-                "genres":            steam.get("genres", []),
-                "rating":            steam.get("rating"),
-                "requirements":      steam.get("requirements", {}),
-                "os_windows":        bool(steam.get("os_windows")),
-                "os_mac":            bool(steam.get("os_mac")),
-                "os_linux":          bool(steam.get("os_linux")),
-                "languages":         steam.get("languages", {}),
-            })
-        except Exception as exc:
-            result["error"] = str(exc)
-
-    return result
+    gog_id = None
+    if source == "gog" and game.gog_game_id:
+        from models.gog_game import GogGame
+        async with async_session_factory() as _s2:
+            gog_game = await _s2.get(GogGame, game.gog_game_id)
+            if gog_game:
+                gog_id = gog_game.gog_id
+    # Shared with the catalogue-entry editor so both search the same way.
+    from handler.metadata.meta_sources import fetch_meta_source
+    return await fetch_meta_source(source, search_term=search_term, q=q, gog_id=gog_id)
 
 
 # ── Files ─────────────────────────────────────────────────────────────────────

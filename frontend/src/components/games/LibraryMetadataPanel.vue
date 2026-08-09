@@ -88,6 +88,7 @@
                 <img src="/icons/igdb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/steamgriddb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/launchbox.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                <img v-if="isCatalog" src="/icons/ScreenScraper.ico" width="14" height="14" alt="ScreenScraper" title="ScreenScraper" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <span class="mep-source-name">{{ t('meta.cover_sources', 'All Sources') }}</span>
                 <div class="mep-chip-bar" style="margin-left:auto">
                   <button class="mep-chip-btn" :class="{ active: coverFilter === 'all' }" @click="setCoverFilter('all')">{{ t('meta.all') }}</button>
@@ -331,6 +332,7 @@
                 <img src="/icons/RAWG.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/Steam.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/launchbox.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                <img v-if="isCatalog" src="/icons/ScreenScraper.ico" width="14" height="14" alt="ScreenScraper" title="ScreenScraper" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img v-for="mp in metadataProviders" :key="mp.id" :src="mp.logo_url" width="14" height="14" :alt="mp.name" :title="mp.name" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <span class="mep-source-name">{{ t('meta.find_screenshots', 'Find Screenshots') }}</span>
               </div>
@@ -978,7 +980,15 @@ const emit  = defineEmits<{
 const baseApi = computed(() => props.apiPrefix || '/library/games')
 
 // Plugin-registered tabs that target this panel's library (games / gog / all).
-const libraryKind = computed(() => (baseApi.value.includes('/gog/') ? 'gog' : 'games'))
+// A catalogue entry (PC Ports store) reuses this panel with its own apiPrefix;
+// it is not a game, so the game-only sections (library membership, collections,
+// per-game access) gate off it the same way the GOG library already does.
+const libraryKind = computed(() =>
+  baseApi.value.includes('catalog-entries') ? 'catalog'
+  : baseApi.value.includes('/gog/') ? 'gog'
+  : 'games',
+)
+const isCatalog = computed(() => libraryKind.value === 'catalog')
 
 // ── Library membership (Games library + user-created libraries) ───────────────
 const libsStore = useLibrariesStore()
@@ -1081,7 +1091,9 @@ const tabs = computed(() => [
   { id: 'logo',         label: t('meta.tab_logo')         },
   { id: 'icon',         label: t('meta.tab_icon')         },
   { id: 'screenshots',  label: t('meta.tab_screenshots')  },
-  { id: 'video',        label: t('meta.tab_video')        },
+  // A catalogue entry has no trailer column, so the video tab would save
+  // nothing - drop it there while keeping it for real games.
+  ...(isCatalog.value ? [] : [{ id: 'video', label: t('meta.tab_video') }]),
   { id: 'description',  label: t('meta.tab_description')  },
   { id: 'details',      label: t('meta.tab_details')      },
   { id: 'requirements', label: t('meta.tab_requirements') },
@@ -1817,6 +1829,13 @@ async function searchAllCovers() {
         (r.data as CoverOption[]).map(c => ({ ...c, _source: c._source || 'Plugin', _sourceIcon: c._sourceIcon || 'gog.ico' }))
       ).catch(() => [] as CoverOption[])
     ] : []),
+    // ScreenScraper - only in the catalogue (PC Ports) editor, where console box
+    // art fits. URLs come back already wrapped as credential-free proxy tokens.
+    ...(isCatalog.value ? [
+      client.get(`${baseUrl}?source=screenscraper&q=${qEnc}&asset_type=grids`).then(r =>
+        (r.data as CoverOption[]).map(c => ({ ...c, _source: 'ScreenScraper', _sourceIcon: 'ScreenScraper.ico' }))
+      ).catch(() => [] as CoverOption[])
+    ] : []),
   ])
 
   allCoverResults.value = results.flat()
@@ -1853,6 +1872,12 @@ async function searchAllHeroes() {
         (r.data as CoverOption[]).map(c => ({ ...c, _source: c._source || 'Plugin', _sourceIcon: c._sourceIcon || 'gog.ico' }))
       ).catch(() => [] as CoverOption[])
     ] : []),
+    // ScreenScraper fanart as a hero, catalogue editor only (proxied URLs).
+    ...(isCatalog.value ? [
+      client.get(`${baseUrl}?source=screenscraper&q=${qEnc}&asset_type=heroes`).then(r =>
+        (r.data as CoverOption[]).map(c => ({ ...c, _source: 'ScreenScraper', _sourceIcon: 'ScreenScraper.ico' }))
+      ).catch(() => [] as CoverOption[])
+    ] : []),
   ])
 
   allHeroResults.value = results.flat()
@@ -1887,6 +1912,12 @@ async function searchAllLogos() {
     ...(metadataProviders.value.length ? [
       client.get(`${baseUrl}?source=plugins&q=${qEnc}&asset_type=logos`).then(r =>
         (r.data as CoverOption[]).map(c => ({ ...c, _source: c._source || 'Plugin', _sourceIcon: c._sourceIcon || 'gog.ico' }))
+      ).catch(() => [] as CoverOption[])
+    ] : []),
+    // ScreenScraper wheel as a logo, catalogue editor only (proxied URLs).
+    ...(isCatalog.value ? [
+      client.get(`${baseUrl}?source=screenscraper&q=${qEnc}&asset_type=logos`).then(r =>
+        (r.data as CoverOption[]).map(c => ({ ...c, _source: 'ScreenScraper', _sourceIcon: 'ScreenScraper.ico' }))
       ).catch(() => [] as CoverOption[])
     ] : []),
   ])
