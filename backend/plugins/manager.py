@@ -22,6 +22,7 @@ from plugins.hookspecs import (
     PROJECT_NAME,
     DownloadProviderSpec,
     FrontendProviderSpec,
+    LibraryCatalogSpec,
     LibrarySourceSpec,
     LifecycleSpec,
     MetadataProviderSpec,
@@ -37,6 +38,7 @@ class PluginManager:
         self._pm.add_hookspecs(MetadataProviderSpec)
         self._pm.add_hookspecs(DownloadProviderSpec)
         self._pm.add_hookspecs(LibrarySourceSpec)
+        self._pm.add_hookspecs(LibraryCatalogSpec)
         self._pm.add_hookspecs(LifecycleSpec)
         self._pm.add_hookspecs(FrontendProviderSpec)
         self._pm.add_hookspecs(WidgetSpec)

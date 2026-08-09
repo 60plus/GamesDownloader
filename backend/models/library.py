@@ -48,6 +48,22 @@ class Library(Base):
     # "restricted" (only users on the UserLibraryAccess allowlist, plus admins).
     # Only meaningful for gog / custom / collection libraries.
     visibility: Mapped[str] = mapped_column(String(16), default="public")
+    # A storefront rather than a shelf: it lists what the server COULD hold, not
+    # what it does. GOG is one; a catalogue of GitHub-hosted ports is another.
+    # Themes group these under "Store" instead of alongside the real libraries.
+    is_store:   Mapped[bool] = mapped_column(Boolean, default=False)
+    # Whether games landing in this library also join the default Games library.
+    # Off means the library is a world of its own - its games stay out of the
+    # home rails, the genre tiles and the trailer pool. That is right for a shelf
+    # of emulators and wrong for a shelf of games, so it is a per-library choice
+    # rather than the blanket False that folder scans used to apply.
+    adds_to_default_library: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The plugin catalogue this store lists, when it is a plugin-backed store.
+    # A store library shows its catalog_entries rather than LibraryGames: the
+    # entries are the listing, and a download turns one into a game elsewhere
+    # (the Games library). NULL for GOG (its store is wired in code) and for
+    # every ordinary shelf.
+    catalog_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class LibraryMembership(Base):

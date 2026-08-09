@@ -141,12 +141,122 @@ def sanitize_title(title: str) -> str:
     return title or "Unknown_Game"
 
 
+def game_files_on_disk(title: str) -> str | None:
+    """Return a directory holding this game's files, or None when nothing is left.
+
+    Deliberately asks the disk rather than counting library rows: packaging
+    replaces a platform's loose installers with a single archive, and a packaged
+    game is still a downloaded game. Anything sitting under the game's folder
+    counts, archive or installer or bonus content alike.
+    """
+    base = os.path.join(GAMES_PATH, "GOG", sanitize_title(title))
+    for root, _dirs, files in os.walk(base):
+        if files:
+            return root
+    return None
+
+
+async def gog_download_incomplete(gog_id: int) -> bool:
+    """True while this game still has downloading left to do.
+
+    Files on disk are not proof of a finished download - a six-part installer
+    interrupted after part three leaves plenty of bytes behind, which is why the
+    downloaded flag cannot be decided by looking at the folder alone.
+
+    A job blocks while it is queued, downloading or paused, and while a job that
+    reported completion is still waiting on its checksum. A failed job blocks
+    too, unless a later attempt at the same file succeeded - otherwise one old
+    failure would hold the flag down forever, including after a clean retry. A
+    cancelled job never blocks: skipping a file is a decision, not a failure.
+    """
+    from handler.database.session import async_session_factory as _sf
+    from handler.gog.zip_packer import _PENDING_STATES
+    from sqlalchemy import select as _sel
+
+    async with _sf() as session:
+        jobs = list((await session.execute(
+            _sel(DownloadJob).where(DownloadJob.gog_id == gog_id)
+        )).scalars().all())
+
+    if not jobs:
+        return False  # nothing was ever queued, or the history was cleared
+
+    def _settled(job) -> bool:
+        return job.status == "completed" and not (
+            job.verify_checksum and job.checksum_status is None
+        )
+
+    done_files = {j.file_name for j in jobs if _settled(j)}
+    for j in jobs:
+        if j.status in _PENDING_STATES:
+            return True
+        if j.status == "completed" and not _settled(j):
+            return True
+        if j.status == "failed" and j.file_name not in done_files:
+            return True
+    return False
+
+
+async def refresh_downloaded_state(
+    *,
+    gog_id: int | None = None,
+    gog_game_id: int | None = None,
+    path_hint: str | None = None,
+) -> bool:
+    """Point a GOG game's downloaded flag at what is actually on disk.
+
+    The flag means "this game's files are on the server", so every path that
+    puts files there or takes them away should end by calling this instead of
+    setting the flag by hand - that is how games adopted from disk ended up
+    published but flagged as not downloaded.
+
+    Writes the canonical copy only. A product owned by several people has a row
+    each, but the storefront and the library both read the canonical one, and
+    marking a user's copy would keep it alive through a GOG disconnect, which
+    deletes exactly the rows that are not downloaded.
+
+    Accepts either id: `gog_id` is the GOG product id, `gog_game_id` the DB row.
+    `path_hint` supplies download_path when the caller knows precisely where the
+    file landed; otherwise a directory holding files is used.
+    """
+    from handler.database.session import async_session_factory as _sf
+    from handler.gog.gog_sync_handler import canonical_gog_stmt
+    from models.gog_game import GogGame
+
+    async with _sf() as session:
+        async with session.begin():
+            if gog_id is None:
+                if gog_game_id is None:
+                    return False
+                row = await session.get(GogGame, gog_game_id)
+                if row is None:
+                    return False
+                gog_id = row.gog_id
+            row = (await session.execute(canonical_gog_stmt(gog_id))).scalars().first()
+            if row is None:
+                return False
+
+            found = game_files_on_disk(row.title)
+            if found is None:
+                row.is_downloaded = False
+                row.download_path = None
+                return False
+            if await gog_download_incomplete(gog_id):
+                # Mid-download: the folder already holds bytes but the game is
+                # not there yet. Leave the flag as it stands so a re-download of
+                # extras cannot momentarily un-mark a game that is fully here.
+                return bool(row.is_downloaded)
+            row.is_downloaded = True
+            row.download_path = path_hint or found
+            return True
+
+
 async def _on_file_downloaded(job_id: int) -> None:
     """Post-completion hook: mark GogGame.is_downloaded and sync the file into LibraryGame."""
     try:
         from handler.database.session import async_session_factory as _sf
         from handler.database.library_handler import LibraryHandler
-        from models.gog_game import GogGame
+        from handler.gog.gog_sync_handler import canonical_gog_stmt
         from models.library_file import LibraryFile
         from sqlalchemy import select as _sel
 
@@ -172,17 +282,21 @@ async def _on_file_downloaded(job_id: int) -> None:
         ft_map = {"bonus": "extra", "extras": "extra", "extra": "extra", "dlc": "dlc"}
         file_type_tag = ft_map.get(file_type, "game")
 
-        # Update GogGame.is_downloaded
+        # Flag the game once the LAST file of this download is in - a game half
+        # fetched is not a downloaded game. refresh_downloaded_state holds back
+        # while any sibling job is still running, so on every file but the final
+        # one this is a no-op, and the packaging pass below always sees a game
+        # already marked downloaded.
         async with _sf() as session:
-            async with session.begin():
-                result = await session.execute(_sel(GogGame).where(GogGame.gog_id == gog_id_val))
-                gg = result.scalar_one_or_none()
-                if not gg:
-                    return
-                gg.is_downloaded = True
-                if dest_path:
-                    gg.download_path = os.path.dirname(dest_path)
-                gog_db_id = gg.id
+            result = await session.execute(canonical_gog_stmt(gog_id_val))
+            row = result.scalars().first()
+            if row is None:
+                return
+            gog_db_id = row.id
+        await refresh_downloaded_state(
+            gog_id=gog_id_val,
+            path_hint=os.path.dirname(dest_path) if dest_path else None,
+        )
 
         # Add file to LibraryGame if this game is already published
         if dest_path and os.path.exists(dest_path):
@@ -661,16 +775,21 @@ class GogDownloadHandler(DBBaseHandler):
                     expected_md5     = job.checksum
                     gog_id_val_for_owner = job.gog_id
 
-            # Look up the game's owner so we use their GOG token for download
+            # Look up the game's owner so we use their GOG token for download.
+            # Several people can own the same product, so this has to pick a row
+            # deterministically: unordered LIMIT 1 handed the job whichever copy
+            # the database returned, and downloading with an account that does
+            # not own the game fails the whole job. Canonical order prefers the
+            # admin copy and only falls through to a user token for products
+            # nobody but that user owns.
             _owner_user_id: int | None = None
             try:
-                from models.gog_game import GogGame as _GG
+                from handler.gog.gog_sync_handler import canonical_gog_stmt
                 async with async_session_factory() as session:
                     async with session.begin():
-                        row = await session.execute(
-                            select(_GG.owner_user_id).where(_GG.gog_id == gog_id_val_for_owner).limit(1)
-                        )
-                        _owner_user_id = row.scalar_one_or_none()
+                        row = await session.execute(canonical_gog_stmt(gog_id_val_for_owner))
+                        owner_row = row.scalars().first()
+                        _owner_user_id = owner_row.owner_user_id if owner_row else None
             except Exception:
                 pass  # fallback to admin token
 

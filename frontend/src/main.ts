@@ -25,6 +25,7 @@ import { useCollectionsStore } from "./stores/collections";
 import { useNotificationStore } from "./stores/notifications";
 import { LIBRARY_ICONS, LIBRARY_ICON_NAMES, libraryIconMarkup } from "./lib/libraryIcons";
 import libraryActions from "./lib/libraryActions";
+import catalogActions from "./lib/catalogActions";
 import dashboardActions from "./lib/dashboardActions";
 import client from "./services/api/client";
 
@@ -283,6 +284,15 @@ function createSafeSocketStore() {
   //   library.scan(librarySlug?)                       -> {created, updated, ...}
   //   library.addByUpload({library, title, file, os, fileType, onProgress}) -> game
   library: libraryActions,
+  // Plugin catalogues (stores). A theme brings its own shelf layout and calls
+  // these for the data, instead of hard-coding the endpoints the way the first
+  // storefront theme did - which is why the store worked in one theme only.
+  //   catalog.listEntries(catalogId)     -> entries on offer
+  //   catalog.getEntry(entryId)          -> one offer, with detail
+  //   catalog.download(entryId, {assets}) -> pull builds; the offer becomes a game
+  //   catalog.sync(catalogId)            -> re-read the catalogue (admin)
+  //   catalog.listCatalogs()             -> catalogues the plugins registered
+  catalog: catalogActions,
   // Role-aware Dashboard data (built-in core overview). dashboard.me() returns
   // the signed-in user's own stats; dashboard.admin() returns the server-wide
   // admin overview (admin only). A plugin theme can render its own dashboard

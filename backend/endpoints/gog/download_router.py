@@ -88,12 +88,11 @@ async def package_game_files(request: Request, gog_id: int):
     the resulting archives appear in the Games Library when done.
     """
     from handler.database.session import async_session_factory
+    from handler.gog.gog_sync_handler import canonical_gog_stmt
     from handler.gog.zip_packer import package_game, packable_platforms
-    from models.gog_game import GogGame
-    from sqlalchemy import select as _sel
 
     async with async_session_factory() as session:
-        result = await session.execute(_sel(GogGame).where(GogGame.gog_id == gog_id))
+        result = await session.execute(canonical_gog_stmt(gog_id))
         gg = result.scalars().first()
         if not gg:
             raise HTTPException(status_code=404, detail="Game not found")

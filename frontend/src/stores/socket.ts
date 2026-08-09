@@ -12,6 +12,7 @@ export const useSocketStore = defineStore("socket", () => {
   const downloadJobUpdate = ref<Record<string, unknown> | null>(null);
   const downloadJobCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const packagingCallbacks: Array<(data: Record<string, unknown>) => void> = [];
+  const urlUploadCallbacks: Array<(kind: string, data: Record<string, unknown>) => void> = [];
   const dashboardQueueCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const dashboardHealthCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   let liveSubs = 0; // dashboard-live consumers sharing this per-tab socket
@@ -24,6 +25,16 @@ export const useSocketStore = defineStore("socket", () => {
   function onPackaging(cb: (data: Record<string, unknown>) => void) {
     packagingCallbacks.push(cb);
     return () => { const i = packagingCallbacks.indexOf(cb); if (i >= 0) packagingCallbacks.splice(i, 1) }
+  }
+
+  // A URL/catalogue download reports over upload:url_progress|complete|error.
+  // The callback gets the kind ("progress"|"complete"|"error") plus the payload,
+  // so one subscription follows a job from start to finish (used by the download
+  // tray and the storefront detail page). Registered on the store so it survives
+  // token-refresh reconnects, like onDownloadJob/onPackaging.
+  function onUrlUpload(cb: (kind: string, data: Record<string, unknown>) => void) {
+    urlUploadCallbacks.push(cb);
+    return () => { const i = urlUploadCallbacks.indexOf(cb); if (i >= 0) urlUploadCallbacks.splice(i, 1) }
   }
 
   // One "dashboard live" subscription feeds both the transfer queue and the
@@ -91,6 +102,15 @@ export const useSocketStore = defineStore("socket", () => {
     socket.value.on("download:packaging", (data) => {
       packagingCallbacks.forEach(cb => cb(data));
     });
+    socket.value.on("upload:url_progress", (data) => {
+      urlUploadCallbacks.forEach(cb => cb("progress", data));
+    });
+    socket.value.on("upload:url_complete", (data) => {
+      urlUploadCallbacks.forEach(cb => cb("complete", data));
+    });
+    socket.value.on("upload:url_error", (data) => {
+      urlUploadCallbacks.forEach(cb => cb("error", data));
+    });
     socket.value.on("dashboard:queue", (data) => {
       dashboardQueueCallbacks.forEach(cb => cb(data));
     });
@@ -116,5 +136,5 @@ export const useSocketStore = defineStore("socket", () => {
     liveSubs = 0;
   }
 
-  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onDashboardQueue, onDashboardHealth, connect, disconnect, reconnectWithFreshToken };
+  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onUrlUpload, onDashboardQueue, onDashboardHealth, connect, disconnect, reconnectWithFreshToken };
 });

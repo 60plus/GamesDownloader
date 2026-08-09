@@ -35,6 +35,14 @@ class LibraryFile(Base):
     source:       Mapped[str]  = mapped_column(String(16), default="custom")  # gog|custom
     is_available: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Written by the packer when it bundles a platform's loose files into one
+    # archive, so "this game is packaged" is a fact on the row rather than a
+    # guess from the file name - a .zip somebody uploaded is a game, not a
+    # package. Per row, so a game packaged for Windows and left loose for Linux
+    # reads correctly. Nothing else writes it, and the row is deleted with the
+    # file it describes, so it cannot drift the way a hand-set flag does.
+    is_archive:   Mapped[bool] = mapped_column(Boolean, default=False)
+
     # ── Relationships ─────────────────────────────────────────────────────────
     game: Mapped[LibraryGame] = relationship("LibraryGame", back_populates="files")
 

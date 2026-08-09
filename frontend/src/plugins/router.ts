@@ -46,6 +46,16 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/views/games/GamesLibrary.vue"),
         meta: { title: "Library", fullBleed: true },
       },
+      // ── Plugin catalogue (store) entry detail ───────────────────────────
+      // A storefront listing (PC Ports and the like) that is not a game yet.
+      // The GOG model: this page is where you read what it is and pull a build,
+      // which turns the listing into a game in the Games library.
+      {
+        path: "lib/:slug/entry/:id",
+        name: "catalog-entry-detail",
+        component: () => import("@/views/games/CatalogEntryDetail.vue"),
+        meta: { title: "Store", fullBleed: true },
+      },
       // ── Collections (game groupings, grouped under container libraries) ──
       {
         path: "collections/:lib",

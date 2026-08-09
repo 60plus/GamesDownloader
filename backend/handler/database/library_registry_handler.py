@@ -19,8 +19,12 @@ ACL_KINDS = frozenset({"gog", "custom", "custom_lib", "collections"})
 # Built-in libraries seeded on first startup. Order/visuals mirror the previous
 # hard-coded home cards so the UI looks identical until an admin changes things.
 _BUILTINS = [
+    # GOG is a storefront: it lists everything the account owns, most of which is
+    # not on this server yet. Upgrades get the same flag from a one-shot backfill
+    # in main.py, keyed on the column being new.
     {"slug": "gog",       "name": "GOG",       "kind": "gog",       "icon": "/icons/gog.ico",
-     "color": "#7c3aed", "sort_order": 10, "is_builtin": True, "storage_folder": "GOG"},
+     "color": "#7c3aed", "sort_order": 10, "is_builtin": True, "storage_folder": "GOG",
+     "is_store": True},
     {"slug": "games",     "name": "Games",     "kind": "custom",    "icon": "/GDLOGO.png",
      "color": "#14b8a6", "sort_order": 20, "is_builtin": True, "storage_folder": "CUSTOM"},
     {"slug": "emulation", "name": "Emulation", "kind": "emulation", "icon": "/icons/gamepad.svg",
@@ -56,6 +60,8 @@ class LibraryRegistryHandler(DBBaseHandler):
         self, slug: str, *, enabled: bool | None = None,
         sort_order: int | None = None, name: str | None = None,
         color: str | None = None, icon: str | None = None,
+        is_store: bool | None = None,
+        adds_to_default_library: bool | None = None,
         session: AsyncSession = None,
     ) -> Library | None:
         lib = (await session.execute(
@@ -73,13 +79,52 @@ class LibraryRegistryHandler(DBBaseHandler):
             lib.color = color
         if icon is not None:
             lib.icon = icon
+        if is_store is not None:
+            lib.is_store = is_store
+        if adds_to_default_library is not None:
+            lib.adds_to_default_library = adds_to_default_library
         return lib
+
+    @begin_session
+    async def apply_default_library_flag(
+        self, library_id: int, value: bool, *, session: AsyncSession = None,
+    ) -> int:
+        """Push a library's "also in Games" choice onto the games already in it.
+
+        Only games whose sole home is this library are touched. A game that also
+        sits in another library may be in the default one for a reason that has
+        nothing to do with this switch, and silently yanking it out of the home
+        rails because an unrelated shelf was reconfigured would be worse than
+        doing nothing. Returns how many rows changed.
+        """
+        from models.library_game import LibraryGame
+
+        in_this_library = select(LibraryMembership.library_game_id).where(
+            LibraryMembership.library_id == library_id
+        ).scalar_subquery()
+        only_here = (
+            select(LibraryMembership.library_game_id)
+            .where(LibraryMembership.library_game_id.in_(in_this_library))
+            .group_by(LibraryMembership.library_game_id)
+            .having(func.count(LibraryMembership.id) == 1)
+        ).scalar_subquery()
+
+        result = await session.execute(
+            _update(LibraryGame)
+            .where(
+                LibraryGame.id.in_(only_here),
+                LibraryGame.in_default_library != value,
+            )
+            .values(in_default_library=value)
+        )
+        return int(result.rowcount or 0)
 
     @begin_session
     async def create_user_library(
         self, *, name: str, slug: str, kind: str = "custom_lib",
         color: str | None = None, icon: str | None = None,
-        storage_folder: str | None = None,
+        storage_folder: str | None = None, is_store: bool = False,
+        adds_to_default_library: bool = False,
         created_by: int | None = None, session: AsyncSession = None,
     ) -> Library:
         # kind "custom_lib" = a user-created separate library (e.g. "Kids games").
@@ -89,6 +134,7 @@ class LibraryRegistryHandler(DBBaseHandler):
             slug=slug, name=name, kind=kind, color=color, icon=icon,
             enabled=True, sort_order=int(max_order) + 10, is_builtin=False,
             storage_folder=storage_folder, created_by=created_by,
+            is_store=is_store, adds_to_default_library=adds_to_default_library,
         )
         session.add(lib)
         await session.flush()
@@ -96,10 +142,63 @@ class LibraryRegistryHandler(DBBaseHandler):
         return lib
 
     @begin_session
+    async def ensure_store_library(
+        self, catalog_id: str, *, slug: str, name: str,
+        color: str | None = None, icon: str | None = None,
+        storage_folder: str | None = None, session: AsyncSession = None,
+    ) -> Library:
+        """Create or update the store library a plugin catalogue lives in.
+
+        A store is a plugin's to create, never an admin's, so this is the only
+        path that turns on is_store for a plugin catalogue. Idempotent, keyed on
+        catalog_id: it will adopt an existing library that already carries the
+        slug (the demo shelf made by hand), and it never stamps over a name or
+        colour an admin has since changed.
+        """
+        lib = (await session.execute(
+            select(Library).where(Library.catalog_id == catalog_id)
+        )).scalars().first()
+        if lib is None:
+            lib = (await session.execute(
+                select(Library).where(Library.slug == slug)
+            )).scalars().first()
+
+        if lib is None:
+            max_order = (await session.execute(select(func.max(Library.sort_order)))).scalar() or 0
+            lib = Library(
+                slug=slug, name=name, kind="custom_lib", color=color, icon=icon,
+                enabled=True, sort_order=int(max_order) + 10, is_builtin=False,
+                storage_folder=storage_folder or name, is_store=True,
+                catalog_id=catalog_id,
+                # Hidden from users by default - a storefront of things not yet on
+                # the server is an admin surface. The admin opens it with the same
+                # visibility toggle every other library has.
+                visibility="restricted",
+            )
+            session.add(lib)
+            await session.flush()
+            await session.refresh(lib)
+            return lib
+
+        # Adopt / confirm: a store fed by this catalogue. Fill the on-disk folder
+        # only if it has none, so an admin's choice stands.
+        lib.is_store = True
+        lib.catalog_id = catalog_id
+        if not lib.storage_folder:
+            lib.storage_folder = storage_folder or name
+        await session.flush()
+        return lib
+
+    @begin_session
     async def delete_user_library(self, slug: str, *, session: AsyncSession = None) -> bool:
         from models.library_game import LibraryGame
         lib = (await session.execute(select(Library).where(Library.slug == slug))).scalars().first()
         if lib is None or lib.is_builtin:
+            return False
+        # A plugin store is the plugin's to own: it comes and goes with the
+        # plugin, never by hand. Deleting it here would orphan the catalogue and
+        # a re-sync would just recreate it.
+        if lib.catalog_id:
             return False
         # Games that belong to this library, captured BEFORE its membership rows
         # cascade away, so we can rescue any that would be left with no home.
@@ -209,6 +308,10 @@ class LibraryRegistryHandler(DBBaseHandler):
             return True
         if getattr(user, "role", None) == Role.ADMIN:
             return True
+        # A plugin store follows the same visibility rules as any other library:
+        # it is created restricted (so it is admin-only until an admin opens it),
+        # but the admin governs that with the normal toggle rather than a special
+        # case here. GOG's store is public and untouched.
         if (lib.visibility or "public") != "restricted":
             return True
         row = (await session.execute(

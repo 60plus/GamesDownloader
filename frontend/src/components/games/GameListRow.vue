@@ -110,7 +110,7 @@
         </div>
         <div v-if="game.source" class="list-qf-row">
           <span class="list-qf-label">{{ t('detail.source') }}</span>
-          <span class="list-qf-val" :class="game.source === 'gog' ? 'src-gog' : 'src-custom'">{{ String(game.source).toUpperCase() }}</span>
+          <span class="list-qf-val" :class="game.source === 'gog' ? 'src-gog' : 'src-custom'">{{ game.catalog_origin || String(game.source).toUpperCase() }}</span>
         </div>
       </div>
     </div>

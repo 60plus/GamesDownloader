@@ -20,11 +20,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from decorators.database import begin_session
 from handler.database.base_handler import DBBaseHandler
+from handler.gog.gog_sync_handler import canonical_gog_stmt
 from models.gog_game import GogGame
 
 logger = logging.getLogger(__name__)
 
-_GOG_V1 = "https://api.gog.com/products/{gog_id}?expand=description,screenshots,videos,downloads,system_requirements"
+# No system_requirements: it is not a valid expand on the v1 product API, and
+# GOG went from ignoring unknown expands to rejecting the whole request with a
+# 400. That took the entire v1 payload down with it - including downloads,
+# which is the only source of installers and bonus content - so every game
+# scraped after the change lost its download options while still being marked
+# scraped. Requirements come from the Steam fallback anyway.
+_GOG_V1 = "https://api.gog.com/products/{gog_id}?expand=description,screenshots,videos,downloads"
 _GOG_V2 = "https://api.gog.com/v2/games/{gog_id}"
 _IMG_BASE = "https://images.gog-statics.com/"
 _HDRS = {
@@ -68,7 +75,7 @@ class GogScrapeHandler(DBBaseHandler):
                               user-customised artwork/media so a manual metadata refresh
                               doesn't wipe custom covers/logos/screenshots set via the editor.
         """
-        result = await session.execute(select(GogGame).where(GogGame.gog_id == gog_id))
+        result = await session.execute(canonical_gog_stmt(gog_id))
         game = result.scalars().first()
         if not game:
             logger.warning("scrape_game: gog_id=%s not in DB", gog_id)
@@ -154,7 +161,11 @@ class GogScrapeHandler(DBBaseHandler):
                     logger.debug("HLTB error for '%s': %s", game.title, _e)
 
             await self._download_media(game, overwrite=force)
-            game.scraped = True
+            # Only call it scraped when v1 actually answered. v1 alone carries
+            # downloads (installers, bonus content), so marking a v1 failure as
+            # done left the row permanently without them - the unscraped pass
+            # skips it forever. This way a damaged row heals on the next run.
+            game.scraped = v1_ok
             game.scraped_at = datetime.now(tz=timezone.utc)
             logger.info("Scraped '%s' (gog_id=%s)", game.title, gog_id)
             return True
@@ -164,8 +175,16 @@ class GogScrapeHandler(DBBaseHandler):
 
     @begin_session
     async def _get_unscraped_ids(self, force: bool = False, *, session: AsyncSession = None) -> list[int]:
-        """Return gog_ids that need scraping (short-lived query session)."""
-        query = select(GogGame.gog_id) if force else select(GogGame.gog_id).where(GogGame.scraped == False)  # noqa: E712
+        """Return gog_ids that need scraping (short-lived query session).
+
+        Distinct, because a product owned by several people has a row each and
+        scrape_game writes to the canonical one. Without this the same game got
+        fetched once per owner, and the copies that never receive the metadata
+        stayed unscraped - so every run repeated the same work forever.
+        """
+        query = select(GogGame.gog_id).distinct()
+        if not force:
+            query = query.where(GogGame.scraped == False)  # noqa: E712
         result = await session.execute(query)
         return list(result.scalars().all())
 
@@ -802,7 +821,7 @@ class GogScrapeHandler(DBBaseHandler):
     @begin_session
     async def clear_game_metadata(self, gog_id: int, *, session: AsyncSession = None) -> bool:
         """Reset all scraped metadata fields for a single game. Returns True if found."""
-        result = await session.execute(select(GogGame).where(GogGame.gog_id == gog_id))
+        result = await session.execute(canonical_gog_stmt(gog_id))
         game = result.scalars().first()
         if not game:
             return False

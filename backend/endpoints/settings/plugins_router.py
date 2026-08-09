@@ -17,6 +17,28 @@ from pydantic import BaseModel
 from config import GD_VERSION, PLUGINS_PATH
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope
+# Imported at module level on purpose: it pulls in models.catalog_entry, and a
+# model that is not imported before startup is missing from Base.metadata, so
+# create_all never makes its table. An import inside the endpoint looks tidier
+# and silently ships a feature whose table does not exist.
+from handler.library.catalog_sync_handler import (
+    DownloadInProgress,
+    SyncInProgress,
+    count_entries,
+    downloaded_entry_game_ids,
+    entry_to_dict,
+    get_entry,
+    list_catalogs,
+    list_entries,
+    queue_entry_downloads,
+    store_catalog_media,
+    sync_catalog,
+)
+from handler.library.catalog_meta_handler import (
+    MetaScrapeInProgress,
+    scrape_catalog,
+    set_search_term,
+)
 from handler.config.config_handler import config_handler
 from handler.database.session import async_session_factory
 from handler.plugins.install_handler import (
@@ -106,10 +128,47 @@ async def _delete_db_config(plugin_id: str) -> bool:
             return True
 
 
-def _merge_plugin_info(manifest: dict, db_row: PluginConfig | None) -> dict:
+def _redact_config(
+    config: dict | None,
+    config_schema: dict | None,
+    is_admin: bool,
+) -> dict | None:
+    """Withhold secret config values from readers who cannot manage plugins.
+
+    Plugin config is stored cleartext and routinely holds credentials - the PC
+    Ports catalogue keeps a GitHub token here. PLUGINS_READ is a base-user scope
+    (themes and the translate button both need the plugin list), so a plain user
+    reaching GET /api/plugins or /{id}/config must not receive those secrets;
+    only PLUGINS_WRITE (admin) sees the real values. Fields the schema types as
+    "password" are dropped. A plugin with no schema is redacted whole - we can't
+    tell which of its values are safe, so we withhold all of them.
+    """
+    if is_admin or config is None:
+        return config
+    if not isinstance(config, dict) or not isinstance(config_schema, dict):
+        return None
+    secret_keys = {
+        key
+        for key, spec in config_schema.items()
+        if isinstance(spec, dict) and spec.get("type") == "password"
+    }
+    if not secret_keys:
+        return config
+    return {k: v for k, v in config.items() if k not in secret_keys}
+
+
+def _merge_plugin_info(
+    manifest: dict, db_row: PluginConfig | None, is_admin: bool
+) -> dict:
     """Merge filesystem manifest with DB state into a PluginInfo-compatible dict."""
     config = None
-    config_schema = None
+
+    # The schema is static - it is declared in plugin.json - so it comes from the
+    # manifest, and the DB row only holds the saved VALUES. Reading the schema
+    # from the DB meant a plugin that was dropped in by hand (never through the
+    # install flow, so no DB row) showed no config gear at all, and its settings
+    # - the GitHub token a catalogue sync needs - were unreachable.
+    config_schema = manifest.get("config_schema")
 
     if db_row:
         if db_row.config_json:
@@ -117,11 +176,13 @@ def _merge_plugin_info(manifest: dict, db_row: PluginConfig | None) -> dict:
                 config = json.loads(db_row.config_json)
             except json.JSONDecodeError:
                 config = None
-        if db_row.config_schema_json:
+        if config_schema is None and db_row.config_schema_json:
             try:
                 config_schema = json.loads(db_row.config_schema_json)
             except json.JSONDecodeError:
                 config_schema = None
+
+    config = _redact_config(config, config_schema, is_admin)
 
     return {
         "plugin_id": manifest.get("id", ""),
@@ -146,6 +207,7 @@ def _merge_plugin_info(manifest: dict, db_row: PluginConfig | None) -> dict:
 )
 async def list_plugins(request: Request) -> list[dict]:
     """List all installed plugins (filesystem scan merged with DB state)."""
+    is_admin = Scope.PLUGINS_WRITE in getattr(request.state, "scopes", set())
     manifests = list_installed_plugins()
 
     # Bulk-load DB rows
@@ -159,7 +221,7 @@ async def list_plugins(request: Request) -> list[dict]:
             for row in result.scalars().all():
                 db_map[row.plugin_id] = row
 
-    return [_merge_plugin_info(m, db_map.get(m["id"])) for m in manifests]
+    return [_merge_plugin_info(m, db_map.get(m["id"]), is_admin) for m in manifests]
 
 
 @protected_route(plugins_router.post, "/install", scopes=[Scope.PLUGINS_WRITE])
@@ -281,6 +343,9 @@ async def get_plugin_config(request: Request, plugin_id: str) -> dict:
             config_schema = json.loads(db_row.config_schema_json)
         except json.JSONDecodeError:
             config_schema = None
+
+    is_admin = Scope.PLUGINS_WRITE in getattr(request.state, "scopes", set())
+    config = _redact_config(config, config_schema, is_admin)
 
     return {
         "plugin_id": db_row.plugin_id,
@@ -651,7 +716,9 @@ async def install_from_store(request: Request) -> dict:
     except Exception as exc:
         logger.warning("Plugin %s installed but failed to load: %s", plugin_id, exc)
 
-    return {"ok": True, "plugin": _merge_plugin_info(manifest, await _get_db_config(plugin_id))}
+    # This route is PLUGINS_WRITE (admin-only), so the installer always sees the
+    # full config - is_admin=True. _merge_plugin_info now requires the flag.
+    return {"ok": True, "plugin": _merge_plugin_info(manifest, await _get_db_config(plugin_id), True)}
 
 
 # ── Frontend theme/CSS hooks ─────────────────────────────────────────────────
@@ -845,6 +912,465 @@ async def scan_library_source(request: Request, source_id: str, body: _LibrarySo
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Source error: {e}")
     return {"discovered": list(discovered)}
+
+
+# ── Plugin catalogues (library_catalog_* hooks) ──────────────────────────────
+# Unlike a library source, a catalogue IS adopted here: core creates the rows,
+# fetches the artwork through the SSRF guard and stores it locally. The plugin
+# only describes what is on offer.
+
+@protected_route(plugins_router.get, "/library/catalogs", scopes=[Scope.LIBRARY_READ])
+async def list_library_catalogs(request: Request) -> list:
+    """Catalogues offered by loaded plugins (library_catalog_id/name)."""
+    return list_catalogs()
+
+
+class _CatalogSync(BaseModel):
+    # Kept for backward compatibility and ignored: the catalogue owns its store
+    # library now, created on first sync, so the caller does not name one.
+    library_slug: str | None = None
+
+
+@protected_route(plugins_router.post, "/library/catalogs/{catalog_id}/sync",
+                 scopes=[Scope.LIBRARY_ADMIN])
+async def sync_library_catalog(request: Request, catalog_id: str, body: _CatalogSync | None = None) -> dict:
+    """Fetch a plugin catalogue into its store library, and report what happened.
+
+    Slow by nature - it is one network round trip per entry on the plugin's side
+    - so callers should treat it as a job, not a click that returns instantly.
+    """
+    try:
+        return await sync_catalog(catalog_id)
+    except SyncInProgress as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Catalogue sync failed for %s", catalog_id)
+        raise HTTPException(status_code=502, detail=f"Catalogue error: {e}")
+
+
+@protected_route(plugins_router.post, "/library/catalogs/{catalog_id}/clear-metadata",
+                 scopes=[Scope.LIBRARY_ADMIN])
+async def clear_catalog_metadata(request: Request, catalog_id: str) -> dict:
+    """Wipe every listing's scraped metadata in one store, the store-side twin of
+    the GOG library's 'clear all metadata'.
+
+    Clears exactly what the metadata pass derives - the same set a single-entry
+    correction clears - and reopens each row for the next pass. The catalogue's
+    own facts (title, subtitle, category, the offered builds) are the plugin's,
+    not the scrape's, so they stay. Downloaded games live in the Games library,
+    a different library, and are left alone; a re-scrape here pushes fresh data
+    onto them the usual way.
+    """
+    from handler.library.catalog_meta_handler import _clear_scraped_fields
+    from models.catalog_entry import CatalogEntry
+
+    async with async_session_factory() as s:
+        async with s.begin():
+            rows = (await s.execute(
+                select(CatalogEntry).where(CatalogEntry.catalog_id == catalog_id)
+            )).scalars().all()
+            for r in rows:
+                _clear_scraped_fields(r)
+                r.meta_scraped_at = None
+                r.meta_source = None
+                r.meta_matched_title = None
+                r.meta_confidence = None
+    return {"cleared": len(rows)}
+
+
+async def _user_can_browse_catalog(request: Request, catalog_id: str) -> bool:
+    """Whether the requester may see a catalogue, by its store's visibility.
+
+    The store library a catalogue lives in is created restricted - admin-only
+    until an admin opens it - and the Games listing already hides a restricted
+    library from anyone not allowlisted. The catalogue's own read and download
+    routes have to honour the same rule, or the shelf is private while the
+    catalogue behind it is not. Admins bypass. No store row yet (before the first
+    sync) leaves nothing to gate.
+    """
+    from handler.database.library_registry_handler import library_registry_handler
+    from models.library import Library
+
+    user = getattr(request.state, "user", None)
+    async with async_session_factory() as session:
+        store = (await session.execute(
+            select(Library).where(
+                Library.catalog_id == catalog_id, Library.is_store.is_(True)
+            )
+        )).scalars().first()
+    if store is None:
+        return True
+    return await library_registry_handler.user_can_access(user, store)
+
+
+@protected_route(plugins_router.get, "/library/catalogs/{catalog_id}/entries",
+                 scopes=[Scope.LIBRARY_READ])
+async def list_catalog_entries(request: Request, catalog_id: str) -> list:
+    """Everything the last sync recorded, including what it could not offer."""
+    # A restricted store returns empty here just as its library listing does.
+    if not await _user_can_browse_catalog(request, catalog_id):
+        return []
+    return await list_entries(catalog_id)
+
+
+@protected_route(plugins_router.get, "/library/catalogs/{catalog_id}/entries/count",
+                 scopes=[Scope.LIBRARY_READ])
+async def count_catalog_entries(request: Request, catalog_id: str) -> dict:
+    """Just how many entries a store holds, for a card that only shows the number.
+
+    The home page was pulling the whole catalogue - every entry's description,
+    screenshots and assets - only to read its length. This returns the count
+    alone.
+    """
+    if not await _user_can_browse_catalog(request, catalog_id):
+        return {"count": 0}
+    return {"count": await count_entries(catalog_id)}
+
+
+class _CatalogDownload(BaseModel):
+    # Omitted means every build this entry offers. Naming them is how a caller
+    # takes just the Windows one instead of all four platforms.
+    assets: list[str] | None = None
+
+
+@protected_route(plugins_router.get, "/library/catalog-entries/{entry_id}",
+                 scopes=[Scope.LIBRARY_READ])
+async def get_catalog_entry(request: Request, entry_id: int) -> dict:
+    """One catalogue entry, dressed for the storefront detail page.
+
+    The detail view (GOG-style) reads this: the scraped presentation for the
+    hero and facts, the builds on offer, and library_game_id so a downloaded
+    listing can link straight to its game in the Games library.
+    """
+    from config import GAMES_PATH
+    from endpoints.library.upload_router import _sanitize
+    from models.library import Library
+    from models.library_game import LibraryGame
+    import os as _os
+
+    row = await get_entry(entry_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No catalogue entry {entry_id}")
+    # A restricted store hides its entries from anyone not allowlisted, the same
+    # 404 the library detail gives - the catalogue detail is not a way around it.
+    if not await _user_can_browse_catalog(request, row.catalog_id):
+        raise HTTPException(status_code=404, detail=f"No catalogue entry {entry_id}")
+    # Where a download would land, so the picker can show it the way the GOG
+    # dialog shows its save location instead of leaving it a mystery. It goes
+    # through the same sanitiser the download itself uses: a title with a colon
+    # or an accent in it lands in a folder that does not spell the title, and a
+    # save location that names a directory the server never creates is worse
+    # than none at all.
+    async with async_session_factory() as session:
+        downloaded = await downloaded_entry_game_ids(session, [row])
+        store = (await session.execute(
+            select(Library).where(
+                Library.catalog_id == row.catalog_id, Library.is_store.is_(True)
+            )
+        )).scalars().first()
+        # Once downloaded, the folder follows the game's title, not the entry's.
+        # The two part company when the listing is renamed after the fact, and
+        # the next build goes where the game already is.
+        title = row.title
+        if row.library_game_id:
+            game_title = (await session.execute(
+                select(LibraryGame.title).where(LibraryGame.id == row.library_game_id)
+            )).scalars().first()
+            if game_title:
+                title = game_title
+    data = entry_to_dict(row, downloaded)
+    # save_root is an absolute server path, and only whoever can download needs
+    # it (the picker shows where files will land). Withhold it from a plain
+    # reader, who has no download action and no reason to see the disk layout.
+    if Scope.LIBRARY_UPLOAD in getattr(request.state, "scopes", set()):
+        folder = (store.storage_folder if store and store.storage_folder else "CUSTOM")
+        data["save_root"] = _os.path.join(GAMES_PATH, folder, _sanitize(title)).replace("\\", "/")
+    return data
+
+
+@protected_route(plugins_router.post, "/library/catalog-entries/{entry_id}/download",
+                 scopes=[Scope.LIBRARY_UPLOAD])
+async def download_catalog_entry(request: Request, entry_id: int, body: _CatalogDownload) -> dict:
+    """Pull an entry's builds onto the server, one download job per build."""
+    from endpoints.library.upload_router import _max_upload_bytes
+    user = getattr(request.state, "user", None)
+    # A restricted store is admin-only until opened: an uploader who is not on it
+    # must not download from it, matching what its library listing already allows.
+    row = await get_entry(entry_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No catalogue entry {entry_id}")
+    if not await _user_can_browse_catalog(request, row.catalog_id):
+        raise HTTPException(status_code=404, detail=f"No catalogue entry {entry_id}")
+    try:
+        return await queue_entry_downloads(
+            entry_id, body.assets,
+            actor=(user.username if user else None),
+            max_bytes=await _max_upload_bytes(user),
+        )
+    except DownloadInProgress as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class _CatalogScrape(BaseModel):
+    # A catalogue of hundreds is hundreds of third-party calls; one run is
+    # bounded so an admin can see it work without waiting for all of it.
+    limit: int | None = None
+    # False re-scrapes entries a previous run already looked at. On by default
+    # because the common case is filling in what is still blank.
+    only_missing: bool = True
+
+
+@protected_route(plugins_router.post, "/library/catalogs/{catalog_id}/scrape-metadata",
+                 scopes=[Scope.LIBRARY_ADMIN])
+async def scrape_catalog_metadata(request: Request, catalog_id: str, body: _CatalogScrape) -> dict:
+    """Match this catalogue's entries to real games and fill in their metadata.
+
+    Separate from sync on purpose: it is two rate-limited searches per entry, so
+    it is a job to be started and left, not part of the reconcile. Resumable -
+    a second run picks up where a timeout left off.
+    """
+    try:
+        return await scrape_catalog(
+            catalog_id, limit=body.limit, only_missing=body.only_missing,
+        )
+    except MetaScrapeInProgress as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Catalogue metadata pass failed for %s", catalog_id)
+        raise HTTPException(status_code=502, detail=f"Metadata error: {e}")
+
+
+@protected_route(plugins_router.post, "/library/catalog-entries/{entry_id}/scrape-metadata",
+                 scopes=[Scope.LIBRARY_ADMIN])
+async def scrape_one_entry(request: Request, entry_id: int) -> dict:
+    """Re-run the metadata match for a single entry.
+
+    The escape hatch for a wrong guess: fix the search term, then re-scrape just
+    this one instead of the whole catalogue.
+    """
+    from handler.database.session import async_session_factory
+    from models.catalog_entry import CatalogEntry
+
+    async with async_session_factory() as s:
+        row = (await s.execute(
+            select(CatalogEntry).where(CatalogEntry.id == entry_id)
+        )).scalars().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"No catalogue entry {entry_id}")
+        catalog_id = row.catalog_id
+    try:
+        # A single-entry re-scrape is an explicit redo, so it clears what the
+        # last match wrote and derives fresh - not a blank-filling top-up.
+        return await scrape_catalog(
+            catalog_id, only_missing=False, entry_ids=[entry_id], force_refresh=True,
+        )
+    except MetaScrapeInProgress as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class _SearchTerm(BaseModel):
+    # None clears the override and lets the parsed title drive the search again.
+    term: str | None = None
+
+
+@protected_route(plugins_router.put, "/library/catalog-entries/{entry_id}/search-term",
+                 scopes=[Scope.LIBRARY_ADMIN])
+async def set_entry_search_term(request: Request, entry_id: int, body: _SearchTerm) -> dict:
+    """Give one entry its own search phrase for the next metadata pass.
+
+    For the entries no database lists under the name the catalogue used. Setting
+    it also clears the entry's scraped mark, so the next pass acts on the new
+    phrase rather than skipping the entry as already done.
+    """
+    try:
+        await set_search_term(entry_id, body.term)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, "entry_id": entry_id, "term": body.term}
+
+
+# ── Catalogue entry editor (the GOG-style Edit Metadata panel) ───────────────
+# A catalogue entry is not a game, so the library game's edit endpoints do not
+# fit it. These three mirror what that panel needs - save fields, search art,
+# search sources - pointed at the catalog_entries row instead, so the panel can
+# be reused as-is with apiPrefix "/plugins/library/catalog-entries".
+
+# Only these columns are an admin's to set from the editor; the sync owns the
+# rest (external_id, assets, availability, the meta_* match record).
+_CATALOG_EDIT_STR = {
+    "title", "subtitle", "description", "developer", "publisher",
+    "release_date", "category",
+}
+_CATALOG_EDIT_JSON = {"genres", "meta_ratings", "languages", "requirements"}
+_CATALOG_EDIT_NUM = {"rating", "hltb_main_s", "hltb_complete_s"}
+_CATALOG_ART = {
+    "cover_path": "entry", "background_path": "hero", "logo_path": "logo",
+    "icon_path": "icon",
+}
+_CATALOG_COVER_DIR = "catalog-covers"
+
+
+def _is_external_url(v) -> bool:
+    return isinstance(v, str) and v.startswith(("http://", "https://"))
+
+
+def _needs_fetch(v) -> bool:
+    """Values the editor hands back that must be downloaded to local storage: an
+    external http(s) URL, or a /api/media/proxy token for a picked ScreenScraper
+    image (store_catalog_media resolves the token to the real credentialed URL
+    server-side). A value already local (a /resources path) is left as-is, and
+    must never be re-fetched - and a proxy token must never be persisted, since
+    it would serve the credentialed URL live on every page load."""
+    from utils.media_proxy import PROXY_PREFIX
+    return _is_external_url(v) or (isinstance(v, str) and v.startswith(PROXY_PREFIX))
+
+
+@protected_route(plugins_router.patch, "/library/catalog-entries/{entry_id}",
+                 scopes=[Scope.LIBRARY_ADMIN])
+async def update_catalog_entry(request: Request, entry_id: int, body: dict) -> dict:
+    """Save an admin's edits to one catalogue entry.
+
+    External artwork URLs the editor hands back are downloaded to local storage
+    first (the house rule: no page hot-links a CDN), exactly as the library game
+    editor does, so a picked cover ends up served locally like a scraped one.
+    """
+    from models.catalog_entry import CatalogEntry
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            row = (await session.execute(
+                select(CatalogEntry).where(CatalogEntry.id == entry_id)
+            )).scalars().first()
+            if row is None:
+                raise HTTPException(status_code=404, detail=f"No catalogue entry {entry_id}")
+
+            data = dict(body or {})
+            # The panel names art as *_url; the entry stores *_path. Map, then
+            # download anything external so it is served locally.
+            for path_field, stem in _CATALOG_ART.items():
+                url_field = path_field.replace("_path", "_url")
+                val = data.pop(url_field, data.get(path_field, ...))
+                if val is ...:
+                    continue
+                data.pop(path_field, None)
+                if val and _needs_fetch(val):
+                    stored = await store_catalog_media(
+                        _CATALOG_COVER_DIR, f"{stem}-{entry_id}", val, max_bytes=8 * 1024 * 1024,
+                    )
+                    setattr(row, path_field, stored or getattr(row, path_field))
+                else:
+                    setattr(row, path_field, val or None)
+
+            # Screenshots: a list mixing local paths (keep) and external URLs
+            # (download). Anything already local stays put.
+            if "screenshots" in data:
+                shots = data.pop("screenshots") or []
+                stored_shots = []
+                for i, url in enumerate(shots if isinstance(shots, list) else []):
+                    if _needs_fetch(url):
+                        p = await store_catalog_media(
+                            _CATALOG_COVER_DIR, f"shot-{entry_id}-{i}", url,
+                            max_bytes=8 * 1024 * 1024,
+                        )
+                        if p:
+                            stored_shots.append(p)
+                    elif isinstance(url, str) and url:
+                        stored_shots.append(url)
+                row.screenshots = stored_shots or None
+
+            for field, value in data.items():
+                if field in _CATALOG_EDIT_STR:
+                    setattr(row, field, (str(value).strip() or None) if value is not None else None)
+                elif field in _CATALOG_EDIT_JSON:
+                    setattr(row, field, value or None)
+                elif field in _CATALOG_EDIT_NUM:
+                    setattr(row, field, value if value not in ("", None) else None)
+
+            # The store is the source: an edit here is what the game shows too,
+            # once this listing has been downloaded. Inside the transaction, so
+            # a failed push takes the edit down with it rather than leaving the
+            # two halves disagreeing.
+            from handler.library.catalog_sync_handler import push_entry_to_game
+            await push_entry_to_game(session, row)
+
+        await session.refresh(row)
+        downloaded = await downloaded_entry_game_ids(session, [row])
+        return entry_to_dict(row, downloaded)
+
+
+@protected_route(plugins_router.get, "/library/catalog-entries/{entry_id}/covers",
+                 scopes=[Scope.LIBRARY_ADMIN])
+async def catalog_entry_covers(
+    request: Request, entry_id: int,
+    source: str = Query(default="steamgriddb"),
+    q: str = Query(default=""),
+    asset_type: str = Query(default="grids"),
+    animated: str = Query(default="any"),
+) -> list:
+    """Cover/hero/logo/icon options for the entry's title, for the editor's art tabs."""
+    from handler.metadata.external_art import search_cover_options
+
+    row = await get_entry(entry_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No catalogue entry {entry_id}")
+    term = q or row.meta_matched_title or row.title
+    return await search_cover_options(source, term, asset_type, animated, gog_game_id=None)
+
+
+@protected_route(plugins_router.get, "/library/catalog-entries/{entry_id}/screenshots",
+                 scopes=[Scope.LIBRARY_ADMIN])
+async def catalog_entry_screenshots(
+    request: Request, entry_id: int,
+    source: str = Query(default="all"),
+    q: str = Query(default=""),
+) -> list:
+    """Screenshot options for the entry's title, for the editor's Screenshots tab.
+
+    The editor calls the same {prefix}/{id}/screenshots path a library game does;
+    without this route it 404'd and the tab showed empty tiles. A listing is not
+    a GOG game, so gog_game_id is None and the GOG branch searches by title.
+    """
+    from endpoints.library.library_router import search_screenshot_options
+
+    row = await get_entry(entry_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No catalogue entry {entry_id}")
+    term = q or row.meta_matched_title or row.title
+    # Include ScreenScraper here (catalogue editor only): PC Ports are ports of
+    # console games, which SS indexes well, and the catalogue save path resolves
+    # the proxy tokens SS results use.
+    return await search_screenshot_options(
+        term, source, gog_game_id=None, include_screenscraper=True,
+    )
+
+
+@protected_route(plugins_router.get, "/library/catalog-entries/{entry_id}/meta-sources",
+                 scopes=[Scope.LIBRARY_ADMIN])
+async def catalog_entry_meta_sources(
+    request: Request, entry_id: int,
+    source: str = Query(default="rawg"),
+    q: str = Query(default=""),
+) -> dict:
+    """Fetch metadata from an external source for the editor's search buttons."""
+    from handler.metadata.meta_sources import fetch_meta_source
+
+    row = await get_entry(entry_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No catalogue entry {entry_id}")
+    term = q or row.meta_matched_title or row.title
+    return await fetch_meta_source(source, search_term=term, q=q, gog_id=None)
 
 
 @plugins_router.get("/frontend/js")

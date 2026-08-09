@@ -21,7 +21,11 @@ from config import GD_VERSION, PLUGINS_PATH
 logger = logging.getLogger(__name__)
 
 REQUIRED_MANIFEST_FIELDS = ["id", "name", "version", "author", "type", "entry"]
-ALLOWED_TYPES = ["metadata", "download", "library", "theme", "widget", "lifecycle"]
+# "catalog" is a storefront plugin (library_catalog_* hooks): it lists games a
+# server could download. Without it here read_manifest rejects the manifest and
+# the plugin, though it loads and works, never shows in Settings > Plugins - so
+# its config (the GitHub token a sync needs) is unreachable.
+ALLOWED_TYPES = ["metadata", "download", "library", "catalog", "theme", "widget", "lifecycle"]
 
 
 def _version_tuple(v: str) -> tuple[int, ...]:

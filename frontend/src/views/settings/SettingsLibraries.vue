@@ -50,7 +50,7 @@
           </button>
 
           <button
-            v-if="!lib.is_builtin"
+            v-if="!lib.is_builtin && !lib.catalog_id"
             class="ls-del"
             :title="t('libraries.delete')"
             @click="removeLib(lib)"
@@ -82,6 +82,21 @@
           </div>
           <div class="ls-ed-label">{{ t('libraries.icon') }}</div>
           <LibraryIconPicker v-model="editForm.icon" :color="editForm.color" @hover="onIconHover" />
+
+          <!-- A store is a plugin's to create and manage, never a hand-made
+               shelf, so there is no store toggle here. -->
+          <template v-if="defaultFeedEligible(lib)">
+            <div class="ls-ed-label">{{ t('libraries.behaviour') }}</div>
+            <label
+              v-if="defaultFeedEligible(lib)"
+              class="ls-folder"
+              @mouseenter="setHint(t('libraries.adds_to_default'), t('libraries.adds_to_default_hint'))"
+              @mouseleave="clearHint()"
+            >
+              <input type="checkbox" v-model="editForm.adds_to_default_library" />
+              <span>{{ t('libraries.adds_to_default') }}</span>
+            </label>
+          </template>
 
           <template v-if="accessEligible(lib)">
             <div class="ls-ed-label">{{ t('libraries.access') }}</div>
@@ -147,6 +162,13 @@
       <label class="ls-folder" @mouseenter="setHint(t('libraries.new_is_collection'), t('libraries.new_is_collection_hint'))" @mouseleave="clearHint()">
         <input type="checkbox" v-model="newIsCollection" @change="onNewCollectionToggle" />
         <span>{{ t('libraries.new_is_collection') }}</span>
+      </label>
+      <!-- No store toggle: a store is created by a plugin catalogue, not by
+           hand. This describes how the library behaves once it holds something,
+           which a container of collections never does. -->
+      <label v-if="!newIsCollection" class="ls-folder" @mouseenter="setHint(t('libraries.adds_to_default'), t('libraries.adds_to_default_hint'))" @mouseleave="clearHint()">
+        <input type="checkbox" v-model="newAddsToDefault" />
+        <span>{{ t('libraries.adds_to_default') }}</span>
       </label>
       <label class="ls-upload-btn ls-upload-btn--inline" @mouseenter="setHint(t('libraries.icon_upload'), t('libraries.icon_upload_hint'))" @mouseleave="clearHint()">
         <input type="file" accept="image/png,image/jpeg,image/webp" hidden @change="onNewFile($event)" />
@@ -337,6 +359,7 @@ const newName = ref('')
 const newColor = ref('#7c3aed')
 const newFolder = ref(false)
 const newIsCollection = ref(false)
+const newAddsToDefault = ref(false)
 const newIcon = ref('builtin:folder')
 const newIconFile = ref<File | null>(null)
 const newFileName = ref('')
@@ -345,7 +368,10 @@ const createError = ref('')
 
 // Inline editor (per-row): colour + icon for any library, name for collections.
 const editingSlug = ref('')
-const editForm = ref<{ name: string; color: string; icon: string }>({ name: '', color: '#7c3aed', icon: 'builtin:folder' })
+const editForm = ref<{
+  name: string; color: string; icon: string
+  adds_to_default_library: boolean
+}>({ name: '', color: '#7c3aed', icon: 'builtin:folder', adds_to_default_library: false })
 const editFile = ref<File | null>(null)
 const editFileName = ref('')
 const editError = ref('')
@@ -358,6 +384,12 @@ const editAccess = ref<{ visibility: string; userIds: number[] }>({ visibility: 
 
 function accessEligible(lib: LibraryInfo): boolean {
   return ACL_KINDS.includes(lib.kind)
+}
+
+// Only a membership-driven user library can feed the default one - "games" IS
+// the default library, and the ROM shelves do not use membership at all.
+function defaultFeedEligible(lib: LibraryInfo): boolean {
+  return lib.kind === 'custom_lib'
 }
 function toggleAccessUser(id: number) {
   const a = editAccess.value.userIds
@@ -380,7 +412,10 @@ function onNewFile(e: Event) {
 
 async function startEdit(lib: LibraryInfo) {
   editingSlug.value = lib.slug
-  editForm.value = { name: lib.name, color: lib.color || '#7c3aed', icon: lib.icon || 'builtin:folder' }
+  editForm.value = {
+    name: lib.name, color: lib.color || '#7c3aed', icon: lib.icon || 'builtin:folder',
+    adds_to_default_library: !!lib.adds_to_default_library,
+  }
   editFile.value = null; editFileName.value = ''; editError.value = ''
   editAccess.value = { visibility: 'public', userIds: [] }
   if (accessEligible(lib)) {
@@ -416,6 +451,9 @@ async function saveEdit(lib: LibraryInfo) {
   try {
     const body: Record<string, unknown> = { color: editForm.value.color, icon: editForm.value.icon }
     if (!lib.is_builtin) body.name = editForm.value.name
+    if (defaultFeedEligible(lib)) {
+      body.adds_to_default_library = editForm.value.adds_to_default_library
+    }
     await client.patch(`/libraries/${lib.slug}`, body)
     if (accessEligible(lib)) {
       await client.put(`/libraries/${lib.slug}/access`, {
@@ -497,12 +535,14 @@ async function create() {
     } else {
       const { data } = await client.post('/libraries', {
         name, color: newColor.value, icon: newIcon.value, create_folder: newFolder.value,
+        adds_to_default_library: newAddsToDefault.value,
       })
       if (newIconFile.value && data?.slug) await uploadIcon(data.slug, newIconFile.value)
     }
     newName.value = ''
     newFolder.value = false
     newIsCollection.value = false
+    newAddsToDefault.value = false
     newIcon.value = 'builtin:folder'
     newIconFile.value = null
     newFileName.value = ''

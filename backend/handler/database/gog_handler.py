@@ -17,9 +17,17 @@ class GogDbHandler(DBBaseHandler):
 
     @begin_session
     async def get_by_gog_id(self, gog_id: int, *, session: AsyncSession = None) -> GogGame | None:
-        stmt = select(GogGame).where(GogGame.gog_id == gog_id)
+        # One product can hold several rows - the admin copy plus one per user
+        # who linked their own GOG account - so this orders the admin copy first
+        # instead of demanding a single row. See canonical_gog_stmt in
+        # handler/gog/gog_sync_handler.py, which is the shared version of this.
+        stmt = (
+            select(GogGame)
+            .where(GogGame.gog_id == gog_id)
+            .order_by(GogGame.owner_user_id.is_(None).desc(), GogGame.id)
+        )
         result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     @begin_session
     async def search(
@@ -41,10 +49,16 @@ class GogDbHandler(DBBaseHandler):
 
     @begin_session
     async def upsert(self, gog_id: int, data: dict, *, session: AsyncSession = None) -> GogGame:
+        # Currently unused - GogSyncHandler._upsert_game is the live path and it
+        # matches on (gog_id, owner_user_id). This one is owner-blind, so it must
+        # not be wired up as-is: it would overwrite one owner's row from another
+        # owner's sync. Ordering only keeps it from raising on multi-owner games.
         existing = await session.execute(
-            select(GogGame).where(GogGame.gog_id == gog_id)
+            select(GogGame)
+            .where(GogGame.gog_id == gog_id)
+            .order_by(GogGame.owner_user_id.is_(None).desc(), GogGame.id)
         )
-        game = existing.scalar_one_or_none()
+        game = existing.scalars().first()
         if game:
             for key, value in data.items():
                 if hasattr(game, key):

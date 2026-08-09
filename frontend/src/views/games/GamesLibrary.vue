@@ -1,6 +1,11 @@
 <template>
+  <!-- A store's page shows its catalogue, not the handful of games already
+       pulled from it. Checked before the Classic branch below, because a
+       catalogue is not the game list that lives in the Classic sidebar. -->
+  <CatalogStoreView v-if="isCatalogStore" />
+
   <!-- Classic layout: game list lives in the sidebar -->
-  <div v-if="isClassic" class="classic-placeholder">
+  <div v-else-if="isClassic" class="classic-placeholder">
     <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.12">
       <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
     </svg>
@@ -181,8 +186,11 @@
                 {{ game.file_count !== 1 ? t('library.file_count_plural', { count: game.file_count }) : t('library.file_count', { count: game.file_count }) }}
               </div>
 
-              <!-- Source badge (GOG / CUSTOM) -->
-              <div v-if="game.source === 'gog'" class="badge badge--src badge--gog" style="top:auto;bottom:6px;">GOG</div>
+              <!-- Source badge. A game pulled from a plugin store names the
+                   store rather than reading CUSTOM, which said nothing about
+                   where it came from. -->
+              <div v-if="game.catalog_origin" class="badge badge--src badge--custom" style="top:auto;bottom:6px;">{{ game.catalog_origin.toUpperCase() }}</div>
+              <div v-else-if="game.source === 'gog'" class="badge badge--src badge--gog" style="top:auto;bottom:6px;">GOG</div>
               <div v-else-if="game.source === 'custom'" class="badge badge--src badge--custom" style="top:auto;bottom:6px;">CUSTOM</div>
 
               <!-- Hover overlay -->
@@ -192,6 +200,7 @@
             </div>
 
             <div class="cover-title">{{ game.title }}</div>
+            <div v-if="game.subtitle" class="cover-subtitle">{{ game.subtitle }}</div>
             <div class="cover-scores">
               <div v-if="game.rating_agg" class="cover-score" title="Rating">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style="color:#facc15"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
@@ -425,6 +434,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
 }
 import { useRouter, useRoute } from 'vue-router'
 import { useLibrariesStore } from '@/stores/libraries'
+import CatalogStoreView from '@/views/games/CatalogStoreView.vue'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
@@ -437,8 +447,11 @@ import { useRequestNotify } from '@/composables/useRequestNotify'
 interface LibGame {
   id: number
   title: string
+  subtitle: string | null
   slug: string
   source: string
+  /** The store a game was pulled from ("PC Ports"), when it came from one. */
+  catalog_origin?: string | null
   cover_path: string | null
   background_path: string | null
   developer: string | null
@@ -469,6 +482,11 @@ const pageTitle   = computed(() => {
 })
 // The library whose icon/colour heads this page ("" => the default Games lib).
 const currentLib  = computed(() => libsStore.bySlug(librarySlug.value || 'games'))
+// A plugin catalogue's shelf hands over to the store view. GOG is a store too
+// but has its own page in core, so only catalogue-backed ones divert here.
+const isCatalogStore = computed(
+  () => !!librarySlug.value && !!currentLib.value?.is_store && !!currentLib.value?.catalog_id,
+)
 const themeStore  = useThemeStore()
 const auth        = useAuthStore()
 const socketStore = useSocketStore()
@@ -1127,6 +1145,7 @@ onBeforeUnmount(() => {
 .list-cover-wrap:hover .cover-overlay { opacity: 1; }
 .overlay-title { font-size: var(--fs-sm, 12px); font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 6px; }
 
+.cover-subtitle { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 .cover-title { font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cover-scores { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .cover-score { display: inline-flex; align-items: center; gap: var(--space-1, 4px); font-size: 11px; color: var(--muted); }

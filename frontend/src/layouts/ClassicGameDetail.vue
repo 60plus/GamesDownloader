@@ -77,6 +77,12 @@
             <button v-if="isAdmin && packablePlatforms.length" class="cov-btn" @click="packageOpen = true" :title="t('packaging.package_now')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 8v13H3V8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
             </button>
+            <!-- Through to the game this listing became. A plugin store has
+                 always offered this; a GOG listing left you to find the game
+                 in the library yourself. -->
+            <button v-if="game.library_game_id" class="cov-btn" @click="openInLibrary" :title="t('detail.open_in_library')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+            </button>
           </div>
         </div>
 
@@ -89,6 +95,7 @@
           @error="logoFailed = true"
         />
         <div v-else class="game-title">{{ game.title }}</div>
+        <div v-if="game.subtitle" class="game-subtitle">{{ game.subtitle }}</div>
 
         <!-- Ratings row (below title, above chips): the blended star first,
              then each source's own mark on its own scale. -->
@@ -101,7 +108,7 @@
             <img src="/icons/ScreenScraper.ico" class="crating-ico" title="ScreenScraper" />
             <span>{{ ratingVal(game.ss_score).toFixed(1) }}<small>/20</small></span>
           </div>
-          <div v-if="activeLib !== 'roms' && game.rating" class="crating">
+          <div v-if="isGogRating && game.rating" class="crating">
             <img src="/icons/gog.ico" class="crating-ico" title="GOG" />
             <span>{{ ratingVal(game.rating).toFixed(1) }}<small>/5</small></span>
           </div>
@@ -570,6 +577,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import client from '@/services/api/client'
 import { buildLanguageList } from '@/utils/langMap'
 import { ratingVal } from '@/utils/rating'
@@ -593,6 +601,14 @@ const authStore = useAuthStore()
 const { t } = useI18n()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
+const router = useRouter()
+/** Jump from a GOG listing to the game it became. The route watcher in the
+ *  layout moves the sidebar to the Games library on its own. */
+function openInLibrary() {
+  const id = game.value?.library_game_id
+  if (id) router.push(`/games/${id}`)
+}
+
 const props = defineProps<{ gameId: string | number; refreshTick?: number; activeLib?: string }>()
 
 interface LibFile {
@@ -602,7 +618,12 @@ interface LibFile {
 }
 
 interface GameData {
-  id: number; title: string; developer?: string; publisher?: string
+  id: number; title: string; subtitle?: string | null; developer?: string; publisher?: string
+  // Needed to tell a GOG rating from any other 0-5 score, and to name a
+  // catalogue game's store instead of calling it Custom.
+  source?: string; gog_game_id?: number | null; catalog_origin?: string | null
+  /** The library game a GOG listing became, once a build was pulled. */
+  library_game_id?: number | null
   release_date?: string; rating?: number; genres?: string[]; tags?: string[]
   rating_agg?: number   // blended 0-5 score - the one shown as the star
   cover_url?: string; cover_path?: string; background_url?: string; background_path?: string
@@ -631,6 +652,11 @@ interface GameData {
 const game        = ref<GameData | null>(null)
 
 // Rows contributed by plugins via window.__GD__.registerDetailRow.
+// The GOG library's own payload carries no `source`, so the library the view
+// was opened in has to count as evidence too - otherwise the fix that stops
+// mislabelling a catalogue rating would strip the badge off real GOG games.
+const isGogRating = computed(() =>
+  props.activeLib === 'gog' || game.value?.source === 'gog' || !!game.value?.gog_game_id)
 const pluginRows  = computed(() => game.value ? resolveDetailRows(game.value as any, props.activeLib || 'games') : [])
 
 // Collections this game belongs to (Games / GOG only - ROMs are a different
@@ -1433,6 +1459,11 @@ onUnmounted(() => window.removeEventListener('message', onPlayerMessage))
 .cov-btn--danger:hover { background: rgba(220,38,38,.8) !important; }
 
 /* Title */
+.game-subtitle {
+  font-family: 'Rajdhani', var(--font); font-size: 17px; font-weight: 600;
+  text-align: center; letter-spacing: .4px; margin-top: 4px;
+  color: var(--muted); position: relative; z-index: 3;
+}
 .game-title {
   margin-top: 18px;
   font-family: 'Rajdhani', var(--font); font-size: 34px; font-weight: 700; letter-spacing: .5px;

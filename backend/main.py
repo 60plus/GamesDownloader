@@ -228,7 +228,56 @@ async def _init_db() -> None:
         # Legacy rows read 0 until their slot is next written - undercounting a
         # thumbnail is not worth a disk walk at boot.
         ("rom_save_states", "screenshot_size_bytes", "BIGINT NOT NULL DEFAULT 0"),
+        # Storefront libraries (GOG, and any catalogue of downloadable builds)
+        # are grouped apart from real shelves in the navigation.
+        ("libraries",      "is_store",              "TINYINT(1) NOT NULL DEFAULT 0"),
+        # Whether a library feeds the default Games library. Existing user
+        # libraries keep the old behaviour (they do not) until switched on.
+        ("libraries",      "adds_to_default_library", "TINYINT(1) NOT NULL DEFAULT 0"),
+        # Which plugin catalogue a store library lists, if any.
+        ("libraries",      "catalog_id",            "VARCHAR(64) NULL"),
+        # Shown under the title. Tells two builds of the same game apart.
+        ("library_games",  "subtitle",              "VARCHAR(255) NULL"),
+        # What the catalogue last wrote, so a manual edit can be recognised and
+        # left alone on the next sync.
+        ("catalog_entries", "subtitle",             "VARCHAR(255) NULL"),
+        ("catalog_entries", "catalog_title",        "VARCHAR(255) NULL"),
+        # The metadata pass. NULL scraped_at means "not looked at yet", which is
+        # what lets an interrupted run resume instead of restarting.
+        ("catalog_entries", "meta_scraped_at",      "DATETIME NULL"),
+        ("catalog_entries", "meta_search_term",     "VARCHAR(255) NULL"),
+        ("catalog_entries", "meta_source",          "VARCHAR(32) NULL"),
+        ("catalog_entries", "meta_matched_title",   "VARCHAR(255) NULL"),
+        ("catalog_entries", "meta_confidence",      "VARCHAR(16) NULL"),
+        # Local copy of the catalogue icon, served for the store view. A
+        # catalogue entry is not a game (GOG model), so its artwork lives on the
+        # entry rather than on a LibraryGame that exists only once downloaded.
+        ("catalog_entries", "icon_path",            "VARCHAR(512) NULL"),
+        # Scraped presentation held on the entry (the GogGame equivalent): the
+        # store and the entry detail read these, and a download copies them onto
+        # the new game. release_date is a plain string (a label, not a query).
+        ("catalog_entries", "cover_path",           "VARCHAR(512) NULL"),
+        ("catalog_entries", "background_path",       "VARCHAR(512) NULL"),
+        ("catalog_entries", "logo_path",             "VARCHAR(512) NULL"),
+        ("catalog_entries", "description",          "TEXT NULL"),
+        ("catalog_entries", "developer",            "VARCHAR(255) NULL"),
+        ("catalog_entries", "publisher",            "VARCHAR(255) NULL"),
+        ("catalog_entries", "release_date",         "VARCHAR(32) NULL"),
+        ("catalog_entries", "rating",               "FLOAT NULL"),
+        ("catalog_entries", "genres",               "JSON NULL"),
+        ("catalog_entries", "screenshots",          "JSON NULL"),
+        ("catalog_entries", "meta_ratings",         "JSON NULL"),
+        ("catalog_entries", "languages",            "JSON NULL"),
+        ("catalog_entries", "requirements",         "JSON NULL"),
+        ("catalog_entries", "hltb_main_s",          "INT NULL"),
+        ("catalog_entries", "hltb_complete_s",      "INT NULL"),
+        # Set by the packer, so "packaged" is a fact rather than a guess at the
+        # file name. Rows that predate the column default to 0; there is no
+        # backfill, so an archive uploaded earlier reads as a plain file until it
+        # is repackaged.
+        ("library_files",   "is_archive",           "TINYINT(1) NOT NULL DEFAULT 0"),
     ]
+    _added_columns: set[tuple[str, str]] = set()
     async with async_engine.begin() as conn:
         for table, column, col_ddl in _COLUMN_MIGRATIONS:
             try:
@@ -245,8 +294,22 @@ async def _init_db() -> None:
                         text(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {col_ddl}")
                     )
                     logger.info("Migration: added column %s.%s", table, column)
+                    _added_columns.add((table, column))
             except Exception as exc:
                 logger.warning("Migration check failed for %s.%s: %s", table, column, exc)
+
+        # GOG was the only storefront before the flag existed, so it has to be
+        # marked as one or it would vanish from the navigation on upgrade. Keyed
+        # on the column having just been created, so it runs exactly once and an
+        # admin who later unticks GOG is not overruled on the next boot.
+        if ("libraries", "is_store") in _added_columns:
+            try:
+                await conn.execute(
+                    text("UPDATE `libraries` SET `is_store` = 1 WHERE `kind` = 'gog'")
+                )
+                logger.info("Migration: marked GOG libraries as storefronts")
+            except Exception as exc:
+                logger.warning("Migration: GOG storefront backfill failed: %s", exc)
 
     # ── Relocate saves out of the public resources mount ──────────────────────
     # RESOURCES_PATH is served as static files with no authentication, and save
@@ -606,7 +669,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Pre-warm LaunchBox index in background (takes ~35s, avoids timeout on first search)
     from handler.metadata import launchbox_handler as _lb
-    asyncio.create_task(_lb._ensure_index())
+    _lb_task = asyncio.create_task(_lb._ensure_index())
+
+    def _lb_done(t: asyncio.Task) -> None:
+        # Without this the only trace of a failed pre-warm is asyncio's own
+        # "Task exception was never retrieved", which names neither LaunchBox
+        # nor what it means for the app. Scraping still works from whatever
+        # index is already on disk, so this is a warning, not an error.
+        exc = t.exception() if not t.cancelled() else None
+        if exc is not None:
+            logger.warning(
+                "LaunchBox index pre-warm failed (%s); scraping continues from "
+                "the index already on disk, which will not refresh until this "
+                "succeeds", exc,
+            )
+    _lb_task.add_done_callback(_lb_done)
 
     # One-shot: flag animated covers saved before the cover_animated column existed
     from utils.images import backfill_cover_animated as _cover_backfill
@@ -633,6 +710,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from handler.dashboard.queue_broadcaster import queue_broadcaster_loop
     _queue_task    = asyncio.create_task(queue_broadcaster_loop())
 
+    # One-shot: re-align file availability and the GOG downloaded flag with what
+    # is on disk, in case a crash landed between the files and the bookkeeping.
+    from handler.library.reconcile import reconcile_loop as _reconcile_loop
+    _reconcile_task = asyncio.create_task(_reconcile_loop())
+
     yield
 
     # Shutdown
@@ -642,6 +724,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _seed_task.cancel()
     _dl_mon_task.cancel()
     _queue_task.cancel()
+    _reconcile_task.cancel()
     plugin_manager.hook.lifecycle_on_shutdown()
     await close_client()
     logger.info("GamesDownloaderV3 shut down.")

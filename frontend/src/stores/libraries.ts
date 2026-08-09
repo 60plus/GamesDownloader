@@ -32,6 +32,16 @@ export interface LibraryInfo {
   sort_order: number
   is_builtin: boolean
   storage_folder: string | null
+  visibility: string      // "public" | "restricted"
+  // A catalogue of what the server could hold rather than what it does. Themes
+  // that separate the two group these apart from the real libraries.
+  is_store: boolean
+  // Whether games landing in this library also join the default Games library,
+  // and so appear in the home rails, genre tiles and trailer pool.
+  adds_to_default_library: boolean
+  // Set when this store is a plugin catalogue's shelf: its page shows the
+  // catalogue, and it cannot be hand-deleted (it lives with the plugin).
+  catalog_id?: string | null
 }
 
 export const useLibrariesStore = defineStore('libraries', () => {

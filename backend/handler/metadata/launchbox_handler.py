@@ -114,8 +114,16 @@ def _build_db(data: bytes, target: Path) -> None:
     DB being opened on a crash.  All memory (raw bytes, ElementTree) is
     explicitly deleted after use so CPython can reclaim it promptly.
     """
-    tmp = str(target) + ".tmp"
+    tmp_p = Path(f"{target}.tmp")
+    # A build that was interrupted - a container restart, a power cut - leaves
+    # this file behind with its tables already created, and only the rename at
+    # the end ever removes it. Opening it again would fail on CREATE TABLE and
+    # wedge every future rebuild, silently: nobody awaits this task, so the
+    # only symptom is one line in the log.
+    tmp_p.unlink(missing_ok=True)
+    tmp = str(tmp_p)
     conn = sqlite3.connect(tmp)
+    built = False
     try:
         # Bulk-insert pragmas (safe because we rename atomically at the end)
         conn.execute("PRAGMA journal_mode=OFF")
@@ -242,8 +250,12 @@ def _build_db(data: bytes, target: Path) -> None:
         conn.execute("CREATE INDEX idx_i_dbid       ON images(database_id)")
         conn.commit()
         logger.info("LaunchBox SQLite index complete")
+        built = True
     finally:
         conn.close()
+        if not built:
+            # Leave nothing for the next attempt to trip over.
+            tmp_p.unlink(missing_ok=True)
 
     # Atomic replace
     if target.exists():

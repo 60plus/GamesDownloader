@@ -27,6 +27,24 @@ GOG_PRODUCTS_URL = (
 )
 
 
+def canonical_gog_stmt(gog_id: int):
+    """Select every GogGame row for one GOG product, canonical copy first.
+
+    A product legitimately owns more than one row: the admin copy
+    (owner_user_id IS NULL) plus one per user who linked their own GOG account.
+    `get_all_deduped` treats the admin copy as the canonical one, and that is
+    the row the library publishes against - so any lookup by product id has to
+    order the same way. Resolving with a bare `scalar_one_or_none()` raises
+    MultipleResultsFound the moment two people own the same game, and a bare
+    `.first()` picks whichever row the database felt like returning.
+    """
+    return (
+        select(GogGame)
+        .where(GogGame.gog_id == gog_id)
+        .order_by(GogGame.owner_user_id.is_(None).desc(), GogGame.id)
+    )
+
+
 class GogSyncHandler(DBBaseHandler):
     model = GogGame
 
@@ -214,9 +232,15 @@ class GogSyncHandler(DBBaseHandler):
                 GogGame.id,
                 func.row_number().over(
                     partition_by=GogGame.gog_id,
-                    order_by=case(
-                        (GogGame.owner_user_id.is_(None), literal_column("0")),
-                        else_=literal_column("1"),
+                    order_by=(
+                        case(
+                            (GogGame.owner_user_id.is_(None), literal_column("0")),
+                            else_=literal_column("1"),
+                        ),
+                        # Tie-break, so two copies with the same owner cannot
+                        # swap places between requests and change which one the
+                        # storefront shows.
+                        GogGame.id,
                     ),
                 ).label("rn"),
             ).subquery()

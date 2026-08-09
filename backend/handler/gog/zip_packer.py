@@ -217,7 +217,7 @@ async def _sync_archive_into_library(
     """
     from handler.database.library_handler import LibraryHandler
     from handler.database.session import async_session_factory
-    from models.gog_game import GogGame
+    from handler.gog.gog_sync_handler import canonical_gog_stmt
     from models.library_file import LibraryFile
 
     # `gog_id` is the GOG product id; LibraryGame.gog_game_id references the
@@ -225,7 +225,7 @@ async def _sync_archive_into_library(
     # product id straight to get_by_gog_game_id silently matched nothing, which
     # is why the library kept showing loose files instead of the archive.)
     async with async_session_factory() as session:
-        res = await session.execute(select(GogGame).where(GogGame.gog_id == gog_id))
+        res = await session.execute(canonical_gog_stmt(gog_id))
         gg = res.scalars().first()
         if not gg:
             return
@@ -256,6 +256,7 @@ async def _sync_archive_into_library(
         file_path=rel_path,
         source="gog",
         is_available=True,
+        is_archive=True,
     ))
     logger.info("Library: %s archive synced for gog_id=%s (%s)", platform, gog_id, rel_path)
 
@@ -610,6 +611,7 @@ async def _sync_archive_for_game(
         file_path=rel_path,
         source=source,
         is_available=True,
+        is_archive=True,
     ))
     logger.info("Library: %s/%s archive synced for game_id=%s (%s)", out_type, out_os, game_id, rel_path)
 
@@ -859,10 +861,10 @@ async def _package_gog_extras(gog_id: int, delete_originals: bool) -> None:
     manual Package button can still bundle extras at any time before then."""
     from handler.database.session import async_session_factory
     from handler.database.library_handler import LibraryHandler
-    from models.gog_game import GogGame
+    from handler.gog.gog_sync_handler import canonical_gog_stmt
 
     async with async_session_factory() as session:
-        gg = (await session.execute(select(GogGame).where(GogGame.gog_id == gog_id))).scalars().first()
+        gg = (await session.execute(canonical_gog_stmt(gog_id))).scalars().first()
         if not gg:
             return
     lib_game = await LibraryHandler().get_by_gog_game_id(gg.id)

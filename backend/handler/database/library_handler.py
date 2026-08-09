@@ -32,8 +32,15 @@ class LibraryHandler(DBBaseHandler):
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
-    def _active_filters(self, stmt, search, in_default_only, library_id):
+    def _active_filters(self, stmt, search, in_default_only, library_id,
+                        exclude_ids=None):
         stmt = stmt.where(LibraryGame.is_active == True)  # noqa: E712
+        # Games the caller must not see are excluded here rather than being
+        # dropped from the page afterwards, so the database applies them before
+        # LIMIT and before COUNT. Filtering after the query returns short pages
+        # and a total that counts rows the caller will never receive.
+        if exclude_ids:
+            stmt = stmt.where(LibraryGame.id.notin_(list(exclude_ids)))
         if search:
             stmt = stmt.where(LibraryGame.title.ilike(f"%{search}%"))
         if in_default_only:
@@ -72,9 +79,11 @@ class LibraryHandler(DBBaseHandler):
         in_default_only: bool = False,
         library_id: int | None = None,
         sort: str = "title_asc",
+        exclude_ids: Sequence[int] | None = None,
         session: AsyncSession = None,
     ) -> Sequence[LibraryGame]:
-        stmt = self._active_filters(select(LibraryGame), search, in_default_only, library_id)
+        stmt = self._active_filters(select(LibraryGame), search, in_default_only,
+                                    library_id, exclude_ids)
         stmt = self._apply_sort(stmt, sort).limit(limit).offset(offset)
         result = await session.execute(stmt)
         return result.scalars().all()
@@ -127,10 +136,11 @@ class LibraryHandler(DBBaseHandler):
         *,
         in_default_only: bool = False,
         library_id: int | None = None,
+        exclude_ids: Sequence[int] | None = None,
         session: AsyncSession = None,
     ) -> int:
         stmt = self._active_filters(select(func.count()).select_from(LibraryGame),
-                                    search, in_default_only, library_id)
+                                    search, in_default_only, library_id, exclude_ids)
         result = await session.execute(stmt)
         return result.scalar_one()
 

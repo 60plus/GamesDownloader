@@ -14,7 +14,8 @@
 
 import { build } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join, resolve } from 'path';
 
 const PLUGINS_DIR = process.env.PLUGINS_DIR || '/data/plugins';
@@ -87,8 +88,18 @@ if (window.__GD__ && window.__GD__.registerPluginCouchMode) {
 `;
     }
     const tmpEntry = join(outDir, '_entry.js');
-    writeFileSync(tmpEntry, entryCode);
+    const layoutJs = join(outDir, 'layout.js');
 
+    // A theme bundle that fails to parse drops the whole theme back to "Modern
+    // with the theme's colors" - and on a non-ECC VM esbuild has flipped a byte
+    // mid-build before, producing exactly that from correct source. So verify
+    // every emitted bundle and recompile a corrupt one; a bundle that never
+    // verifies is kept out of the manifest the frontend loads from rather than
+    // shipped as a silent half-theme.
+    const MAX_ATTEMPTS = 3;
+    let verified = false;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS && !verified; attempt++) {
+    writeFileSync(tmpEntry, entryCode);
     try {
       await build({
         configFile: false,
@@ -131,21 +142,40 @@ if (window.__GD__ && window.__GD__.registerPluginCouchMode) {
         },
         logLevel: 'warn',
       });
+    } catch (err) {
+      console.error(`[plugin-compiler] ✗ ${pluginId} build failed (attempt ${attempt}/${MAX_ATTEMPTS}):`, err.message);
+      continue;
+    }
 
-      // Clean up temp entry
-      try { const { unlinkSync } = await import('fs'); unlinkSync(tmpEntry); } catch {}
+    // The bundle exists; make sure it actually parses and registers itself.
+    // `node --check` catches a flipped byte (SyntaxError); the substring guard
+    // catches a truncated or empty emit that parses but registers nothing -
+    // both render as Modern-with-colors, the failure this whole loop exists to
+    // stop shipping silently.
+    try {
+      execFileSync(process.execPath, ['--check', layoutJs], { stdio: 'pipe' });
+      if (!readFileSync(layoutJs, 'utf-8').includes('registerPluginLayout')) {
+        throw new Error('bundle does not contain registerPluginLayout');
+      }
+      verified = true;
+    } catch (checkErr) {
+      console.error(`[plugin-compiler] ✗ ${pluginId} bundle rejected (attempt ${attempt}/${MAX_ATTEMPTS}): ${checkErr.message} - recompiling`);
+    }
+    }
 
+    // Written fresh each attempt, so clean it up once the loop is done.
+    try { unlinkSync(tmpEntry); } catch {}
+
+    if (verified) {
       manifest[pluginId] = {
         js: `plugin-layouts/${pluginId}/layout.js`,
         css: `plugin-layouts/${pluginId}/layout.css`,
         compiledAt: new Date().toISOString(),
       };
       compiled++;
-      console.log(`[plugin-compiler] ✓ ${pluginId} compiled successfully`);
-    } catch (err) {
-      console.error(`[plugin-compiler] ✗ ${pluginId} failed:`, err.message);
-      // Clean up temp entry on failure too
-      try { const { unlinkSync } = await import('fs'); unlinkSync(tmpEntry); } catch {}
+      console.log(`[plugin-compiler] ✓ ${pluginId} compiled and verified`);
+    } else {
+      console.error(`[plugin-compiler] ✗ ${pluginId} FAILED verification after ${MAX_ATTEMPTS} attempts - NOT published (would render as Modern)`);
     }
   }
 

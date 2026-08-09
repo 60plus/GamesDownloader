@@ -250,6 +250,19 @@
                   </svg>
                   {{ publishLoading ? t('common.loading') : t('detail.publish_to_library') }}
                 </button>
+                <!-- Through to the game this listing became. A plugin store
+                     has always offered this; a GOG listing left you to find
+                     the game in the library yourself. -->
+                <button
+                  v-if="game.library_game_id"
+                  class="gd-btn-publish"
+                  @click="$router.push(`/games/${game.library_game_id}`)"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M4 6h16M4 12h16M4 18h10"/>
+                  </svg>
+                  {{ t('detail.open_in_library') }}
+                </button>
                 <!-- Bundle downloaded files into one archive per platform -->
                 <button
                   v-if="game.is_downloaded"
@@ -715,6 +728,8 @@ interface Game {
   installers?: Record<string, { language: string; name: string; total_size: number }[]>
   extras?: { name: string; type: string }[]
   version?: string; is_downloaded: boolean; scraped: boolean; scraped_at?: string
+  /** The library game this listing became, once a build was pulled. */
+  library_game_id?: number | null
   requirements?: Record<string, any>
   owner_user_id?: number | null
   owner_username?: string | null

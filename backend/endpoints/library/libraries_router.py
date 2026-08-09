@@ -48,6 +48,8 @@ class LibraryUpdateBody(BaseModel):
     name: str | None = None
     color: str | None = None
     icon: str | None = None
+    is_store: bool | None = None
+    adds_to_default_library: bool | None = None
 
 
 # Uploaded library icons/logos. Raster only - SVG is offered exclusively via the
@@ -62,6 +64,8 @@ class LibraryCreateBody(BaseModel):
     icon: str | None = None
     create_folder: bool = False
     is_collection: bool = False        # create a Collections container (kind 'collections')
+    is_store: bool = False             # a catalogue of what could be added, not what is
+    adds_to_default_library: bool = False  # its games also join the Games library
 
 
 class MembershipBody(BaseModel):
@@ -86,6 +90,14 @@ def _library_to_dict(lib) -> dict:
         "is_builtin":     lib.is_builtin,
         "storage_folder": lib.storage_folder,
         "visibility":     getattr(lib, "visibility", "public") or "public",
+        # getattr keeps a theme built against an older core from crashing on a
+        # response that predates these columns.
+        "is_store":       bool(getattr(lib, "is_store", False)),
+        "adds_to_default_library": bool(getattr(lib, "adds_to_default_library", False)),
+        # Set when this store is fed by a plugin catalogue. The UI uses it to keep
+        # a plugin store from being hand-deleted (it comes and goes with the
+        # plugin) and to route its page to the catalogue view.
+        "catalog_id":     getattr(lib, "catalog_id", None),
     }
 
 
@@ -134,20 +146,45 @@ async def update_library(request: Request, slug: str, body: LibraryUpdateBody) -
     for them (color and icon are still editable). `icon` may be a "builtin:<name>"
     token or a /resources/... path produced by the icon-upload endpoint.
     """
+    existing = await library_registry_handler.get_by_slug(slug)
+
     name = body.name
     if name is not None:
-        existing = await library_registry_handler.get_by_slug(slug)
         if existing is not None and existing.is_builtin:
             name = None
-        elif name is not None:
+        else:
             name = name.strip() or None
+
+    # Captured before the write so the retroactive pass below can tell an actual
+    # change from a PATCH that merely resent the same value.
+    default_flag_changed = (
+        body.adds_to_default_library is not None
+        and existing is not None
+        and bool(getattr(existing, "adds_to_default_library", False))
+        != body.adds_to_default_library
+    )
 
     lib = await library_registry_handler.update(
         slug, enabled=body.enabled, sort_order=body.sort_order,
         name=name, color=body.color, icon=body.icon,
+        is_store=body.is_store,
+        adds_to_default_library=body.adds_to_default_library,
     )
     if lib is None:
         raise HTTPException(status_code=404, detail="Library not found")
+
+    # Answer the admin's expectation: flipping the switch applies to the shelf as
+    # it stands, not only to whatever lands on it next.
+    if default_flag_changed:
+        moved = await library_registry_handler.apply_default_library_flag(
+            lib.id, bool(body.adds_to_default_library),
+        )
+        if moved:
+            logger.info(
+                "Library %s: %s %d game(s) %s the default library",
+                slug, "added" if body.adds_to_default_library else "removed",
+                moved, "to" if body.adds_to_default_library else "from",
+            )
     return _library_to_dict(lib)
 
 
@@ -215,6 +252,12 @@ async def create_library(request: Request, body: LibraryCreateBody) -> dict:
         name=name, slug=slug, kind="collections" if body.is_collection else "custom_lib",
         color=body.color, icon=body.icon,
         storage_folder=storage_folder, created_by=getattr(user, "id", None),
+        # A store is a plugin's to create, never a hand-made shelf: it lists a
+        # catalogue of what could be added and is fed by a plugin's sync. So the
+        # request's is_store is ignored here - the only path to a store is
+        # ensure_store_library, called from a catalogue sync.
+        is_store=False,
+        adds_to_default_library=body.adds_to_default_library,
     )
     return _library_to_dict(lib)
 

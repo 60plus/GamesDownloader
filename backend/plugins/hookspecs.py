@@ -136,6 +136,92 @@ class LibrarySourceSpec:
         """Scan a path and return list of discovered games/ROMs."""
 
 
+class LibraryCatalogSpec:
+    """Hooks for catalogue plugins: a listing of games the server COULD hold.
+
+    A library source scans a path for files that are already here. A catalogue
+    is the opposite - it describes what is available elsewhere, so the library
+    it feeds is a storefront (see the `is_store` flag on a library) rather than
+    a shelf. GOG is the built-in example; a plugin can add others.
+
+    The plugin only describes; it never writes. Core owns the upsert, downloads
+    the artwork through the SSRF guard and stores it locally, and decides
+    membership - so a catalogue cannot smuggle a hot-linked CDN image into the
+    UI or a row past the guards.
+
+    ``library_catalog_fetch`` is called in a worker thread, so blocking HTTP is
+    fine and expected. Fetch failures should be reported per entry rather than
+    raised: one dead repository must not cost the other seventy-six.
+    """
+
+    @hookspec
+    def library_catalog_name(self) -> str:
+        """Display name of this catalogue (e.g. 'GitHub PC Ports')."""
+
+    @hookspec
+    def library_catalog_id(self) -> str:
+        """Stable identifier, used as the catalogue key in the database."""
+
+    @hookspec
+    def library_catalog_library(self) -> dict[str, Any]:
+        """Optional: the store library this catalogue lives in, so an admin does
+        not hand-make it (and cannot: a store is a plugin's to create, never a
+        user's). Core upserts a library from what is returned and marks it a
+        store fed by this catalogue. Any key may be omitted:
+
+            slug           str - stable route slug (default: from the id)
+            name           str - display name (default: the catalogue name)
+            icon           str - icon path or URL
+            color          str - accent colour
+            storage_folder str - folder under data/games for downloaded builds
+                                 (default: the name). Downloaded games show in
+                                 the Games library; only their files live here.
+
+        Return nothing to let core pick every default from the id and name.
+        """
+
+    @hookspec
+    def library_catalog_fetch(self) -> list[dict[str, Any]]:
+        """Return the whole catalogue. One dict per entry:
+
+            external_id  str   - stable identity inside this catalogue, and the
+                                 key an entry is matched on across syncs. Use
+                                 something that survives a rename (a repository
+                                 path, not a title).
+            title        str   - display name. For a catalogue of ports this is
+                                 the game, not the project: people look for
+                                 "Mario Kart 64", not "SpaghettiKart".
+            subtitle     str   - optional qualifier shown under the title. What
+                                 tells two builds of one game apart, so it is
+                                 worth setting whenever a catalogue can offer
+                                 more than one of something.
+            catalog_title str  - optional: the name before any parsing. Kept as
+                                 a fallback for metadata lookups.
+            category     str   - optional grouping; core stores it as a tag.
+            icon_url     str   - optional artwork URL. Core downloads it.
+            description  str   - optional summary.
+            homepage     str   - optional link shown on the detail page.
+            available    bool  - False when the entry cannot be offered right
+                                 now (repository gone, no usable release).
+            unavailable_reason str - why, shown to the admin. Required when
+                                 available is False, or the entry is silently
+                                 wrong instead of visibly broken.
+            release      dict  - optional, and omitted when nothing is
+                                 downloadable yet:
+                                   tag           str
+                                   published_at  ISO-8601 str
+                                   prerelease    bool
+                                   assets        list of dicts:
+                                       name, size (int bytes), url,
+                                       os   ('windows'|'mac'|'linux'|'all'),
+                                       arch (optional, free-form),
+                                       digest (optional checksum)
+
+        An entry missing external_id or title is skipped and logged, not
+        guessed at.
+        """
+
+
 class LifecycleSpec:
     """Hooks for lifecycle events."""
 

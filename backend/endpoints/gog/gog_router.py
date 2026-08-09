@@ -225,7 +225,15 @@ async def get_game(game_id: int, request: Request) -> dict:
     else:
         # Admin game (owner_user_id is None) - use requesting user's name as admin
         owner_username = getattr(request.state.user, "username", "Admin") if hasattr(request.state, "user") else "Admin"
-    return _game_dict(game, owner_username=owner_username)
+    d = _game_dict(game, owner_username=owner_username)
+    # The game this listing became, so the page can offer a way through to it -
+    # the same shortcut a plugin catalogue entry has always had. Resolved here
+    # rather than in _game_dict, which also serves the 300-title list and would
+    # turn this into one query per row.
+    from handler.database.library_handler import LibraryHandler
+    lib_game = await LibraryHandler().get_by_gog_game_id(game.id)
+    d["library_game_id"] = lib_game.id if lib_game else None
+    return d
 
 
 @gog_router.post("/library/games/{game_id}/scrape")

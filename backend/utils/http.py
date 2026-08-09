@@ -11,6 +11,14 @@ import httpx
 
 from utils.net_guard import assert_fetch_allowed, make_request_guard
 
+class MediaTooLarge(ValueError):
+    """Raised when a media download would exceed its byte ceiling.
+
+    A ValueError so the media handlers' broad `except` already treats it as
+    "no artwork this time" rather than propagating.
+    """
+
+
 _client: httpx.AsyncClient | None = None
 
 DEFAULT_TIMEOUT = httpx.Timeout(connect=10, read=30, write=10, pool=10)
@@ -38,8 +46,16 @@ async def close_client() -> None:
         _client = None
 
 
+# No cover, hero, logo or screenshot is this big. The cap exists because the URL
+# comes from outside - a scraper, a catalogue - and the response used to be read
+# whole into memory before anything checked its size, so a single URL pointing at
+# a multi-gigabyte file could take the container down with it.
+MAX_MEDIA_BYTES = 64 * 1024 * 1024
+
+
 async def fetch_media_bytes(
-    url: str, *, headers: dict | None = None, timeout: float = 20
+    url: str, *, headers: dict | None = None, timeout: float = 20,
+    max_bytes: int = MAX_MEDIA_BYTES,
 ) -> tuple[bytes, str]:
     """Fetch a media asset (cover/hero/logo/icon/screenshot/...) whose URL came
     from an external metadata or scraper provider, through the SSRF guard.
@@ -73,6 +89,21 @@ async def fetch_media_bytes(
         timeout=timeout,
         event_hooks={"request": [make_request_guard()]},
     ) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.content, resp.headers.get("content-type", "")
+        # Streamed so the ceiling is enforced while the bytes arrive. Reading the
+        # whole body first and measuring it afterwards is a check that happens
+        # only once the damage is done.
+        async with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            declared = int(resp.headers.get("content-length") or 0)
+            if declared > max_bytes:
+                raise MediaTooLarge(
+                    f"media is {declared} bytes, over the {max_bytes} limit"
+                )
+            buf = bytearray()
+            async for chunk in resp.aiter_bytes(65536):
+                buf.extend(chunk)
+                if len(buf) > max_bytes:
+                    # A lying or absent Content-Length is exactly the case the
+                    # running total is here for.
+                    raise MediaTooLarge(f"media exceeded the {max_bytes} byte limit")
+            return bytes(buf), resp.headers.get("content-type", "")

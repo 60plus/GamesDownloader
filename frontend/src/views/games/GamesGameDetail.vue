@@ -75,10 +75,13 @@
               class="gd-logo-img"
             />
             <h1 v-else class="gd-title">{{ game.title }}</h1>
+            <!-- Outside the v-else on purpose: which build this is stays worth
+                 saying even when a logo replaces the title. -->
+            <div v-if="game.subtitle" class="gd-subtitle">{{ game.subtitle }}</div>
 
             <!-- Source badge -->
             <div class="source-badge" :class="'source-' + game.source">
-              {{ game.source === 'gog' ? 'GOG' : 'Custom' }}
+              {{ game.catalog_origin || (game.source === 'gog' ? 'GOG' : 'Custom') }}
             </div>
 
             <div class="gd-meta-row">
@@ -102,8 +105,8 @@
             </div>
 
             <!-- Per-source scores (GOG / RAWG / IGDB / Metacritic) -->
-            <div v-if="ratingVal(game.rating) > 0 || externalRatings.rawg || externalRatings.igdb || externalRatings.steam || externalRatings.plugins?.length" class="gd-ext-ratings">
-              <div v-if="ratingVal(game.rating) > 0" class="gd-ext-score">
+            <div v-if="(isGogRating && ratingVal(game.rating) > 0) || externalRatings.rawg || externalRatings.igdb || externalRatings.steam || externalRatings.plugins?.length" class="gd-ext-ratings">
+              <div v-if="isGogRating && ratingVal(game.rating) > 0" class="gd-ext-score">
                 <img src="/icons/gog.ico" class="gd-ext-ico" width="42" height="42" alt="GOG" />
                 <div class="gd-ext-info">
                   <span class="gd-ext-val">{{ ratingVal(game.rating).toFixed(1) }}<span class="gd-ext-max">/5</span></span>
@@ -378,7 +381,7 @@
               </template>
               <template v-if="game.source">
                 <span class="gd-dk">{{ t('detail.source') }}</span>
-                <span class="gd-dv">{{ game.source === 'gog' ? 'GOG' : 'Custom' }}</span>
+                <span class="gd-dv">{{ game.catalog_origin || (game.source === 'gog' ? 'GOG' : 'Custom') }}</span>
               </template>
               <template v-if="gameCollections.length">
                 <span class="gd-dk">{{ t('detail.collections') }}</span>
@@ -645,8 +648,14 @@ interface LibFile {
 interface LibGame {
   id: number
   title: string
+  subtitle: string | null
   slug: string
   source: string
+  // On the wire already (library_router _game_to_dict); typed here so the
+  // views can tell a real GOG game from one that merely carries a rating,
+  // and can name the store a catalogue game came from.
+  gog_game_id?: number | null
+  catalog_origin?: string | null
   description: string | null
   description_short: string | null
   developer: string | null
@@ -694,6 +703,10 @@ const loading    = ref(true)
 
 // Rows contributed by plugins via window.__GD__.registerDetailRow (reactive to
 // both the game and plugin registration).
+// A 0-5 rating is only a GOG score when the game actually came from GOG: a
+// catalogue download copies a RAWG/IGDB score into the very same column, and
+// labelling that with the GOG mark invents a rating the game never had.
+const isGogRating = computed(() => game.value?.source === 'gog' || !!game.value?.gog_game_id)
 const pluginRows = computed(() => game.value ? resolveDetailRows(game.value as any, 'games') : [])
 
 // Collections this game belongs to (slugs from the membership endpoint, mapped
@@ -1336,6 +1349,13 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 .source-gog    { background: color-mix(in srgb, var(--pl) 30%, transparent); color: var(--pl-light); border: 1px solid color-mix(in srgb, var(--pl) 40%, transparent); }
 .source-custom { background: rgba(20,184,166,.2); color: #2dd4bf; border: 1px solid rgba(20,184,166,.3); }
 
+/* Which build this is, under the game's name. Deliberately quiet: it qualifies
+   the title, it does not compete with it. */
+.gd-subtitle {
+  font-size: clamp(13px, 1.4vw, 17px); font-weight: 600;
+  color: rgba(255,255,255,.72); margin-top: 6px;
+  text-shadow: 0 2px 18px rgba(0,0,0,.7); letter-spacing: .2px;
+}
 .gd-title {
   font-size: clamp(26px, 4vw, 46px);
   font-weight: 900; color: #fff; margin: 0;

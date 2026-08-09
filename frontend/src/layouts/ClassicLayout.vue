@@ -283,8 +283,15 @@
       <!-- Main scrollable area -->
       <div class="center-main">
 
+        <!-- A store's entry page. Matched before isNonLibraryRoute, which would
+             otherwise hand it to <router-view /> and render the core store page
+             inside a Classic shell. The sidebar already lists the catalogue, so
+             the entry gets the same treatment as a game: its own Classic page
+             in the centre column. -->
+        <ClassicCatalogEntryDetail v-if="route.name === 'catalog-entry-detail'" />
+
         <!-- Non-library routes (profile, settings, etc.) -->
-        <template v-if="isNonLibraryRoute">
+        <template v-else-if="isNonLibraryRoute">
           <router-view />
         </template>
 
@@ -677,9 +684,11 @@ import { useLibrariesStore } from '@/stores/libraries'
 import { useSocketStore } from '@/stores/socket'
 import client from '@/services/api/client'
 import * as libActions from '@/lib/libraryActions'
+import catalogActions from '@/lib/catalogActions'
 import AmbientBackground from '@/components/common/AmbientBackground.vue'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import ClassicGameDetail from './ClassicGameDetail.vue'
+import ClassicCatalogEntryDetail from './ClassicCatalogEntryDetail.vue'
 import ClassicCollectionDetail from './ClassicCollectionDetail.vue'
 import { useCollectionsStore } from '@/stores/collections'
 import NotificationSnackbar from '@/components/common/NotificationSnackbar.vue'
@@ -834,6 +843,13 @@ const activeLibObj = computed(() => libraries.value.find(l => l.id === activeLib
 // A collections container (kind 'collections'): its list shows the collections
 // inside it, and the detail pane shows a collection instead of a game.
 const activeLibIsCollections = computed(() => libs.bySlug(activeLib.value)?.kind === 'collections')
+// A plugin catalogue's shelf. Its list is what the store offers, not the few
+// titles already pulled from it - listing those was all this theme showed, and
+// it left no way to reach the catalogue at all.
+const activeLibIsStore = computed(() => {
+  const l = libs.bySlug(activeLib.value)
+  return !!l?.is_store && !!l?.catalog_id
+})
 
 // User-created libraries (registry kind "custom_lib") are addressed by slug.
 function isUserLib(id: string): boolean {
@@ -918,6 +934,11 @@ async function fetchKnownPlatforms() {
 }
 
 async function fetchGames() {
+  // The route watcher runs before onMounted has fetched the registry, so on a
+  // cold load nothing here knew a library was a store yet and it fell through
+  // to listing games - which is why a refresh landed back on the two titles
+  // already pulled instead of the catalogue.
+  if (!libs.loaded) await libs.fetch()
   if (activeLibIsCollections.value) { await fetchCollectionsList(); return }
   collectionsLoadedFor.value = ''   // leaving collections - the list now holds games
   loading.value = true
@@ -954,6 +975,24 @@ async function fetchGames() {
       }))
       const gogIdx = libraries.value.findIndex(l => l.id === 'gog')
       if (gogIdx >= 0) libraries.value[gogIdx].count = games.value.length
+      return
+    }
+    // A store lists its catalogue. `downloaded` marks the offers already pulled,
+    // which the list already styles, so owned titles stand out the same way
+    // they do in a real library.
+    if (activeLibIsStore.value) {
+      const entries = await catalogActions.listEntries(libs.bySlug(activeLib.value)!.catalog_id!)
+      games.value = entries.map((e: any) => ({
+        id:           e.id,
+        title:        e.title,
+        downloaded:   !!e.downloaded,
+        rating:       e.rating_agg ?? e.rating ?? null,
+        release_date: e.release_date || '',
+        icon:         e.icon_path || e.cover_path || '',
+        cover:        e.cover_path || e.icon_path || '',
+      }))
+      const sIdx = libraries.value.findIndex(l => l.id === activeLib.value)
+      if (sIdx >= 0) libraries.value[sIdx].count = games.value.length
       return
     }
     // "games" built-in OR a user-created library (collection slug): both are
@@ -1019,6 +1058,10 @@ async function refreshLibraryCounts() {
       let c = l.count
       if (libObj?.kind === 'collections') {
         c = collectionsStore.list.filter((x: any) => x.library === l.id).length
+      } else if (libObj?.is_store && libObj?.catalog_id) {
+        // A store counts its catalogue. Counting its games gave the switcher
+        // the number already pulled, so the list said 36 and the switcher 2.
+        c = (await catalogActions.listEntries(libObj.catalog_id)).length
       } else if (l.id === 'gog') {
         const { data } = await client.get('/gog/library/count'); c = data?.count ?? c
       } else if (l.id === 'roms') {
@@ -1178,6 +1221,16 @@ function switchLib(id: string) {
 
 function selectGame(game: Game) {
   sidebarOpen.value = false  // close drawer on mobile after selection
+  // A store's list holds offers, not games: the entry page is where a build is
+  // picked and pulled, and it turns the offer into a game.
+  if (activeLibIsStore.value) {
+    // Held so the list marks the open offer. It is an entry id rather than a
+    // game id, which is safe here: the entry route is not one this theme
+    // handles itself, so nothing tries to open a game with it.
+    activeGameId.value = String(game.id)
+    router.push({ name: 'catalog-entry-detail', params: { slug: activeLib.value, id: String(game.id) } })
+    return
+  }
   // Collections container: the list holds collections, not games.
   if (activeLibIsCollections.value) {
     activeCollectionSlug.value = String(game.id)
@@ -1575,6 +1628,13 @@ watch(() => route.name, name => {
   if (name === 'emulation-home' || name === 'emulation-library') {
     activeLib.value = 'roms'
     if (route.params.platform) activePlatformSlug.value = route.params.platform as string
+    fetchGames()
+  }
+  // A store's entry page. Reloads the list too, unlike the other detail pages,
+  // because a refresh lands straight here with nothing loaded yet - without it
+  // the sidebar fell back to the Games library and the store was forgotten.
+  if (name === 'catalog-entry-detail') {
+    activeLib.value = (route.params.slug as string) || ''
     fetchGames()
   }
   // Detail pages → keep lib in sync without reloading the list

@@ -505,6 +505,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useLibrariesStore } from '@/stores/libraries'
 import { useThemeStore } from '@/stores/theme'
 import client from '@/services/api/client'
+import catalogActions from '@/lib/catalogActions'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import CollectionCover from '@/components/collections/CollectionCover.vue'
 import HomePlayRail from '@/components/HomePlayRail.vue'
@@ -854,6 +855,21 @@ watch(searchQuery, (q) => {
 async function fetchCollections() {
   await Promise.all(collections.value.map(async (c) => {
     try {
+      // A store's card counts what it is offering, not the handful of titles
+      // already pulled from it - "2 games" on a shelf of 36 read as if the
+      // store were nearly empty. Its art still comes from what was pulled,
+      // which is the only art the server holds locally.
+      if (c.is_store && c.catalog_id) {
+        const [games, count] = await Promise.all([
+          client.get('/library/games', { params: { library: c.slug, limit: '24' } }),
+          catalogActions.countEntries(c.catalog_id).catch(() => 0),
+        ])
+        collData.value = {
+          ...collData.value,
+          [c.slug]: { ...buildLib(games.data.items || []), count },
+        }
+        return
+      }
       const { data } = await client.get('/library/games', { params: { library: c.slug, limit: '24' } })
       collData.value = { ...collData.value, [c.slug]: { ...buildLib(data.items || []), count: data.total || 0 } }
     } catch {
