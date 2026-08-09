@@ -18,7 +18,7 @@ import logging
 
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import or_, select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, noload
 
 from decorators.auth import protected_route
 from decorators.database import begin_session
@@ -128,6 +128,10 @@ async def _search_library(term: str, limit: int, denied: set[int] | None = None,
                           *, session=None) -> list[dict]:
     stmt = (
         select(LibraryGame)
+        # The result dict never touches g.files, but the relationship is
+        # lazy="selectin", so without this every match drags its whole file list
+        # in on a second query for nothing. noload leaves it unloaded.
+        .options(noload(LibraryGame.files))
         # Unpublished games are hidden from every list view - keep search
         # consistent so an unpublished title cannot be enumerated here.
         .where(LibraryGame.is_active == True,  # noqa: E712

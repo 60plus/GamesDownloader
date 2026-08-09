@@ -204,31 +204,36 @@ async def download_screenshots(gog_id: int, urls: list[str], overwrite: bool = F
     """Download up to 12 screenshots → resources/gog/{id}/shots/auto_NNN.ext.
     Returns list of server-relative URL paths for successfully downloaded shots.
     """
+    from handler.config.config_handler import config_handler
+    from utils.async_utils import gather_bounded
+
     gdir = _game_dir(gog_id)
     shots_dir = gdir / "shots"
     shots_dir.mkdir(exist_ok=True)
 
-    saved: list[str] = []
-    for i, url in enumerate(urls[:12]):
+    async def _one(i: int, url: str) -> str | None:
         try:
             # Check for existing cached screenshot (skip if not overwriting)
             if not overwrite:
-                found_cached = False
                 for ext_check in (".jpg", ".png", ".webp", ".gif"):
                     cached = shots_dir / f"auto_{i:03d}{ext_check}"
                     if cached.exists() and cached.stat().st_size > 0:
-                        saved.append(f"/resources/gog/{gog_id}/shots/auto_{i:03d}{ext_check}")
-                        found_cached = True
-                        break
-                if found_cached:
-                    continue
+                        return f"/resources/gog/{gog_id}/shots/auto_{i:03d}{ext_check}"
             fetch_url = _fix_gog_url(url)
             content, ctype = await fetch_media_bytes(fetch_url, headers=_HDRS, timeout=20)
             ext = _ext_from(fetch_url, ctype)
             dest = shots_dir / f"auto_{i:03d}{ext}"
             dest.write_bytes(content)
-            saved.append(f"/resources/gog/{gog_id}/shots/auto_{i:03d}{ext}")
+            return f"/resources/gog/{gog_id}/shots/auto_{i:03d}{ext}"
         except Exception as exc:
             logger.warning("Screenshot %d failed gog_id=%s: %s", i, gog_id, exc)
+            return None
 
-    return saved
+    # Downloads run in parallel (bounded) when enabled, one at a time otherwise;
+    # order is preserved either way so the shot indices stay stable.
+    parallel = await config_handler.get_bool("metadata_parallel_media", default=True)
+    results = await gather_bounded(
+        [_one(i, url) for i, url in enumerate(urls[:12])],
+        parallel=parallel,
+    )
+    return [r for r in results if r]

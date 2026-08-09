@@ -33,6 +33,7 @@ class ScraperKeysRequest(BaseModel):
     screenscraper_devpassword: str | None = None
     ra_api_username: str | None = None
     ra_api_key: str | None = None
+    metadata_parallel_media: bool | None = None
 
 
 class ScraperTestRequest(BaseModel):
@@ -129,6 +130,9 @@ async def get_scraper_keys(request: Request) -> dict:
     for k in keys:
         val = await config_handler.get(k)
         result[k] = val or ""
+    # A behaviour toggle rather than a credential: whether scraped screenshots
+    # are fetched in parallel (bounded) or strictly one at a time.
+    result["metadata_parallel_media"] = await config_handler.get_bool("metadata_parallel_media", default=True)
     return result
 
 
@@ -145,6 +149,7 @@ async def save_scraper_keys(request: Request, req: ScraperKeysRequest) -> dict:
     if req.screenscraper_devpassword is not None: data["screenscraper_devpassword"] = (req.screenscraper_devpassword, True)
     if req.ra_api_username is not None:          data["ra_api_username"]           = (req.ra_api_username, False)
     if req.ra_api_key is not None:               data["ra_api_key"]                = (req.ra_api_key, True)
+    if req.metadata_parallel_media is not None:  data["metadata_parallel_media"]   = ("true" if req.metadata_parallel_media else "false", False)
     if data:
         await config_handler.set_many(data)
     return {"ok": True}

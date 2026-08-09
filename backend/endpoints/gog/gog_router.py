@@ -204,6 +204,19 @@ async def get_library(
     return [_game_dict(g, owner_username=username_map.get(g.owner_user_id)) for g in games]
 
 
+@gog_router.get("/library/count")
+async def library_count(request: Request) -> dict:
+    """Deduped game count (one per gog_id), so the home page can size the GOG
+    library without pulling the whole list. Access-gated like get_library."""
+    _require_scope(request, Scope.GOG_READ)
+    from handler.database.library_registry_handler import library_registry_handler as _reg
+    _gog = await _reg.get_by_slug("gog")
+    if _gog is not None and not await _reg.user_can_access(getattr(request.state, "user", None), _gog):
+        return {"total": 0}
+    from handler.gog.gog_sync_handler import gog_sync_handler
+    return {"total": await gog_sync_handler.count_deduped()}
+
+
 @gog_router.get("/library/games/{game_id}")
 async def get_game(game_id: int, request: Request) -> dict:
     """Return full details for a single game by DB id."""

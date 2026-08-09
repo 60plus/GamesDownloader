@@ -88,6 +88,16 @@
         </div>
       </div>
 
+      <div class="backup-options sm-parallel-wrap">
+        <label class="backup-opt">
+          <input type="checkbox" v-model="parallelMedia" />
+          <span>
+            {{ t('metadata.parallel_media') }}
+            <small class="sm-hint">{{ t('metadata.parallel_media_desc') }}</small>
+          </span>
+        </label>
+      </div>
+
       <div v-if="serverError" class="field-server-error">{{ serverError }}</div>
       <div v-if="savedOk" class="field-ok">{{ t('metadata.saved') }}</div>
 
@@ -301,6 +311,9 @@ const scrapers: Scraper[] = [
 ]
 
 const form = reactive<Record<string, string>>({})
+// A boolean behaviour toggle, kept out of the string-typed `form` because its
+// loader coerces every value through `|| ''`, which would turn `false` into ''.
+const parallelMedia = ref(true)
 
 // ── Metadata backup state ───────────────────────────────────────────────────
 interface BackupCounts {
@@ -431,8 +444,10 @@ onMounted(async () => {
   try {
     const data = await client.get('/settings/scrapers').then(r => r.data)
     for (const k of Object.keys(data)) {
+      if (k === 'metadata_parallel_media') continue
       form[k] = data[k] || ''
     }
+    parallelMedia.value = data.metadata_parallel_media !== false
   } catch {
     // ignore load errors
   } finally {
@@ -480,7 +495,7 @@ async function save() {
   serverError.value = ''
   savedOk.value = false
   try {
-    await client.post('/settings/scrapers', form)
+    await client.post('/settings/scrapers', { ...form, metadata_parallel_media: parallelMedia.value })
     savedOk.value = true
     setTimeout(() => { savedOk.value = false }, 3000)
   } catch (e: any) {
@@ -510,6 +525,8 @@ async function save() {
 }
 
 .scrapers-list { display: flex; flex-direction: column; gap: var(--space-2, 8px); }
+.sm-parallel-wrap { margin-top: 6px; }
+.sm-hint { display: block; margin-top: 2px; font-size: 0.8em; opacity: 0.7; }
 
 .scraper-card {
   background: var(--glass-bg); border: 1px solid var(--glass-border);

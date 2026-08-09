@@ -774,29 +774,38 @@ class GogScrapeHandler(DBBaseHandler):
             download_logo, download_icon,
         )
 
-        # Cover
-        if game.cover_url and (overwrite or not game.cover_path):
-            path = await download_cover(game.gog_id, game.cover_url, overwrite=overwrite)
-            if path:
-                game.cover_path = path
+        # Cover, background, logo and icon are independent files that each land in
+        # their own field, so they download together (bounded) or one at a time,
+        # driven by the Settings -> Metadata toggle.
+        from handler.config.config_handler import config_handler
+        from utils.async_utils import gather_bounded
 
-        # Background
-        if game.background_url and (overwrite or not game.background_path):
-            path = await download_background(game.gog_id, game.background_url, overwrite=overwrite)
-            if path:
-                game.background_path = path
+        async def _dl_cover():
+            if game.cover_url and (overwrite or not game.cover_path):
+                path = await download_cover(game.gog_id, game.cover_url, overwrite=overwrite)
+                if path:
+                    game.cover_path = path
 
-        # Logo (SteamGridDB transparent logo)
-        if game.logo_url and (overwrite or not game.logo_path):
-            path = await download_logo(game.gog_id, game.logo_url, overwrite=overwrite)
-            if path:
-                game.logo_path = path
+        async def _dl_bg():
+            if game.background_url and (overwrite or not game.background_path):
+                path = await download_background(game.gog_id, game.background_url, overwrite=overwrite)
+                if path:
+                    game.background_path = path
 
-        # Icon
-        if game.icon_url and (overwrite or not game.icon_path):
-            path = await download_icon(game.gog_id, game.icon_url, overwrite=overwrite)
-            if path:
-                game.icon_path = path
+        async def _dl_logo():
+            if game.logo_url and (overwrite or not game.logo_path):
+                path = await download_logo(game.gog_id, game.logo_url, overwrite=overwrite)
+                if path:
+                    game.logo_path = path
+
+        async def _dl_icon():
+            if game.icon_url and (overwrite or not game.icon_path):
+                path = await download_icon(game.gog_id, game.icon_url, overwrite=overwrite)
+                if path:
+                    game.icon_path = path
+
+        parallel = await config_handler.get_bool("metadata_parallel_media", default=True)
+        await gather_bounded([_dl_cover(), _dl_bg(), _dl_logo(), _dl_icon()], parallel=parallel)
 
         # Screenshots - replace CDN URLs with local paths if any downloaded
         if game.screenshots and (overwrite or all(s.startswith("http") for s in game.screenshots)):

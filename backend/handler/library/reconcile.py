@@ -147,32 +147,44 @@ async def reconcile_library_state() -> dict:
     # Its own truth: files present AND the download finished. A game still
     # being fetched is left alone by refresh_downloaded_state.
     from handler.gog.gog_download_handler import refresh_downloaded_state
-    from handler.gog.gog_sync_handler import canonical_gog_stmt
     from models.gog_game import GogGame
 
+    # One query for every product's current flag instead of one per product.
+    # Ordering matches canonical_gog_stmt (admin copy first, then lowest id), so
+    # the first row seen per gog_id is the canonical copy that
+    # refresh_downloaded_state writes - the exact value the old per-product
+    # lookup produced. On a large GOG account that per-product lookup (a session
+    # and a query each) was the bulk of the boot-time DB work.
     async with async_session_factory() as session:
-        gog_ids = list((await session.execute(select(GogGame.gog_id).distinct())).scalars().all())
+        flag_rows = (
+            await session.execute(
+                select(GogGame.gog_id, GogGame.is_downloaded).order_by(
+                    GogGame.gog_id,
+                    GogGame.owner_user_id.is_(None).desc(),
+                    GogGame.id,
+                )
+            )
+        ).all()
+    before_by_id: dict[int, bool] = {}
+    for gid, is_dl in flag_rows:
+        before_by_id.setdefault(gid, bool(is_dl))
 
     fixed = 0
-    for gog_id in gog_ids:
-        async with async_session_factory() as session:
-            row = (await session.execute(canonical_gog_stmt(gog_id))).scalars().first()
-            before = bool(row.is_downloaded) if row else None
-        if before is None:
-            continue
+    for gog_id, before in before_by_id.items():
         if await refresh_downloaded_state(gog_id=gog_id) != before:
             fixed += 1
     summary["gog_fixed"] = fixed
 
+    product_count = len(before_by_id)
     if vanished or returned or fixed:
         logger.info(
             "Reconciliation: %d file(s) gone from disk, %d back, %d GOG game(s) re-flagged "
             "(of %d files and %d products checked)",
-            len(vanished), len(returned), fixed, len(files), len(gog_ids),
+            len(vanished), len(returned), fixed, len(files), product_count,
         )
     else:
         logger.info(
-            "Reconciliation: nothing to correct (%d files, %d products)", len(files), len(gog_ids)
+            "Reconciliation: nothing to correct (%d files, %d products)", len(files), product_count
         )
     return summary
 

@@ -94,7 +94,7 @@
         <!-- COVER GRID -->
         <div v-if="viewMode === 'cover'" class="cover-grid"
              :style="mode === 'detail' ? { gridTemplateColumns: `repeat(${detailCols}, minmax(0, 1fr))` } : { '--cover-min': coverSizeMap[currentCoverSize] + 'px' }">
-          <div v-for="(it, idx) in items" :key="it._key" class="cover-wrap" :data-alpha-idx="idx" @click="openItem(it)">
+          <div v-for="(it, idx) in visibleItems" :key="it._key" class="cover-wrap" :data-alpha-idx="idx" @click="openItem(it)">
             <div class="cover-img-wrap" :class="{ 'cover-img-wrap--coll': mode === 'grid' }"
                  :style="mode === 'grid' && it.cover_path && collCoverRatios[it._key] ? { aspectRatio: String(collCoverRatios[it._key]) } : undefined">
               <!-- Collection tile: a custom cover keeps its own aspect ratio
@@ -125,7 +125,7 @@
 
         <!-- LIST VIEW (mirrors the games library list-row) -->
         <div v-else class="list-view">
-          <template v-for="(it, idx) in items" :key="it._key">
+          <template v-for="(it, idx) in visibleItems" :key="it._key">
           <!-- Member games: the exact Games-library row (shared component).
                A GOG-sourced member opens in the GOG library, others in Games. -->
           <GameListRow v-if="mode === 'detail'" :game="it" :idx="idx" @open="openMember" />
@@ -157,6 +157,9 @@
           </div>
           </template>
         </div>
+
+        <!-- Sentinel: nearing the viewport mounts the next batch. -->
+        <div ref="listSentinel" class="load-sentinel" aria-hidden="true"></div>
       </div>
 
       <!-- Cover/grid view: About + Details as a side panel (like a game detail) -->
@@ -197,6 +200,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 import { useRoute, useRouter } from 'vue-router'
 import client from '@/services/api/client'
 import { useLibrariesStore } from '@/stores/libraries'
@@ -283,6 +287,11 @@ const items = computed<any[]>(() => {
   return sortItems(games)
 })
 
+// Render tiles / members in batches that grow on scroll; visibleItems is a
+// prefix of items, so the alphabet-jump indices still line up.
+const { visible: visibleItems, ensure: ensureVisible, sentinel: listSentinel } =
+  useIncrementalList(items)
+
 function sortItems(list: any[]): any[] {
   const l = [...list]
   switch (sortBy.value) {
@@ -322,13 +331,15 @@ const availableLetters = computed(() => {
   return set
 })
 
-function scrollToLetter(letter: string) {
+async function scrollToLetter(letter: string) {
   const idx = items.value.findIndex(it => {
     const first = (it.title || '').replace(/^(the|a|an)\s+/i, '').charAt(0).toUpperCase()
     return letter === '#' ? !/[A-Z]/.test(first) : first === letter
   })
   if (idx === -1) return
   activeLetter.value = letter
+  ensureVisible(idx)
+  await nextTick()
   const sel = viewMode.value === 'list' ? '.cl-row' : '.cover-wrap'
   const card = gridScrollEl.value?.querySelectorAll(sel)[idx] as HTMLElement | undefined
   card?.scrollIntoView({ behavior: 'smooth', block: 'start' })

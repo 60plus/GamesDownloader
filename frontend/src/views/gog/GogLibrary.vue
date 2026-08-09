@@ -203,7 +203,7 @@
           :style="{ '--cover-min': coverSizeMap[currentCoverSize] + 'px' }"
         >
           <div
-            v-for="(game, idx) in displayedGames"
+            v-for="(game, idx) in visibleGames"
             :key="game.id"
             class="cover-wrap"
             :data-alpha-idx="idx"
@@ -288,6 +288,9 @@
           />
         </div>
 
+        <!-- Sentinel: nearing the viewport mounts the next batch of rows. -->
+        <div ref="listSentinel" class="load-sentinel" aria-hidden="true"></div>
+
       </div><!-- /grid-scroll -->
 
       <!-- ── Alphabet sidebar ──────────────────────────────────────────── -->
@@ -307,7 +310,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
 import { storeToRefs } from 'pinia'
@@ -421,7 +425,7 @@ const availableLetters = computed(() => {
   return set
 })
 
-function scrollToLetter(letter: string) {
+async function scrollToLetter(letter: string) {
   const games = displayedGames.value
   const idx = games.findIndex(g => {
     const first = g.title.replace(/^(the|a|an)\s+/i, '').charAt(0).toUpperCase()
@@ -429,6 +433,8 @@ function scrollToLetter(letter: string) {
   })
   if (idx === -1) return
   activeLetter.value = letter
+  ensureVisible(idx)
+  await nextTick()
   const gridEl = gridScrollEl.value
   if (!gridEl) return
   // Cover grid uses .cover-wrap; list view uses .list-row
@@ -626,9 +632,15 @@ const displayedGames = computed(() => {
   return list
 })
 
+// Render in batches that grow on scroll; visibleGames is a prefix of
+// displayedGames, so the alphabet-jump indices still line up.
+const { visible: visibleGames, ensure: ensureVisible, sentinel: listSentinel } =
+  useIncrementalList(displayedGames)
+
 // The list view uses the shared GameListRow; normalise the GOG cover (strip CDN
-// suffixes) into cover_path so the component renders it directly.
-const gogRows = computed(() => displayedGames.value.map((g: any) => ({ ...g, cover_path: coverSrc(g) })))
+// suffixes) into cover_path so the component renders it directly. It maps the
+// visible slice so the grid and list windows stay in lockstep.
+const gogRows = computed(() => visibleGames.value.map((g: any) => ({ ...g, cover_path: coverSrc(g) })))
 
 function openGame(game: Game) {
   router.push({ name: 'game-detail', params: { id: game.id } })

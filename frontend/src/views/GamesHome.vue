@@ -556,8 +556,12 @@ function heroStyle(delayS: number): CSSProperties {
 }
 const rowRefs  = ref<Record<string, HTMLElement>>({})
 
-const libGames  = ref<LibGame[]>([])   // /library/games  (custom/shared)
-const gogGames  = ref<GogGame[]>([])   // /gog/library/games
+const libGames  = ref<LibGame[]>([])   // /library/games  (custom/shared) - newest 24
+const gogGames  = ref<GogGame[]>([])   // /gog/library/games - newest 24
+// Real totals from the server, so home can size each library without pulling
+// the whole thing just to count it.
+const libTotal  = ref(0)
+const gogTotal  = ref(0)
 const emuRecent = ref<EmuRom[]>([])    // /roms/recent
 // The two personal ROM strips, moved here off the dashboard: what you have a
 // save for, and what you last launched.
@@ -650,12 +654,13 @@ function recentShown(slug: string): boolean {
 const collectionsWithRecent = computed(() =>
   collections.value.filter(c => recentShown(c.slug) && collData.value[c.slug]?.recent?.length),
 )
-const totalGames = computed(() => libGames.value.length + gogGames.value.length)
+const totalGames = computed(() => libTotal.value + gogTotal.value)
 
 // ── Build lib data ────────────────────────────────────────────────────────────
 
-function buildLib<T extends { id: number; cover_path?: string | null; cover_url?: string | null; background_path?: string | null }>(games: T[]) {
-  // Pick one game that has a cover - hero comes from the SAME game
+function buildLib<T extends { id: number; cover_path?: string | null; cover_url?: string | null; background_path?: string | null }>(games: T[], total?: number) {
+  // Pick one game that has a cover - hero comes from the SAME game. `games` is
+  // the newest slice now, so the banner art comes from recent additions.
   const withCover = games.filter(g => g.cover_path)
   const shuffled  = [...withCover].sort(() => Math.random() - 0.5)
   const picked    = shuffled[0] ?? null
@@ -665,15 +670,15 @@ function buildLib<T extends { id: number; cover_path?: string | null; cover_url?
   const firstHero  = picked ? (picked.background_path ?? picked.cover_path ?? null) : null
 
   return {
-    count: games.length,
+    count: total ?? games.length,
     firstCover,
     firstHero,
     recent: [...games].sort((a, b) => b.id - a.id).slice(0, 24) as (T & { title: string })[],
   }
 }
 
-const gogLib    = computed(() => buildLib(gogGames.value))
-const customLib = computed(() => buildLib(libGames.value))
+const gogLib    = computed(() => buildLib(gogGames.value, gogTotal.value))
+const customLib = computed(() => buildLib(libGames.value, libTotal.value))
 
 // ── Emulation Library ─────────────────────────────────────────────────────────
 
@@ -738,9 +743,10 @@ async function fetchAll() {
   // All in parallel
   fetchEmulationSummary()
   fetchPlayStrips()
-  const [libRes, gogRes] = await Promise.allSettled([
-    client.get('/library/games', { params: { limit: '500' } }),
-    isAdmin.value ? client.get('/gog/library/games') : Promise.resolve({ data: [] }),
+  const [libRes, gogRes, gogCntRes] = await Promise.allSettled([
+    client.get('/library/games', { params: { limit: '24', sort: 'created_desc' } }),
+    isAdmin.value ? client.get('/gog/library/games', { params: { limit: '24', sort: 'created_desc' } }) : Promise.resolve({ data: [] }),
+    isAdmin.value ? client.get('/gog/library/count') : Promise.resolve({ data: { total: 0 } }),
   ])
   if (libRes.status === 'fulfilled') {
     libGames.value = (libRes.value.data.items as any[]).map((g: any) => ({
@@ -749,6 +755,7 @@ async function fetchAll() {
       cover_path:      g.cover_path      ?? null,
       background_path: g.background_path ?? null,
     }))
+    libTotal.value = libRes.value.data.total ?? libGames.value.length
   }
   if (gogRes.status === 'fulfilled') {
     const raw = gogRes.value.data
@@ -758,6 +765,9 @@ async function fetchAll() {
       cover_url:       g.cover_url       ?? null,
       background_path: g.background_path ?? null,
     }))
+  }
+  if (gogCntRes.status === 'fulfilled') {
+    gogTotal.value = (gogCntRes.value.data?.total as number) ?? gogGames.value.length
   }
 }
 

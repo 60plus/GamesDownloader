@@ -11,7 +11,7 @@
   routes it to the right detail page (Games detail, GOG detail, ...).
 -->
 <template>
-  <div class="list-row" @click="openGame">
+  <div ref="rowEl" class="list-row" @click="openGame">
     <!-- Cover -->
     <div class="list-cover-wrap" @mousemove="onCardMove" @mouseleave="onCardLeave" @mouseenter="onCardEnter">
       <div class="cover-img-wrap">
@@ -48,7 +48,7 @@
         :src="game.background_path || game.background_url || game.cover_path || game.cover_url || ''"
         :alt="game.title"
         :class="['list-hero-img', listHeroAnimClass]"
-        :style="{ animationDelay: (idx * -7) + 's' }"
+        :style="{ animationDelay: (idx * -7) + 's', animationPlayState: heroPlayState }"
         loading="lazy"
       />
       <div class="list-hero-overlay" />
@@ -144,7 +144,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { buildLanguageList } from '@/utils/langMap'
 import { ratingVal } from '@/utils/rating'
@@ -160,6 +160,24 @@ const listHeroAnimClass = computed(() => {
   if (!themeStore.heroAnim || !themeStore.animations) return ''
   return `list-hero-img--${themeStore.heroAnimStyle}`
 })
+
+// Animate the hero art only while the row is on screen. The animation class
+// stays put; off screen it is merely PAUSED (not removed), so scrolling a row
+// back resumes from the same frame - no visible restart - while off-screen rows
+// stop consuming compositor work. This is what keeps a long list from running
+// hundreds of concurrent animations at once.
+const rowEl = ref<HTMLElement | null>(null)
+const isVisible = ref(false)
+const heroPlayState = computed(() => (isVisible.value ? 'running' : 'paused'))
+let _visIo: IntersectionObserver | null = null
+onMounted(() => {
+  _visIo = new IntersectionObserver(
+    (entries) => { isVisible.value = entries.some((e) => e.isIntersecting) },
+    { rootMargin: '200px' },
+  )
+  if (rowEl.value) _visIo.observe(rowEl.value)
+})
+onBeforeUnmount(() => { _visIo?.disconnect(); _visIo = null })
 // The star always carries the blended score; GOG's own mark sits beside it as
 // one more source. Items from the GOG library carry no `source`, so the host
 // marks them with the is-gog prop.

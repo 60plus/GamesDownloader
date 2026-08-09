@@ -147,6 +147,7 @@ async def scrape_rom(
     igdb_sec = await config_handler.get("igdb_client_secret") or ""
     lb_en_raw = await config_handler.get("launchbox_enabled") or "true"
     lb_enabled = lb_en_raw.lower() in ("1", "true", "yes")
+    parallel_media = await config_handler.get_bool("metadata_parallel_media", default=True)
 
     search_name   = rom.fs_name_no_ext or rom.fs_name
     fs_slug       = platform.fs_slug
@@ -337,7 +338,14 @@ async def scrape_rom(
 
     if fill_missing and rom.cover_path:
         cover_url = None  # keep the existing cover file untouched
-    if cover_url:
+    if fill_missing and rom.background_path:
+        bg_url = None
+
+    from utils.async_utils import gather_bounded
+
+    async def _dl_cover():
+        if not cover_url:
+            return
         ext = cover_url.rsplit(".", 1)[-1].split("?")[0] or "jpg"
         dest = media_dir / f"cover.{ext}"
         if media_dir.exists():
@@ -358,24 +366,36 @@ async def scrape_rom(
             if detected:
                 merged["cover_aspect"] = detected
 
-    if fill_missing and rom.background_path:
-        bg_url = None
-    if bg_url:
+    async def _dl_bg():
+        if not bg_url:
+            return
         ext = bg_url.rsplit(".", 1)[-1].split("?")[0] or "jpg"
         dest = media_dir / f"background.{ext}"
         saved = await _download_image(bg_url, dest)
         if saved:
             merged["background_path"] = _resource_url(platform.slug, rom.id, saved.name)
 
+    # Cover and background write disjoint fields, so they download together
+    # (bounded) when enabled or one at a time otherwise, like the screenshots.
+    await gather_bounded([_dl_cover(), _dl_bg()], parallel=parallel_media)
+
     if fill_missing and (rom.screenshots or []):
         ss_urls = []
-    saved_ss: list[str] = []
-    for idx, ss_url in enumerate(ss_urls[:6]):
+
+    async def _one_shot(idx: int, ss_url: str) -> str | None:
         ext  = ss_url.rsplit(".", 1)[-1].split("?")[0] or "jpg"
         dest = media_dir / f"screenshot_{idx}.{ext}"
         saved = await _download_image(ss_url, dest)
-        if saved:
-            saved_ss.append(_resource_url(platform.slug, rom.id, saved.name))
+        return _resource_url(platform.slug, rom.id, saved.name) if saved else None
+
+    # Screenshots come from ScreenScraper, whose media host counts simultaneous
+    # requests, so the fan-out is off by config default-on but bounded and can be
+    # turned off entirely; order is preserved regardless.
+    _shot_results = await gather_bounded(
+        [_one_shot(idx, ss_url) for idx, ss_url in enumerate(ss_urls[:6])],
+        parallel=parallel_media,
+    )
+    saved_ss = [r for r in _shot_results if r]
     if saved_ss:
         merged["screenshots"] = saved_ss
 

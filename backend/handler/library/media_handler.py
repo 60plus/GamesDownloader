@@ -372,31 +372,42 @@ async def download_all_media(game_id: int, data: dict, overwrite: bool = False) 
     """Download all media URLs in a game data dict to local paths.
     Modifies and returns the dict with local paths replacing external URLs.
     """
-    if "cover_path" in data and _is_external(data["cover_path"]):
-        local = await download_cover(game_id, data["cover_path"], overwrite)
-        if local:
-            data["cover_path"] = local
+    from handler.config.config_handler import config_handler
+    from utils.async_utils import gather_bounded
+
+    async def _dl_cover():
+        if "cover_path" in data and _is_external(data["cover_path"]):
+            local = await download_cover(game_id, data["cover_path"], overwrite)
+            if local:
+                data["cover_path"] = local
+
+    async def _dl_bg():
+        if "background_path" in data and _is_external(data["background_path"]):
+            local = await download_background(game_id, data["background_path"], overwrite)
+            if local:
+                data["background_path"] = local
+
+    async def _dl_logo():
+        if "logo_path" in data and _is_external(data["logo_path"]):
+            local = await download_logo(game_id, data["logo_path"], overwrite)
+            if local:
+                data["logo_path"] = local
+
+    async def _dl_icon():
+        if "icon_path" in data and _is_external(data["icon_path"]):
+            local = await download_icon(game_id, data["icon_path"], overwrite)
+            if local:
+                data["icon_path"] = local
+
+    parallel = await config_handler.get_bool("metadata_parallel_media", default=True)
+    await gather_bounded([_dl_cover(), _dl_bg(), _dl_logo(), _dl_icon()], parallel=parallel)
 
     # Keep the animated flag in sync with whatever cover this update leaves
     # behind (multi-frame webp/gif); clearing the cover clears the flag too.
+    # Runs after the downloads so it sees the final local cover path.
     if "cover_path" in data:
         from utils.images import detect_cover_animated
         data["cover_animated"] = detect_cover_animated(data["cover_path"])
-
-    if "background_path" in data and _is_external(data["background_path"]):
-        local = await download_background(game_id, data["background_path"], overwrite)
-        if local:
-            data["background_path"] = local
-
-    if "logo_path" in data and _is_external(data["logo_path"]):
-        local = await download_logo(game_id, data["logo_path"], overwrite)
-        if local:
-            data["logo_path"] = local
-
-    if "icon_path" in data and _is_external(data["icon_path"]):
-        local = await download_icon(game_id, data["icon_path"], overwrite)
-        if local:
-            data["icon_path"] = local
 
     if "screenshots" in data and isinstance(data["screenshots"], list):
         data["screenshots"] = await download_screenshots(game_id, data["screenshots"], overwrite)

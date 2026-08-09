@@ -154,7 +154,7 @@
           :style="{ '--cover-min': coverSizeMap[currentCoverSize] + 'px' }"
         >
           <div
-            v-for="(game, idx) in displayedGames"
+            v-for="(game, idx) in visibleGames"
             :key="game.id"
             class="cover-wrap"
             :data-alpha-idx="idx"
@@ -220,8 +220,11 @@
 
         <!-- ── LIST VIEW ────────────────────────────────────────────────── -->
         <div v-else class="list-view">
-          <GameListRow v-for="(game, idx) in displayedGames" :key="game.id" :game="game" :idx="idx" @open="openGame" />
+          <GameListRow v-for="(game, idx) in visibleGames" :key="game.id" :game="game" :idx="idx" @open="openGame" />
         </div>
+
+        <!-- Sentinel: as it nears the viewport the next batch of rows mounts. -->
+        <div ref="listSentinel" class="load-sentinel" aria-hidden="true"></div>
 
       </div><!-- /grid-scroll -->
 
@@ -418,7 +421,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useI18n } from '@/i18n'
 import { ratingVal } from '@/utils/rating'
 import { useSocketStore } from '@/stores/socket'
@@ -443,6 +446,7 @@ import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import GameRequestDialog from '@/components/GameRequestDialog.vue'
 import GameListRow from '@/components/games/GameListRow.vue'
 import { useRequestNotify } from '@/composables/useRequestNotify'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 
 interface LibGame {
   id: number
@@ -600,6 +604,12 @@ const displayedGames = computed(() => {
   return list
 })
 
+// Render the (potentially long) list in batches that grow as the user scrolls.
+// `visibleGames` is a prefix slice of `displayedGames`, so an index into one is
+// the same index into the other - the alphabet jump below relies on that.
+const { visible: visibleGames, ensure: ensureVisible, sentinel: listSentinel } =
+  useIncrementalList(displayedGames)
+
 // ── Alphabet sidebar ─────────────────────────────────────────────────────────
 
 const availableLetters = computed(() => {
@@ -611,7 +621,7 @@ const availableLetters = computed(() => {
   return set
 })
 
-function scrollToLetter(letter: string) {
+async function scrollToLetter(letter: string) {
   const games = displayedGames.value
   const idx = games.findIndex(g => {
     const first = g.title.replace(/^(the|a|an)\s+/i, '').charAt(0).toUpperCase()
@@ -619,6 +629,9 @@ function scrollToLetter(letter: string) {
   })
   if (idx === -1) return
   activeLetter.value = letter
+  // The target may be past the currently-rendered batch; mount up to it first.
+  ensureVisible(idx)
+  await nextTick()
   const gridEl = gridScrollEl.value
   if (!gridEl) return
   const selector = viewMode.value === 'list' ? '.list-row' : '.cover-wrap'

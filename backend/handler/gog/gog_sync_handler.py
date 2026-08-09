@@ -274,5 +274,16 @@ class GogSyncHandler(DBBaseHandler):
         )
         return result.scalar() or 0
 
+    @begin_session
+    async def count_deduped(self, *, session: AsyncSession = None) -> int:
+        """Games as the library shows them - one per gog_id, so a product owned
+        by several users is counted once (get_all_deduped's row count without
+        materialising the rows)."""
+        from sqlalchemy import func
+        result = await session.execute(
+            select(func.count(func.distinct(GogGame.gog_id)))
+        )
+        return result.scalar() or 0
+
 
 gog_sync_handler = GogSyncHandler()
