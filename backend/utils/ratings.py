@@ -12,6 +12,33 @@ without a handler having to import from endpoints.
 from __future__ import annotations
 
 
+def normalize_star_5(value) -> float | None:
+    """Coerce any rating onto the 0-5 star scale `library_games.rating` holds.
+
+    The column is a 0-5 star, but more than one writer reaches it and they do
+    not all speak that scale: the metadata-search apply hands RAWG back on a
+    0-10 scale (rawg*2), a scrape can carry an IGDB 0-100 total, an admin can
+    paste a Metacritic 0-10. A value already in 0-5 passes through; a 0-10 one
+    is halved; a 0-100 one is divided by 20. This is the magnitude rule
+    `aggregate_rating` uses for an unknown source, so the stored star and the
+    blended one agree. Clamped to 0-5; None - and anything unparseable or not
+    positive - stays None.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    if v > 10:
+        v = v / 20.0
+    elif v > 5:
+        v = v / 2.0
+    return round(min(5.0, v), 1)
+
+
 def rom_rating_agg(
     ss_score: float | None,
     igdb_rating: float | None,

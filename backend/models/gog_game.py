@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from models.base import Base
+from utils.ratings import normalize_star_5
 
 
 class GogGame(Base):
@@ -87,3 +88,13 @@ class GogGame(Base):
     # Scrape tracking
     scraped: Mapped[bool] = mapped_column(Boolean, default=False)
     scraped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    @validates("rating")
+    def _normalize_rating(self, _key: str, value):
+        """Hold the 0-5 star invariant, same as LibraryGame.
+
+        A source=gog library game falls back to this column for its star, so a
+        0-10 value here (a RAWG*2 that reached the GOG scrape) rendered as 8.6
+        out of 5 through the fallback. See utils.ratings.normalize_star_5.
+        """
+        return normalize_star_5(value)
