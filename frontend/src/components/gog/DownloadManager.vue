@@ -3,12 +3,12 @@
   <div class="dm-tray" :class="{ 'dm-tray--open': expanded, 'dm-tray--has-active': hasActive, 'dm-tray--inline': inline }">
 
     <!-- ── Header bar (always visible when there are jobs) ───────────────── -->
-    <div v-if="jobs.length > 0 || packagingList.length > 0" class="dm-header" @click="expanded = !expanded">
+    <div v-if="jobs.length > 0 || packagingList.length > 0 || urlList.length > 0" class="dm-header" @click="expanded = !expanded">
       <div class="dm-header-left">
         <!-- Animated icon when downloading -->
         <div class="dm-status-dot" :class="dotClass" />
         <span class="dm-header-title">Downloads</span>
-        <span class="dm-badge">{{ jobs.length + packagingList.length }}</span>
+        <span class="dm-badge">{{ jobs.length + packagingList.length + urlList.length }}</span>
       </div>
 
       <!-- Active download quick-info (collapsed view) -->
@@ -26,7 +26,7 @@
 
     <!-- ── Expanded job list ───────────────────────────────────────────────── -->
     <Transition name="dm-slide">
-      <div v-if="expanded && (jobs.length > 0 || packagingList.length > 0)" class="dm-body">
+      <div v-if="expanded && (jobs.length > 0 || packagingList.length > 0 || urlList.length > 0)" class="dm-body">
 
         <!-- Packaging items (GOG per-platform zip) -->
         <div v-for="pk in packagingList" :key="pk.id" class="dm-job" :class="`dm-job--${pkClass(pk.status)}`">
@@ -50,6 +50,39 @@
             </span>
             <span v-if="pk.status === 'packaging' && pk.total" class="dm-stat">{{ pk.done }} / {{ pk.total }}</span>
             <span class="dm-stat dm-stat--pct">{{ Math.round(pk.progress_pct) }}%</span>
+          </div>
+        </div>
+
+        <!-- URL / catalogue downloads (storefront pulls). Socket-fed and short-
+             lived like packaging, not part of the GOG job database: they report
+             over upload:url_progress|complete|error and clear themselves once
+             finished. A GOG download reaches the tray through `jobs`; this is the
+             same visibility for a catalogue build (PC Ports and the like). -->
+        <div v-for="u in urlList" :key="u.id" class="dm-job" :class="`dm-job--${pkClass(u.status)}`">
+          <div class="dm-job-head">
+            <div class="dm-job-info">
+              <span class="dm-job-title">{{ u.game_title || u.file_name }}</span>
+              <template v-if="u.game_title && u.file_name">
+                <span class="dm-job-sep">·</span>
+                <span class="dm-job-file">{{ u.file_name }}</span>
+              </template>
+            </div>
+          </div>
+          <div class="dm-progress-track">
+            <div
+              class="dm-progress-fill"
+              :class="`dm-progress-fill--${pkClass(u.status)}`"
+              :style="{ width: u.status === 'completed' ? '100%' : (u.total ? `${Math.min(u.progress_pct, 100)}%` : '8%') }"
+            />
+          </div>
+          <div class="dm-job-stats">
+            <span class="dm-stat dm-stat--status" :class="`dm-status--${pkClass(u.status)}`">{{ statusLabel(u.status) }}</span>
+            <template v-if="u.status === 'downloading'">
+              <span v-if="u.total" class="dm-stat">{{ formatBytes(u.received) }} / {{ formatBytes(u.total) }}</span>
+              <span v-if="u.speed > 0" class="dm-stat dm-stat--speed">{{ formatSpeed(u.speed) }}</span>
+            </template>
+            <span v-if="u.status === 'failed'" class="dm-stat dm-stat--error" :title="u.error || undefined">{{ truncate(u.error, 40) }}</span>
+            <span class="dm-stat dm-stat--pct">{{ Math.round(u.progress_pct) }}%</span>
           </div>
         </div>
 
@@ -221,9 +254,29 @@ function pkClass(status: string): string {
   return status === 'failed' ? 'failed' : status === 'completed' ? 'completed' : 'downloading'
 }
 
+// URL / catalogue downloads: a socket-fed, self-clearing section separate from
+// the GOG job list (which is DB-backed and refetched on any unknown id). Keyed
+// by the url job id, which is namespaced away from GOG ids so the two lists
+// never collide.
+interface UrlDl {
+  id: string
+  game_title: string
+  file_name: string
+  status: string            // downloading | completed | failed
+  received: number
+  total: number
+  speed: number
+  progress_pct: number
+  error: string
+}
+const urlItems = reactive<Record<string, UrlDl>>({})
+const urlList = computed(() => Object.values(urlItems))
+const urlTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let unsubSocket: (() => void) | null = null
 let unsubPackaging: (() => void) | null = null
+let unsubUrl: (() => void) | null = null
 
 const POLL_INTERVAL = 30000  // ms - fallback only, WebSocket is primary
 
@@ -239,7 +292,8 @@ const hasActivePackaging = computed(() =>
 
 const hasActive = computed(() =>
   jobs.value.some(j => ['downloading', 'queued', 'paused'].includes(j.status)) ||
-  hasActivePackaging.value
+  hasActivePackaging.value ||
+  urlList.value.some(u => u.status === 'downloading')
 )
 
 const hasFinished = computed(() =>
@@ -247,7 +301,7 @@ const hasFinished = computed(() =>
 )
 
 const dotClass = computed(() => {
-  if (jobs.value.some(j => j.status === 'downloading') || hasActivePackaging.value) return 'dm-status-dot--active'
+  if (jobs.value.some(j => j.status === 'downloading') || hasActivePackaging.value || urlList.value.some(u => u.status === 'downloading')) return 'dm-status-dot--active'
   if (jobs.value.some(j => j.status === 'paused'))      return 'dm-status-dot--paused'
   if (jobs.value.some(j => j.status === 'failed'))      return 'dm-status-dot--error'
   return 'dm-status-dot--idle'
@@ -311,6 +365,67 @@ function handlePackaging(data: Record<string, unknown>) {
   }
 }
 
+function handleUrlUpload(kind: string, data: Record<string, unknown>) {
+  // Only downloads that asked to be surfaced (catalogue pulls). A plain admin
+  // URL upload keeps its own inline progress bar and stays out of the tray.
+  if (!data || !data.tray) return
+  const id = String(data.id ?? '')
+  if (!id) return
+  const cur = urlItems[id]
+  if (kind === 'complete') {
+    urlItems[id] = {
+      id,
+      game_title: String(data.game_title ?? cur?.game_title ?? ''),
+      file_name: cur?.file_name ?? '',
+      status: 'completed',
+      received: cur?.total || cur?.received || 0,
+      total: cur?.total ?? 0,
+      speed: 0,
+      progress_pct: 100,
+      error: '',
+    }
+    scheduleUrlClear(id, 5000)
+  } else if (kind === 'error') {
+    urlItems[id] = {
+      id,
+      game_title: String(data.game_title ?? cur?.game_title ?? ''),
+      file_name: cur?.file_name ?? '',
+      status: 'failed',
+      received: cur?.received ?? 0,
+      total: cur?.total ?? 0,
+      speed: 0,
+      progress_pct: cur?.progress_pct ?? 0,
+      error: String(data.error ?? ''),
+    }
+    scheduleUrlClear(id, 8000)
+  } else {
+    const pct = Number(data.percent)
+    urlItems[id] = {
+      id,
+      game_title: String(data.game_title ?? cur?.game_title ?? ''),
+      file_name: String(data.filename ?? cur?.file_name ?? ''),
+      status: 'downloading',
+      received: Number(data.received ?? 0),
+      total: Number(data.total ?? 0),
+      speed: Number(data.speed ?? 0),
+      progress_pct: pct >= 0 ? pct : 0,
+      error: '',
+    }
+    expanded.value = true
+    // Watchdog: rearmed on every progress tick. A live download emits ~1/s, so
+    // 90s of silence means the backend task is gone (e.g. the container was
+    // restarted mid-download) and no terminal event is coming - drop the row so
+    // it does not sit "Downloading..." forever. A later complete/error resets it.
+    scheduleUrlClear(id, 90000)
+  }
+}
+
+function scheduleUrlClear(id: string, ms: number) {
+  const ex = urlTimers.get(id); if (ex) clearTimeout(ex)
+  const t = setTimeout(() => { delete urlItems[id]; urlTimers.delete(id) }, ms)
+  urlTimers.set(id, t)
+}
+
 function startPolling() {
   stopPolling()
   pollTimer = setInterval(() => { fetchJobs(); fetchActivePackaging() }, POLL_INTERVAL)
@@ -328,6 +443,7 @@ onMounted(() => {
     const socketStore = useSocketStore()
     unsubSocket = socketStore.onDownloadJob(handleJobUpdate)
     unsubPackaging = socketStore.onPackaging(handlePackaging)
+    unsubUrl = socketStore.onUrlUpload(handleUrlUpload)
   } catch { /* socket not available */ }
   // Fallback: slow poll every 30s for full sync
   startPolling()
@@ -337,7 +453,9 @@ onUnmounted(() => {
   stopPolling()
   if (unsubSocket) { unsubSocket(); unsubSocket = null }
   if (unsubPackaging) { unsubPackaging(); unsubPackaging = null }
+  if (unsubUrl) { unsubUrl(); unsubUrl = null }
   pkTimers.forEach(t => clearTimeout(t)); pkTimers.clear()
+  urlTimers.forEach(t => clearTimeout(t)); urlTimers.clear()
 })
 
 // Auto-expand tray when a new download starts

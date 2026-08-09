@@ -15,6 +15,7 @@ POST /library/games/{game_id}/upload-url
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import itertools
 import logging
 import os
@@ -40,6 +41,11 @@ _lib = LibraryHandler()
 
 _CHUNK_WRITE = 1024 * 256  # 256 KB write buffer
 
+# The only os values that become a directory. LibraryFile.os documents the same
+# four; keeping the map closed is what stops a caller-supplied value from being
+# used as a path segment.
+_OS_FOLDERS = {"windows": "windows", "mac": "mac", "linux": "linux", "all": "."}
+
 
 def _sanitize(title: str) -> str:
     t = unicodedata.normalize("NFKD", title)
@@ -47,7 +53,14 @@ def _sanitize(title: str) -> str:
     t = re.sub(r'[<>:"/\\|?*]', "_", t)
     # Strip path traversal sequences
     t = re.sub(r'\.\.+', "_", t)
-    return t.strip("./\\ ")
+    cleaned = t.strip("./\\ ")
+    if cleaned:
+        return cleaned
+    # A title with no ASCII in it at all - a Japanese or Cyrillic name - used to
+    # come back empty, and an empty path segment silently disappears: every such
+    # game shared one directory and their files overwrote each other. The hash
+    # keeps them apart and keeps the same title on the same folder across runs.
+    return "game-" + hashlib.sha1(title.encode("utf-8")).hexdigest()[:10]
 
 
 def _rel_from_abs(abs_path: str) -> str:
@@ -64,13 +77,18 @@ def _dest_dir_for(
     built-in Games library, or a custom library's own folder (e.g. "kids-games").
     Files land in <storage_folder>/<title>/<os>/.
     """
-    folder_map = {
-        "windows": "windows",
-        "mac":     "mac",
-        "linux":   "linux",
-        "all":     ".",
-    }
-    sub = folder_map.get(os_platform, os_platform)
+    # An unrecognised os used to be dropped into the path verbatim, and pathlib
+    # does not normalise a segment: "../../../plugins" walks out of GAMES_PATH,
+    # and an absolute segment replaces the whole prefix outright. Since the
+    # caller-supplied os reaches here from a request body, a form field and a
+    # catalogue entry, that was an arbitrary file write. Only the four known
+    # values are folders now; anything else is refused.
+    sub = _OS_FOLDERS.get(os_platform)
+    if sub is None:
+        raise ValueError(
+            f"Unknown os {os_platform!r} - expected one of "
+            + ", ".join(sorted(_OS_FOLDERS))
+        )
     if file_type in ("extra", "extras"):
         sub = "extra"
     elif file_type == "dlc":
@@ -212,9 +230,12 @@ async def upload_game_file(
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    dest_dir = _dest_dir_for(
-        game.title, os_platform, file_type, await _resolve_storage_folder(game_id),
-    )
+    try:
+        dest_dir = _dest_dir_for(
+            game.title, os_platform, file_type, await _resolve_storage_folder(game_id),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     filename = Path(file.filename or "upload.bin").name
     # Reject filenames that contain traversal sequences after stripping the directory component
@@ -296,6 +317,8 @@ async def _url_upload_job(
     version: str | None,
     actor: str | None,
     max_bytes: int,
+    game_title: str = "",
+    tray: bool = False,
 ) -> None:
     from handler.socket_handler import sio
     import httpx
@@ -346,6 +369,8 @@ async def _url_upload_job(
                             await sio.emit("upload:url_progress", {
                                 "id":       job_id,
                                 "game_id":  game_id,
+                                "game_title": game_title,
+                                "tray":     tray,
                                 "filename": filename,
                                 "percent":  round(size / total * 100, 1) if total else -1,
                                 "received": size,
@@ -357,11 +382,12 @@ async def _url_upload_job(
             game_id, dest_path, filename, size,
             os_platform, file_type, language, version, actor,
         )
-        await sio.emit("upload:url_complete", {"id": job_id, "game_id": game_id, **result})
+        await sio.emit("upload:url_complete", {"id": job_id, "game_id": game_id, "game_title": game_title, "tray": tray, **result})
         logger.info("URL upload #%d finished for game %d (%s, %d B)", job_id, game_id, filename, size)
     except _VirusFound as v:
         await sio.emit("upload:url_error", {
             "id": job_id, "game_id": game_id,
+            "game_title": game_title, "tray": tray,
             "error": f"Blocked by antivirus ({v.threat}).",
         })
     except Exception as e:
@@ -369,8 +395,57 @@ async def _url_upload_job(
         logger.warning("URL upload #%d failed for game %d: %s", job_id, game_id, e)
         await sio.emit("upload:url_error", {
             "id": job_id, "game_id": game_id,
+            "game_title": game_title, "tray": tray,
             "error": str(e)[:300] or "Download failed.",
         })
+
+
+async def queue_url_download(
+    game, url: str, *, os_platform: str, file_type: str,
+    language: str | None = None, version: str | None = None,
+    actor: str | None = None, max_bytes: int, storage_folder: str | None = None,
+    storage_title: str | None = None, tray: bool = False,
+) -> dict:
+    """Validate a URL and start a background download into a game's folder.
+
+    Shared so that anything pulling a build onto the server - the admin pasting
+    a link, a catalogue offering one - goes through the same checks. A second
+    copy of this would be a second place to forget the SSRF guard.
+
+    ``storage_folder`` overrides the on-disk folder. A catalogue download shows
+    its game in the Games library but keeps its files under the store's own
+    folder (the way GOG puts installers under /GOG), so the folder cannot be
+    read back from library membership and is passed in.
+
+    ``storage_title`` overrides the per-game folder name. Two catalogue entries
+    can share a title, and their builds must not share a folder - one would
+    overwrite the other and deleting one would strand the other's files - so the
+    caller passes a disambiguated name. Defaults to the game's title.
+
+    Raises ValueError on a URL that must not be fetched; callers turn that into
+    whatever their transport calls a bad request.
+    """
+    url = (url or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Only http(s) URLs are supported")
+
+    # Fail fast on an obviously-internal target (localhost / cloud metadata /
+    # link-local). LAN is allowed here (self-hosters pull from their own NAS);
+    # the download job re-checks every redirect hop with the same policy.
+    from utils.net_guard import assert_fetch_allowed
+    assert_fetch_allowed(url, allow_private_lan=True)
+
+    folder = storage_folder if storage_folder is not None else await _resolve_storage_folder(game.id)
+    filename = _safe_filename(parsed.path)
+    dest_dir = _dest_dir_for(storage_title or game.title, os_platform, file_type, folder)
+    job_id = next(_url_job_seq)
+    asyncio.create_task(_url_upload_job(
+        job_id, game.id, url, dest_dir, filename,
+        os_platform, file_type, language, version, actor, max_bytes,
+        game_title=game.title, tray=tray,
+    ))
+    return {"id": job_id, "filename": filename}
 
 
 @protected_route(upload_router.post, "/games/{game_id}/upload-url", scopes=[Scope.LIBRARY_UPLOAD])
@@ -379,31 +454,15 @@ async def upload_game_file_from_url(request: Request, game_id: int, body: Upload
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    url = (body.url or "").strip()
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="Only http(s) URLs are supported")
-
-    # Fail fast on an obviously-internal target (localhost / cloud metadata /
-    # link-local). LAN is allowed here (self-hosters pull from their own NAS);
-    # the download job re-checks every redirect hop with the same policy.
-    from utils.net_guard import assert_fetch_allowed, UnsafeURLError
     try:
-        assert_fetch_allowed(url, allow_private_lan=True)
-    except UnsafeURLError as exc:
+        return await queue_url_download(
+            game, body.url,
+            os_platform=body.os, file_type=body.file_type,
+            language=body.language, version=body.version,
+            actor=(request.state.user.username
+                   if getattr(request.state, "user", None) else None),
+            max_bytes=await _max_upload_bytes(getattr(request.state, "user", None)),
+        )
+    # UnsafeURLError is a ValueError, so the blocked-URL case lands here too.
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    filename = _safe_filename(parsed.path)
-    dest_dir = _dest_dir_for(
-        game.title, body.os, body.file_type, await _resolve_storage_folder(game_id),
-    )
-    max_bytes = await _max_upload_bytes(getattr(request.state, "user", None))
-    actor = (request.state.user.username
-             if getattr(request.state, "user", None) else None)
-
-    job_id = next(_url_job_seq)
-    asyncio.create_task(_url_upload_job(
-        job_id, game_id, url, dest_dir, filename,
-        body.os, body.file_type, body.language, body.version, actor, max_bytes,
-    ))
-    return {"id": job_id, "filename": filename}
