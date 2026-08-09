@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-from config import GAMES_PATH
 from endpoints.library.upload_router import _OS_FOLDERS, _dest_dir_for, _sanitize
 
 ESCAPES = [
@@ -37,10 +36,14 @@ def test_an_unknown_os_is_refused(os_value):
 
 
 @pytest.mark.parametrize("os_value", sorted(_OS_FOLDERS))
-def test_the_known_os_values_stay_inside_games_path(tmp_path, os_value):
+def test_the_known_os_values_stay_inside_games_path(tmp_path, monkeypatch, os_value):
+    # _dest_dir_for creates the folder as a side effect, so point GAMES_PATH at a
+    # writable temp dir - the real /data does not exist on a CI runner.
+    import endpoints.library.upload_router as ur
+    monkeypatch.setattr(ur, "GAMES_PATH", str(tmp_path))
     dest = _dest_dir_for("Some Game", os_value, "game")
-    assert Path(GAMES_PATH).resolve() in dest.resolve().parents or \
-        dest.resolve() == Path(GAMES_PATH).resolve()
+    root = Path(tmp_path).resolve()
+    assert root in dest.resolve().parents or dest.resolve() == root
 
 
 def test_extra_and_dlc_do_not_reopen_the_hole():
