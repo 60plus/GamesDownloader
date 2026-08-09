@@ -212,9 +212,12 @@ async def library_count(request: Request) -> dict:
     from handler.database.library_registry_handler import library_registry_handler as _reg
     _gog = await _reg.get_by_slug("gog")
     if _gog is not None and not await _reg.user_can_access(getattr(request.state, "user", None), _gog):
-        return {"total": 0}
+        return {"total": 0, "count": 0}
     from handler.gog.gog_sync_handler import gog_sync_handler
-    return {"total": await gog_sync_handler.count_deduped()}
+    n = await gog_sync_handler.count_deduped()
+    # `total` for the home page and `count` for the Classic sidebar - both the
+    # same deduped figure, one row per gog_id.
+    return {"total": n, "count": n}
 
 
 @gog_router.get("/library/games/{game_id}")
@@ -1137,14 +1140,6 @@ async def upload_media(
         await gog_sync_handler.update_fields(game_id, fields)
 
     return {"ok": True, "path": local_path}
-
-
-@gog_router.get("/library/count")
-async def library_count(request: Request) -> dict:
-    _require_scope(request, Scope.GOG_READ)
-    from handler.gog.gog_sync_handler import gog_sync_handler
-    n = await gog_sync_handler.count()
-    return {"count": n}
 
 
 # ── SRL (System Requirements Lab) ─────────────────────────────────────────────
