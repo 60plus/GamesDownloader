@@ -20,13 +20,13 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete as sql_delete, func, select, update as sql_update
 
 from config import RESOURCES_PATH
 from handler.database.library_registry_handler import library_registry_handler
 from handler.database.session import async_session_factory
 from models.catalog_entry import CatalogEntry
-from models.library import Library
+from models.library import Library, LibraryMembership
 from models.library_file import LibraryFile  # noqa: F401 - resolves LibraryGame.files mapper
 from models.library_game import LibraryGame
 from plugins.manager import plugin_manager
@@ -83,7 +83,12 @@ def list_catalogs() -> list[dict[str, str]]:
             name = name_fn() if callable(name_fn) else cid
         except Exception:
             name = cid
-        out.append({"id": str(cid), "name": str(name)})
+        # plugin_id lets the settings UI put a catalogue's first-sync button on
+        # the very plugin whose config (its token) the sync needs.
+        out.append({
+            "id": str(cid), "name": str(name),
+            "plugin_id": plugin_manager.id_for_instance(inst),
+        })
     return out
 
 
@@ -418,6 +423,10 @@ async def _ensure_game_for_entry(session, entry: CatalogEntry) -> tuple[LibraryG
         hltb_complete_s=entry.hltb_complete_s,
         is_active=True,
         in_default_library=True,
+        # Remember the origin so a reinstall of the catalogue re-links this game
+        # instead of offering it for download again (uninstall took the entry).
+        catalog_id=entry.catalog_id,
+        catalog_external_id=entry.external_id,
     )
     session.add(game)
     await session.flush()
@@ -696,6 +705,9 @@ async def _ensure_catalog_store(inst, catalog_id: str) -> Library:
         color=decl.get("color"),
         icon=decl.get("icon"),
         storage_folder=decl.get("storage_folder"),
+        # Record the owner so the store can be removed with the plugin later
+        # without a live instance to ask which catalogue was whose.
+        plugin_id=plugin_manager.id_for_instance(inst),
     )
 
 
@@ -758,6 +770,7 @@ async def _reconcile(session, catalog_id: str, entries: list) -> dict[str, Any]:
     stats = {
         "fetched": len(entries), "created": 0, "updated": 0,
         "unavailable": 0, "skipped": 0, "retired": 0, "artwork": 0,
+        "relinked": 0,
     }
     seen: set[str] = set()
 
@@ -860,4 +873,310 @@ async def _reconcile(session, catalog_id: str, entries: list) -> dict[str, Any]:
         row.assets = None
         stats["retired"] += 1
 
+    # A reinstalled plugin brings its listings back empty; re-link each to the
+    # game already downloaded from it (see relink_catalog_games).
+    stats["relinked"] = await relink_catalog_games(session, catalog_id)
+
     return stats
+
+
+def _relink_targets(
+    entry_external_ids: list[str], game_rows: list[tuple[int, str | None]],
+) -> dict[str, int]:
+    """Map each entry external_id to the game downloaded from it.
+
+    game_rows is (game_id, catalog_external_id) ordered by id, so the first
+    (lowest id) wins should a duplicate origin ever exist and the mapping stays
+    stable. The match is exact on external_id, so an entry never adopts the wrong
+    game. Pure, so that rule is testable without a database.
+    """
+    game_by_ext: dict[str, int] = {}
+    for gid, ext in game_rows:
+        if ext is not None:
+            game_by_ext.setdefault(ext, gid)
+    return {ext: game_by_ext[ext] for ext in entry_external_ids if ext in game_by_ext}
+
+
+async def relink_catalog_games(session, catalog_id: str) -> int:
+    """Re-link a catalogue's entries to games downloaded from them earlier.
+
+    When a catalogue plugin is uninstalled its store and entries go, but the
+    games downloaded from it stay in the Games library carrying their origin
+    (catalog_id, catalog_external_id). A reinstall brings the entries back empty,
+    so this matches each still-unlinked entry to its game by that origin (see
+    _relink_targets) and the store reads it as downloaded again instead of
+    offering a duplicate download. Returns how many were re-linked.
+    """
+    unlinked = (await session.execute(
+        select(CatalogEntry).where(
+            CatalogEntry.catalog_id == catalog_id,
+            CatalogEntry.library_game_id.is_(None),
+        )
+    )).scalars().all()
+    if not unlinked:
+        return 0
+    games = (await session.execute(
+        select(LibraryGame)
+        .where(LibraryGame.catalog_id == catalog_id,
+               LibraryGame.catalog_external_id.isnot(None))
+        .order_by(LibraryGame.id)
+    )).scalars().all()
+    game_by_id = {g.id: g for g in games}
+    targets = _relink_targets(
+        [e.external_id for e in unlinked],
+        [(g.id, g.catalog_external_id) for g in games],
+    )
+    relinked = 0
+    for entry in unlinked:
+        gid = targets.get(entry.external_id)
+        if gid is not None:
+            entry.library_game_id = gid
+            # The fresh entry from this sync has no scraped presentation, but the
+            # game it links to still carries what was scraped onto it at download.
+            # Copy it back so the store shows the game's cover and metadata again
+            # instead of a blank listing, and mark the entry scraped so the
+            # metadata pass does not redo work the game already holds.
+            _copy_game_meta_to_entry(entry, game_by_id[gid])
+            relinked += 1
+    if relinked:
+        logger.info(
+            "Catalogue %s: re-linked %d entr%s to games already downloaded",
+            catalog_id, relinked, "y" if relinked == 1 else "ies",
+        )
+    return relinked
+
+
+def _copy_game_meta_to_entry(entry: CatalogEntry, game: LibraryGame) -> None:
+    """Carry a downloaded game's scraped presentation back onto its catalogue
+    entry, the reverse of the copy a download makes from entry to game. Fills
+    only fields the entry is missing, so a deliberate re-scrape can still
+    overwrite them, and stamps meta_scraped_at so the metadata pass treats the
+    entry as already done."""
+    if entry.cover_path is None:
+        entry.cover_path = game.cover_path
+    if entry.background_path is None:
+        entry.background_path = game.background_path
+    if entry.logo_path is None:
+        entry.logo_path = game.logo_path
+    if entry.description is None:
+        entry.description = game.description
+    if entry.developer is None:
+        entry.developer = game.developer
+    if entry.publisher is None:
+        entry.publisher = game.publisher
+    if entry.release_date is None and game.release_date is not None:
+        entry.release_date = game.release_date.isoformat()
+    if entry.rating is None:
+        entry.rating = game.rating
+    if entry.genres is None and game.genres:
+        entry.genres = list(game.genres)
+    if entry.screenshots is None and game.screenshots:
+        entry.screenshots = list(game.screenshots)
+    if entry.meta_ratings is None and game.meta_ratings:
+        entry.meta_ratings = dict(game.meta_ratings)
+    if entry.languages is None and game.languages:
+        entry.languages = dict(game.languages)
+    if entry.requirements is None and game.requirements:
+        entry.requirements = dict(game.requirements)
+    if entry.hltb_main_s is None:
+        entry.hltb_main_s = game.hltb_main_s
+    if entry.hltb_complete_s is None:
+        entry.hltb_complete_s = game.hltb_complete_s
+    # Only call the entry scraped when the game actually carries metadata, so a
+    # game that was downloaded but never scraped still gets picked up by the
+    # metadata pass rather than being marked done with nothing behind it.
+    game_was_scraped = bool(
+        game.cover_path or game.description or game.rating is not None
+    )
+    if game_was_scraped and entry.meta_scraped_at is None:
+        entry.meta_scraped_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        entry.meta_matched_title = entry.meta_matched_title or game.title
+
+
+# ── Storefront lifecycle ─────────────────────────────────────────────────────
+# A plugin catalogue's store library is the plugin's to own: it is born on the
+# first sync (_ensure_catalog_store) and has to die with the plugin. Nothing
+# else removes it, so without the two entry points below an uninstalled
+# catalogue would sit in the navigation for good - still browseable from its
+# cached listings even though the plugin that fed it is gone.
+
+
+def catalog_ids_for_plugin(plugin_id: str) -> list[str]:
+    """The catalogue ids a loaded plugin offers, for cleanup on uninstall.
+
+    Read from the live instance while it is still loaded: the store is keyed on
+    catalog_id, not plugin_id, so once the plugin is unregistered there is no way
+    left to tell which shelf was its. Empty when the plugin is not loaded or does
+    not offer a catalogue.
+    """
+    inst = plugin_manager.get_instance(plugin_id)
+    if inst is None:
+        return []
+    fn = getattr(inst, "library_catalog_id", None)
+    if not callable(fn):
+        return []
+    try:
+        cid = fn()
+    except Exception:
+        logger.warning(
+            "Catalogue plugin %s failed to report its id on removal",
+            plugin_id, exc_info=True,
+        )
+        return []
+    return [str(cid)] if cid else []
+
+
+async def _purge_catalog_store(session, store: Library) -> None:
+    """Delete one catalogue store and its listings, keeping downloaded games.
+
+    The listings (catalog_entries) go: a store with no plugin behind it can
+    neither refresh nor download them. Their library_game_id FK is ON DELETE SET
+    NULL, so the games they were downloaded into are untouched - those live in
+    the Games library (in_default_library) and are not members of this store, so
+    removing it cannot strand them. The defensive re-home below only ever fires
+    if a future change starts adding catalogue games as store members.
+    """
+    catalog_id = store.catalog_id
+    member_ids = [r[0] for r in (await session.execute(
+        select(LibraryMembership.library_game_id)
+        .where(LibraryMembership.library_id == store.id)
+    )).all()]
+    await session.execute(
+        sql_delete(CatalogEntry).where(CatalogEntry.catalog_id == catalog_id)
+    )
+    await session.delete(store)  # library_membership rows cascade
+    await session.flush()
+    if member_ids:
+        still = {r[0] for r in (await session.execute(
+            select(LibraryMembership.library_game_id)
+            .where(LibraryMembership.library_game_id.in_(member_ids))
+        )).all()}
+        stranded = [gid for gid in member_ids if gid not in still]
+        if stranded:
+            await session.execute(
+                sql_update(LibraryGame)
+                .where(LibraryGame.id.in_(stranded),
+                       LibraryGame.in_default_library.is_(False))
+                .values(in_default_library=True)
+            )
+    logger.info(
+        "Removed catalogue store %s (%s) and its listings", store.slug, catalog_id,
+    )
+
+
+async def remove_catalog_store(catalog_id: str) -> bool:
+    """Remove the storefront for one catalogue id, called when its plugin is
+    uninstalled. Keeps any games already downloaded from it. Returns False (a
+    no-op) when there is no such store."""
+    async with async_session_factory() as session:
+        async with session.begin():
+            store = (await session.execute(
+                select(Library).where(
+                    Library.catalog_id == catalog_id, Library.is_store.is_(True),
+                )
+            )).scalars().first()
+            if store is None:
+                return False
+            await _purge_catalog_store(session, store)
+            return True
+
+
+def _catalog_owners() -> dict[str, str]:
+    """Map each loaded catalogue plugin's catalogue id to its plugin id.
+
+    Used by the reconcile to backfill a store made before the plugin_id column,
+    and to tell a legacy store whose plugin is gone from one whose plugin is
+    merely not loaded. A plugin whose library_catalog_id raises is skipped; its
+    own store already carries plugin_id (set when the hook worked at creation),
+    so leaving it out here cannot condemn it.
+    """
+    owners: dict[str, str] = {}
+    for inst in plugin_manager.get_plugin_instances():
+        fn = getattr(inst, "library_catalog_id", None)
+        if not callable(fn):
+            continue
+        try:
+            cid = fn()
+        except Exception:
+            continue
+        pid = plugin_manager.id_for_instance(inst)
+        if cid and pid:
+            owners[str(cid)] = pid
+    return owners
+
+
+async def reconcile_catalog_stores() -> int:
+    """Remove storefronts whose owning plugin is no longer installed. Count.
+
+    Runs once at startup as the safety net the per-uninstall cleanup cannot be:
+    a plugin removed while GD was down, or before that cleanup existed, leaves an
+    orphaned store only this pass will find.
+
+    A store records its owner (Library.plugin_id), so the test is simply "is that
+    plugin still on disk?" - a DISABLED plugin is still installed and keeps its
+    store; an uninstalled one loses it, with no load state to reason about.
+    Stores made before the column are backfilled here from the loaded plugin that
+    offers their catalogue; a still-unowned legacy store is removed only when the
+    whole plugin set loaded cleanly and no loaded plugin claims its catalogue.
+
+    It stands down when the plugin directory is empty or missing: that usually
+    means the plugin volume is unavailable (an unmounted mount, a DB restored
+    before the files were copied), where every store would look orphaned.
+    """
+    installed = plugin_manager.installed_external_ids()
+    if not installed:
+        logger.info(
+            "Skipping catalogue-store reconcile: no external plugins on disk, so "
+            "the plugin volume may be unavailable rather than the catalogues gone",
+        )
+        return 0
+
+    owners = _catalog_owners()
+    fully_loaded = plugin_manager.all_external_plugins_loaded()
+    removed = 0
+    async with async_session_factory() as session:
+        async with session.begin():
+            stores = (await session.execute(
+                select(Library).where(
+                    Library.is_store.is_(True), Library.catalog_id.isnot(None),
+                )
+            )).scalars().all()
+            for store in stores:
+                # Learn the owner if a loaded plugin offers this catalogue.
+                if not store.plugin_id and store.catalog_id in owners:
+                    store.plugin_id = owners[store.catalog_id]
+                if store.plugin_id:
+                    # The clean rule: the store goes exactly when its plugin is
+                    # no longer installed. A disabled plugin stays installed.
+                    if store.plugin_id not in installed:
+                        await _purge_catalog_store(session, store)
+                        removed += 1
+                elif fully_loaded and store.catalog_id not in owners:
+                    # A legacy store no loaded plugin claims. Only safe to remove
+                    # when every installed plugin loaded, so a disabled owner is
+                    # not mistaken for a gone one.
+                    await _purge_catalog_store(session, store)
+                    removed += 1
+    if removed:
+        logger.info(
+            "Catalogue-store reconcile removed %d orphaned store(s)", removed,
+        )
+    return removed
+
+
+async def remove_catalog_stores_for_plugin(plugin_id: str) -> int:
+    """Remove every storefront a plugin owns, when it is uninstalled. Works
+    whether or not the plugin is loaded - the store records its owner - and keeps
+    any games already downloaded from it. Returns how many stores were removed."""
+    removed = 0
+    async with async_session_factory() as session:
+        async with session.begin():
+            stores = (await session.execute(
+                select(Library).where(
+                    Library.is_store.is_(True), Library.plugin_id == plugin_id,
+                )
+            )).scalars().all()
+            for store in stores:
+                await _purge_catalog_store(session, store)
+                removed += 1
+    return removed

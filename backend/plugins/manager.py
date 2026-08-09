@@ -280,6 +280,52 @@ class PluginManager:
         between plugins and their results)."""
         return list(self._pm.get_plugins())
 
+    def get_instance(self, plugin_id: str) -> Any | None:
+        """The loaded instance for a plugin id, or None if it is not loaded."""
+        return self._instances.get(plugin_id)
+
+    def id_for_instance(self, inst: Any) -> str | None:
+        """The plugin id a loaded instance was registered under, or None.
+
+        The reverse of get_instance, used when a store is created so it can
+        record which plugin owns it without the plugin having to name itself.
+        """
+        for pid, other in self._instances.items():
+            if other is inst:
+                return pid
+        return None
+
+    def installed_external_ids(self) -> set[str]:
+        """Ids of external plugins present on disk - installed, loaded or not.
+
+        A disabled plugin is still installed (its directory stays); an
+        uninstalled one is gone. The catalogue-store reconciler removes a store
+        exactly when its owning plugin is not in this set. Empty when the plugin
+        directory is missing or empty, which the reconciler reads as "the plugin
+        volume is unavailable" (an unmounted bind-mount, a DB restored before the
+        plugin files were copied) and stands down rather than treat every
+        catalogue as uninstalled.
+        """
+        plugins_dir = Path(PLUGINS_PATH)
+        if not plugins_dir.exists():
+            return set()
+        return {
+            d.name for d in plugins_dir.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        }
+
+    def all_external_plugins_loaded(self) -> bool:
+        """True only when at least one external plugin is on disk and every one
+        of them is loaded. False for a missing/empty directory or any
+        disabled/failed plugin. The reconciler leans on this only for the legacy
+        path (stores that predate the plugin_id column): a plugin_id-tagged store
+        is judged by whether its owner is installed, which needs no load check.
+        """
+        installed = self.installed_external_ids()
+        if not installed:
+            return False
+        return all(pid in self._instances for pid in installed)
+
     def get_download_providers(self) -> list[str]:
         """Return IDs of all loaded download providers."""
         results = self._pm.hook.download_provider_id()

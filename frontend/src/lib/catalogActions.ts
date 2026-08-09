@@ -74,6 +74,21 @@ export async function sync(catalogId: string): Promise<unknown> {
   return data;
 }
 
+/** Match this catalogue's listings to real games and fill in their metadata
+ * (covers, artwork, info). `onlyMissing` false re-scrapes listings a previous
+ * run already matched (the Overwrite switch). Needs a RAWG or IGDB source
+ * configured, or the server answers 400. Admin only, server-side. */
+export async function scrapeMetadata(
+  catalogId: string,
+  opts: { onlyMissing?: boolean } = {},
+): Promise<unknown> {
+  const { data } = await client.post(
+    `/plugins/library/catalogs/${encodeURIComponent(catalogId)}/scrape-metadata`,
+    { only_missing: opts.onlyMissing !== false },
+  );
+  return data;
+}
+
 /** Every catalogue the installed plugins registered. */
 export async function listCatalogs(): Promise<Array<Record<string, unknown>>> {
   const { data } = await client.get("/plugins/library/catalogs");
@@ -91,4 +106,4 @@ export async function clearMetadata(catalogId: string): Promise<{ cleared: numbe
   return data as { cleared: number };
 }
 
-export default { listEntries, countEntries, getEntry, download, sync, listCatalogs, clearMetadata };
+export default { listEntries, countEntries, getEntry, download, sync, scrapeMetadata, listCatalogs, clearMetadata };

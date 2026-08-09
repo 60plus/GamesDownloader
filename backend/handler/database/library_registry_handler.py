@@ -145,7 +145,8 @@ class LibraryRegistryHandler(DBBaseHandler):
     async def ensure_store_library(
         self, catalog_id: str, *, slug: str, name: str,
         color: str | None = None, icon: str | None = None,
-        storage_folder: str | None = None, session: AsyncSession = None,
+        storage_folder: str | None = None, plugin_id: str | None = None,
+        session: AsyncSession = None,
     ) -> Library:
         """Create or update the store library a plugin catalogue lives in.
 
@@ -153,7 +154,8 @@ class LibraryRegistryHandler(DBBaseHandler):
         path that turns on is_store for a plugin catalogue. Idempotent, keyed on
         catalog_id: it will adopt an existing library that already carries the
         slug (the demo shelf made by hand), and it never stamps over a name or
-        colour an admin has since changed.
+        colour an admin has since changed. plugin_id records the owner so the
+        store can be removed with the plugin later without a live instance.
         """
         lib = (await session.execute(
             select(Library).where(Library.catalog_id == catalog_id)
@@ -169,7 +171,7 @@ class LibraryRegistryHandler(DBBaseHandler):
                 slug=slug, name=name, kind="custom_lib", color=color, icon=icon,
                 enabled=True, sort_order=int(max_order) + 10, is_builtin=False,
                 storage_folder=storage_folder or name, is_store=True,
-                catalog_id=catalog_id,
+                catalog_id=catalog_id, plugin_id=plugin_id,
                 # Hidden from users by default - a storefront of things not yet on
                 # the server is an admin surface. The admin opens it with the same
                 # visibility toggle every other library has.
@@ -181,9 +183,12 @@ class LibraryRegistryHandler(DBBaseHandler):
             return lib
 
         # Adopt / confirm: a store fed by this catalogue. Fill the on-disk folder
-        # only if it has none, so an admin's choice stands.
+        # only if it has none, so an admin's choice stands. Keep the owner current
+        # so a store made before the column, or by hand, learns who feeds it.
         lib.is_store = True
         lib.catalog_id = catalog_id
+        if plugin_id:
+            lib.plugin_id = plugin_id
         if not lib.storage_folder:
             lib.storage_folder = storage_folder or name
         await session.flush()

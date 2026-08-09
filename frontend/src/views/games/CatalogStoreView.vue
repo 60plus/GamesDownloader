@@ -25,6 +25,33 @@
       </div>
     </Teleport>
 
+    <!-- Sync store: pull the listing, then optionally scrape its metadata -->
+    <Teleport to="body">
+      <div v-if="showSyncDialog" class="gd-confirm-overlay" @click.self="showSyncDialog = false">
+        <div class="gd-confirm-box">
+          <div class="gd-confirm-title">{{ t('catalog.sync_title') }}</div>
+          <label class="cs-syncopt">
+            <input type="checkbox" v-model="syncAutoMeta" />
+            <span>
+              <span class="cs-syncopt-t">{{ t('library.sync_auto_meta') }}</span>
+              <small class="cs-syncopt-d">{{ t('catalog.sync_auto_meta_desc') }}</small>
+            </span>
+          </label>
+          <label class="cs-syncopt" :class="{ 'cs-syncopt--off': !syncAutoMeta }">
+            <input type="checkbox" v-model="syncOverwrite" :disabled="!syncAutoMeta" />
+            <span>
+              <span class="cs-syncopt-t">{{ t('library.sync_overwrite') }}</span>
+              <small class="cs-syncopt-d">{{ t('catalog.sync_overwrite_desc') }}</small>
+            </span>
+          </label>
+          <div class="gd-confirm-actions">
+            <button class="gd-confirm-btn gd-confirm-btn--ghost" @click="showSyncDialog = false">{{ t('common.cancel') }}</button>
+            <button class="gd-confirm-btn gd-confirm-btn--primary" :disabled="syncing" @click="confirmSync">{{ t('library.start_sync') }}</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- ── Title bar ─────────────────────────────────────────────────────── -->
     <div class="title-bar">
       <div class="title-left">
@@ -47,7 +74,7 @@
           :class="{ 'sync-btn--running': syncing }"
           :disabled="syncing"
           :title="t('library.sync')"
-          @click="doSync"
+          @click="showSyncDialog = true"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" :class="{ spin: syncing }">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
@@ -134,7 +161,7 @@
           :style="{ '--cover-min': coverSizeMap[currentCoverSize] + 'px' }"
         >
           <button
-            v-for="(e, idx) in displayed"
+            v-for="(e, idx) in visibleEntries"
             :key="e.id"
             class="cover-wrap"
             :data-alpha-idx="idx"
@@ -174,6 +201,9 @@
           />
         </div>
 
+        <!-- Sentinel: nearing the viewport mounts the next batch. -->
+        <div ref="listSentinel" class="load-sentinel" aria-hidden="true"></div>
+
       </div>
 
       <!-- Alphabet -->
@@ -201,7 +231,8 @@
  * Clicking an offer opens the shared catalogue detail page, where the build is
  * picked and pulled.
  */
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { useIncrementalList } from '@/composables/useIncrementalList'
 import { useRoute, useRouter } from 'vue-router'
 import catalogActions, { type CatalogEntry } from '@/lib/catalogActions'
 import { useLibrariesStore } from '@/stores/libraries'
@@ -245,6 +276,9 @@ const coverSizeMap: Record<string, number> = { xs: 115, s: 145, m: 175, l: 215, 
 
 // ── Clear metadata ──────────────────────────────────────────────────────────
 const showClearDialog = ref(false)
+const showSyncDialog = ref(false)
+const syncAutoMeta = ref(true)
+const syncOverwrite = ref(false)
 const clearing = ref(false)
 
 function art(e: CatalogEntry): string | null {
@@ -280,11 +314,16 @@ const displayed = computed(() => {
   return list
 })
 
+// Render in batches that grow on scroll; visibleEntries is a prefix of
+// displayed, so the alphabet-jump indices still line up.
+const { visible: visibleEntries, ensure: ensureVisible, sentinel: listSentinel } =
+  useIncrementalList(displayed)
+
 /** Map a listing onto the shape GameListRow reads. A listing is not a game, so
  *  the row synthesises what the component keys on: a "completed" status paints
  *  the owned check, per-OS booleans come from the offered builds, and the
  *  listing's own rating rides in as the star (rating_agg). */
-const rows = computed(() => displayed.value.map((e) => {
+const rows = computed(() => visibleEntries.value.map((e) => {
   const assets = (e.assets as Array<Record<string, unknown>>) || []
   const os = (k: string) => assets.some(a => {
     const v = String(a.os || '').toLowerCase()
@@ -316,13 +355,15 @@ const availableLetters = computed(() => {
   }
   return set
 })
-function scrollToLetter(letter: string) {
+async function scrollToLetter(letter: string) {
   const idx = displayed.value.findIndex(e => {
     const c = e.title.replace(/^(the|a|an)\s+/i, '').charAt(0).toUpperCase()
     return letter === '#' ? !/[A-Z]/.test(c) : c === letter
   })
   if (idx === -1) return
   activeLetter.value = letter
+  ensureVisible(idx)
+  await nextTick()
   const el = gridScrollEl.value
   if (!el) return
   const sel = viewMode.value === 'list' ? '.list-row' : '.cover-wrap'
@@ -345,13 +386,22 @@ async function load() {
   }
 }
 
-async function doSync() {
+async function confirmSync() {
   if (syncing.value || !catalogId.value) return
   syncing.value = true
   errMsg.value = ''
+  showSyncDialog.value = false
   try {
+    // Phase 1: pull the listing into the store (creates it the first time).
     await catalogActions.sync(catalogId.value)
     await load()
+    // Phase 2 (optional): scrape the listings' metadata. Its failure - a missing
+    // RAWG/IGDB source most often - is surfaced, not swallowed: the sync worked,
+    // but the admin needs to know why nothing got dressed.
+    if (syncAutoMeta.value) {
+      await catalogActions.scrapeMetadata(catalogId.value, { onlyMissing: !syncOverwrite.value })
+      await load()
+    }
   } catch (e: any) {
     errMsg.value = e?.response?.data?.detail || t('library.sync_failed')
   } finally {
@@ -619,5 +669,11 @@ watch(() => [slug.value, catalogId.value].join('|'), () => load())
 .gd-confirm-btn--ghost   { background: rgba(255,255,255,.06); border-color: var(--glass-border); color: var(--muted); }
 .gd-confirm-btn--ghost:hover { color: var(--text); border-color: rgba(255,255,255,.25); }
 .gd-confirm-btn--danger  { background: rgba(239,68,68,.2); border-color: rgba(239,68,68,.45); color: #f87171; }
+.gd-confirm-btn--primary { background: color-mix(in srgb, var(--pl, #6366f1) 20%, transparent); border-color: color-mix(in srgb, var(--pl, #6366f1) 45%, transparent); color: var(--pl, #a5b4fc); }
+.cs-syncopt { display: flex; gap: 10px; align-items: flex-start; padding: 9px 2px; cursor: pointer; text-align: left; }
+.cs-syncopt input { margin-top: 3px; flex: none; }
+.cs-syncopt--off { opacity: .5; }
+.cs-syncopt-t { display: block; font-weight: 600; font-size: .92rem; }
+.cs-syncopt-d { display: block; opacity: .7; font-size: .8rem; margin-top: 2px; line-height: 1.35; }
 .gd-confirm-btn--danger:not(:disabled):hover { background: rgba(239,68,68,.3); border-color: rgba(239,68,68,.7); color: #fca5a5; }
 </style>

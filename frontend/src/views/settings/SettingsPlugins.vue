@@ -155,9 +155,25 @@
                 <button class="sp-btn sp-btn--primary" :disabled="savingConfig[p.plugin_id]" @click="saveConfig(p.plugin_id)">
                   {{ savingConfig[p.plugin_id] ? t('plugins.saving', 'Saving...') : t('plugins.save_config', 'Save Config') }}
                 </button>
+                <!-- For a catalogue plugin (e.g. PC Ports), the first sync that
+                     creates its store needs this plugin's config (its token), so
+                     the sync button lives right here. -->
+                <button
+                  v-if="catalogueFor(p.plugin_id)"
+                  class="sp-btn"
+                  :disabled="catSyncing[String(catalogueFor(p.plugin_id)!.id)]"
+                  @click="syncCatalogue(String(catalogueFor(p.plugin_id)!.id))"
+                >
+                  {{ catSyncing[String(catalogueFor(p.plugin_id)!.id)] ? t('library.syncing') : t('plugins.catalogue_sync_now') }}
+                </button>
                 <span v-if="configMsg[p.plugin_id]" class="sp-config-msg" :class="{ 'sp-config-msg--ok': configOk[p.plugin_id] }">
                   {{ configMsg[p.plugin_id] }}
                 </span>
+                <span
+                  v-if="catalogueFor(p.plugin_id) && catMsg[String(catalogueFor(p.plugin_id)!.id)]"
+                  class="sp-config-msg"
+                  :class="{ 'sp-config-msg--ok': !catErr[String(catalogueFor(p.plugin_id)!.id)] }"
+                >{{ catMsg[String(catalogueFor(p.plugin_id)!.id)] }}</span>
               </div>
             </div>
           </div>
@@ -167,6 +183,30 @@
 
       <!-- Inline message -->
       <span v-if="listMsg" class="sp-inline-msg" :class="{ 'sp-inline-msg--err': !listOk }">{{ listMsg }}</span>
+    </section>
+
+    <!-- Catalogue stores (from library_catalog_* plugins). Sync the first time
+         here to create the store; after that it lives in the store's own page. -->
+    <section v-if="catalogues.length" class="sp-section">
+      <div class="sp-section-head">
+        <h2 class="sp-section-title">{{ t('plugins.catalogues_title') }}</h2>
+        <p class="sp-section-sub">{{ t('plugins.catalogues_desc') }}</p>
+      </div>
+      <div class="sp-cat-list">
+        <div v-for="c in catalogues" :key="String(c.id)" class="sp-cat-row">
+          <span class="sp-cat-name">{{ c.name || c.id }}</span>
+          <span
+            v-if="catMsg[String(c.id)]"
+            class="sp-inline-msg"
+            :class="{ 'sp-inline-msg--err': catErr[String(c.id)] }"
+          >{{ catMsg[String(c.id)] }}</span>
+          <button
+            class="sp-cat-btn"
+            :disabled="catSyncing[String(c.id)]"
+            @click="syncCatalogue(String(c.id))"
+          >{{ catSyncing[String(c.id)] ? t('library.syncing') : t('plugins.catalogue_sync') }}</button>
+        </div>
+      </div>
     </section>
 
     <!-- Install Plugin -->
@@ -218,6 +258,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import client from '@/services/api/client'
+import catalogActions from '@/lib/catalogActions'
 import { useSettingsHint } from '@/composables/useSettingsHint'
 import { useI18n } from '@/i18n'
 
@@ -245,6 +286,14 @@ interface PluginInfo {
 const plugins = ref<PluginInfo[]>([])
 const loading = ref(true)
 const listMsg = ref('')
+
+// Catalogues a plugin registered. A catalogue only becomes a browsable store
+// once synced, and the store page (which hosts the full sync) does not exist
+// until then - so the very first sync is triggered from here.
+const catalogues = ref<Array<Record<string, any>>>([])
+const catSyncing = reactive<Record<string, boolean>>({})
+const catMsg = reactive<Record<string, string>>({})
+const catErr = reactive<Record<string, boolean>>({})
 const listOk  = ref(true)
 
 const toggling = reactive<Record<string, boolean>>({})
@@ -296,6 +345,36 @@ async function loadPlugins() {
     listOk.value = false
   } finally {
     loading.value = false
+  }
+}
+
+async function loadCatalogues() {
+  try {
+    catalogues.value = await catalogActions.listCatalogs()
+  } catch {
+    catalogues.value = []
+  }
+}
+
+// The catalogue a plugin offers, so its config panel can host the first sync.
+function catalogueFor(pluginId: string): Record<string, any> | undefined {
+  return catalogues.value.find(c => c.plugin_id === pluginId)
+}
+
+async function syncCatalogue(id: string) {
+  if (catSyncing[id]) return
+  catSyncing[id] = true
+  catMsg[id] = ''
+  catErr[id] = false
+  try {
+    await catalogActions.sync(id)
+    catMsg[id] = t('plugins.catalogue_synced')
+  } catch (e: any) {
+    catErr[id] = true
+    catMsg[id] = e?.response?.data?.detail || t('library.sync_failed')
+  } finally {
+    catSyncing[id] = false
+    setTimeout(() => { catMsg[id] = '' }, 6000)
   }
 }
 
@@ -421,7 +500,7 @@ async function uploadFile(file: File) {
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
-onMounted(() => { loadPlugins() })
+onMounted(() => { loadPlugins(); loadCatalogues() })
 </script>
 
 <style scoped>
@@ -644,6 +723,14 @@ onMounted(() => { loadPlugins() })
 
 /* ── Inline messages ──────────────────────────────────────────────────────── */
 .sp-inline-msg { font-size: var(--fs-sm, 12px); color: #4ade80; }
+.sp-inline-msg--err { color: #f87171; }
+.sp-cat-list { display: flex; flex-direction: column; gap: 8px; }
+.sp-cat-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--glass-border); border-radius: 10px; background: rgba(255,255,255,.03); }
+.sp-cat-name { font-weight: 600; }
+.sp-cat-row .sp-inline-msg { margin-left: auto; }
+.sp-cat-btn { margin-left: auto; padding: 6px 14px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--pl, #6366f1) 45%, transparent); background: color-mix(in srgb, var(--pl, #6366f1) 20%, transparent); color: var(--pl, #a5b4fc); font-size: var(--fs-sm, 12px); font-weight: 600; cursor: pointer; }
+.sp-cat-row .sp-inline-msg + .sp-cat-btn { margin-left: 0; }
+.sp-cat-btn:disabled { opacity: .5; cursor: default; }
 .sp-inline-msg--err { color: #f87171; }
 .sp-inline-msg--ok { color: #4ade80; }
 </style>

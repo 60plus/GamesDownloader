@@ -304,7 +304,17 @@ async def disable_plugin(request: Request, plugin_id: str) -> dict:
     plugins_router.delete, "/{plugin_id}", scopes=[Scope.PLUGINS_WRITE]
 )
 async def delete_plugin(request: Request, plugin_id: str) -> dict:
-    """Uninstall a plugin - remove files and DB record."""
+    """Uninstall a plugin - remove files, DB record, and any storefront it owned."""
+    from handler.library.catalog_sync_handler import (
+        catalog_ids_for_plugin,
+        remove_catalog_store,
+        remove_catalog_stores_for_plugin,
+    )
+    # A store records which plugin owns it, so the catalogue id off the live
+    # instance is only a fallback - for a store made before that column and not
+    # yet backfilled, while the plugin is loaded here to read it.
+    catalog_ids = catalog_ids_for_plugin(plugin_id)
+
     # Unload from runtime first
     try:
         plugin_manager.unload_single(plugin_id)
@@ -318,6 +328,25 @@ async def delete_plugin(request: Request, plugin_id: str) -> dict:
 
     # Remove DB record
     await _delete_db_config(plugin_id)
+
+    # A storefront the plugin registered comes and goes with the plugin. Remove
+    # it now so it does not linger in the navigation - by owner first (this works
+    # even if the plugin was disabled, so never loaded this run), then by any
+    # catalogue id we did read as a fallback. Downloaded games stay in Games.
+    try:
+        await remove_catalog_stores_for_plugin(plugin_id)
+    except Exception:
+        logger.exception(
+            "Failed to remove catalogue store(s) for %s on uninstall", plugin_id,
+        )
+    for cid in catalog_ids:
+        try:
+            await remove_catalog_store(cid)
+        except Exception:
+            logger.exception(
+                "Failed to remove catalogue store %s on uninstall of %s",
+                cid, plugin_id,
+            )
 
     return {"ok": True}
 

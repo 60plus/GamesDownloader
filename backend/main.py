@@ -236,8 +236,15 @@ async def _init_db() -> None:
         ("libraries",      "adds_to_default_library", "TINYINT(1) NOT NULL DEFAULT 0"),
         # Which plugin catalogue a store library lists, if any.
         ("libraries",      "catalog_id",            "VARCHAR(64) NULL"),
+        # Which plugin owns a store, so it can be removed with the plugin without
+        # a live instance. Backfilled onto pre-column stores by the reconcile.
+        ("libraries",      "plugin_id",             "VARCHAR(64) NULL"),
         # Shown under the title. Tells two builds of the same game apart.
         ("library_games",  "subtitle",              "VARCHAR(255) NULL"),
+        # Where a catalogue game came from, so a reinstall of the plugin re-links
+        # its entry to this game instead of offering a second download.
+        ("library_games",  "catalog_id",            "VARCHAR(64) NULL"),
+        ("library_games",  "catalog_external_id",   "VARCHAR(255) NULL"),
         # What the catalogue last wrote, so a manual edit can be recognised and
         # left alone on the next sync.
         ("catalog_entries", "subtitle",             "VARCHAR(255) NULL"),
@@ -310,6 +317,24 @@ async def _init_db() -> None:
                 logger.info("Migration: marked GOG libraries as storefronts")
             except Exception as exc:
                 logger.warning("Migration: GOG storefront backfill failed: %s", exc)
+
+        # Stamp the catalogue origin onto games already downloaded from a
+        # catalogue, read from the links that still exist - so a game downloaded
+        # before this column can still be re-linked after its plugin is removed
+        # and reinstalled. Keyed on the column being new, so it runs exactly once
+        # and never before the entries it reads from are in place.
+        if ("library_games", "catalog_external_id") in _added_columns:
+            try:
+                await conn.execute(text(
+                    "UPDATE `library_games` lg "
+                    "JOIN `catalog_entries` ce ON ce.library_game_id = lg.id "
+                    "SET lg.catalog_id = ce.catalog_id, "
+                    "    lg.catalog_external_id = ce.external_id "
+                    "WHERE lg.catalog_external_id IS NULL"
+                ))
+                logger.info("Migration: stamped catalogue origin onto downloaded games")
+            except Exception as exc:
+                logger.warning("Migration: catalogue-origin backfill failed: %s", exc)
 
     # ── Relocate saves out of the public resources mount ──────────────────────
     # RESOURCES_PATH is served as static files with no authentication, and save
@@ -667,6 +692,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     plugin_manager.discover_and_load()
     plugin_manager.hook.lifecycle_on_startup()
 
+    # Remove storefronts whose catalogue plugin is gone (uninstalled while GD was
+    # down, or before the per-uninstall cleanup existed). Keeps downloaded games.
+    from handler.library.catalog_sync_handler import reconcile_catalog_stores
+    try:
+        await reconcile_catalog_stores()
+    except Exception:
+        logger.exception("Catalogue-store reconcile failed")
+
     # Pre-warm LaunchBox index in background (takes ~35s, avoids timeout on first search)
     from handler.metadata import launchbox_handler as _lb
     _lb_task = asyncio.create_task(_lb._ensure_index())
@@ -747,18 +780,27 @@ app.add_middleware(SecurityHeadersMiddleware)
 # IP allowlist - blocks unlisted IPs before anything else runs
 app.add_middleware(IpAllowlistMiddleware)
 
-# CORS - dynamic: reads allowed origins from config on every preflight/request.
-# Changes via Settings → Security take effect immediately (no restart needed).
+# CORS - dynamic: reads allowed origins from config on every cross-origin
+# preflight/request (requests without an Origin header skip the read).
+# Changes via Settings -> Security take effect immediately (no restart needed).
 class DynamicCORSMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
+        origin = request.headers.get("origin", "")
+
+        # No Origin header -> not a cross-origin request. The logic below never
+        # adds a CORS header without an origin, so skip the per-request config
+        # read entirely for the common case (same-origin GET navigations and
+        # non-browser API clients). Cross-origin requests still read fresh, so
+        # Settings -> Security CORS changes keep taking effect immediately.
+        if not origin:
+            return await call_next(request)
+
         from handler.config.config_handler import config_handler as _cfg
         raw = (await _cfg.get("cors_origins")) or ""
         origins = [o.strip() for o in raw.split(",") if o.strip()] or (["*"] if DEBUG else [])
 
-        origin = request.headers.get("origin", "")
-
         # Handle CORS preflight
-        if request.method == "OPTIONS" and origin:
+        if request.method == "OPTIONS":
             allowed = "*" in origins or origin in origins
             if allowed:
                 headers = {
@@ -789,19 +831,32 @@ app.add_middleware(ETagMiddleware)
 # ── Setup guard - redirect to setup when not yet configured ───────────────────
 
 
+# Setup completes exactly once and never reverts. Once we have confirmed it from
+# the DB, cache that positive result process-wide so the guard stops issuing a
+# DB read on every request for the rest of the process lifetime. With a single
+# uvicorn worker this cache is global and always correct; a transient DB error
+# stays fail-open for that one request but is never cached.
+_setup_guard_complete = False
+
+
 class SetupGuardMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         path = request.url.path
         allowed_prefixes = ("/api/setup", "/api/health", "/api/auth/sso", "/assets", "/resources", "/_vite", "/favicon")
         if any(path.startswith(p) for p in allowed_prefixes) or path in ("/", "/setup"):
             return await call_next(request)
-        from handler.config.config_handler import config_handler
-        try:
-            complete = await config_handler.is_setup_complete()
-        except Exception:
-            complete = True  # Don't block if DB not ready
-        if not complete and path.startswith("/api"):
-            return JSONResponse({"detail": "Setup not complete"}, status_code=503)
+        global _setup_guard_complete
+        if not _setup_guard_complete:
+            from handler.config.config_handler import config_handler
+            try:
+                complete = await config_handler.is_setup_complete()
+            except Exception:
+                complete = True  # Don't block if DB not ready (do not cache a fail-open)
+            else:
+                if complete:
+                    _setup_guard_complete = True
+            if not complete and path.startswith("/api"):
+                return JSONResponse({"detail": "Setup not complete"}, status_code=503)
         return await call_next(request)
 
 
@@ -928,7 +983,14 @@ class _ResourcesStatic(StaticFiles):
     async def get_response(self, path: str, scope):
         if is_save_path(path):
             raise HTTPException(status_code=404, detail="Not found")
-        return await super().get_response(path, scope)
+        response = await super().get_response(path, scope)
+        # Public media (covers, logos, art). Let the browser reuse them within a
+        # short window instead of firing a conditional GET per navigation; the
+        # ETag / Last-Modified StaticFiles already sends still forces a
+        # revalidation afterwards, and content-changing updates use ?v= cache
+        # busters, so this bounded staleness is safe.
+        response.headers.setdefault("Cache-Control", "public, max-age=600")
+        return response
 
 
 os.makedirs(RESOURCES_PATH, exist_ok=True)

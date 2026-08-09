@@ -64,6 +64,14 @@ class Library(Base):
     # (the Games library). NULL for GOG (its store is wired in code) and for
     # every ordinary shelf.
     catalog_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Which plugin owns this store, so it can be removed with the plugin without
+    # a live instance to ask. Set when the store is created (and backfilled onto
+    # pre-column stores from the loaded plugin on the next reconcile). The store
+    # is orphaned exactly when this plugin is no longer installed on disk, which
+    # is a fact the reconcile can check without loading anything - so a disabled
+    # plugin (still on disk) keeps its store, and an uninstalled one loses it.
+    # NULL for GOG and for a legacy store whose plugin was already gone.
+    plugin_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class LibraryMembership(Base):

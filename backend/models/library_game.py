@@ -31,6 +31,15 @@ class LibraryGame(Base):
     )
     source: Mapped[str] = mapped_column(String(16), default="custom")  # "gog" | "custom"
 
+    # A game downloaded from a plugin catalogue remembers where it came from. The
+    # store and its catalog_entries are the plugin's to own and are deleted when
+    # it is uninstalled, but the game stays in the Games library - so a reinstall
+    # can re-link its fresh entry to this game by (catalog_id, external_id)
+    # instead of offering a second download of something already here. NULL for
+    # GOG games and hand-added ones.
+    catalog_id:          Mapped[str | None] = mapped_column(String(64),  nullable=True)
+    catalog_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     # ── Identity ──────────────────────────────────────────────────────────────
     title: Mapped[str]       = mapped_column(String(255), index=True)
     slug:  Mapped[str]       = mapped_column(String(255), unique=True, index=True)
