@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 
-from utils.http import fetch_media_bytes
+from utils.http import fetch_media_bytes, loggable_error
 
 from config import RESOURCES_PATH
 from config import config_manager
@@ -215,7 +215,10 @@ async def scrape_rom(
             if igdb_raw:
                 results.append(igdb_rom_handler.extract_metadata(igdb_raw))
         except Exception as e:
-            logger.warning("[IGDB] Error scraping %s: %s", search_name, e)
+            # The IGDB token endpoint takes client_id and client_secret in the
+            # query string, and httpx puts the request URL into the message of
+            # an HTTP error - so the exception itself must never reach the log.
+            logger.warning("[IGDB] Error scraping %s: %s", search_name, loggable_error(e))
 
     # ── 3. LaunchBox ──────────────────────────────────────────────────────────
     if lb_enabled or forced_launchbox_id:

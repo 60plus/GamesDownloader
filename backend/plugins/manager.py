@@ -26,6 +26,7 @@ from plugins.hookspecs import (
     LibrarySourceSpec,
     LifecycleSpec,
     MetadataProviderSpec,
+    RomSourceSpec,
     WidgetSpec,
 )
 
@@ -39,6 +40,7 @@ class PluginManager:
         self._pm.add_hookspecs(DownloadProviderSpec)
         self._pm.add_hookspecs(LibrarySourceSpec)
         self._pm.add_hookspecs(LibraryCatalogSpec)
+        self._pm.add_hookspecs(RomSourceSpec)
         self._pm.add_hookspecs(LifecycleSpec)
         self._pm.add_hookspecs(FrontendProviderSpec)
         self._pm.add_hookspecs(WidgetSpec)
@@ -294,6 +296,17 @@ class PluginManager:
             if other is inst:
                 return pid
         return None
+
+    def manifest_for(self, plugin_id: str) -> dict[str, Any] | None:
+        """The on-disk plugin.json of an installed plugin, or None.
+
+        Lets a feature that only holds a plugin id present the plugin the way
+        the user knows it (its manifest name and logo) instead of echoing the
+        raw id back into the UI.
+        """
+        if not plugin_id or "/" in plugin_id or "\\" in plugin_id or ".." in plugin_id:
+            return None
+        return self._read_manifest(Path(PLUGINS_PATH) / plugin_id)
 
     def installed_external_ids(self) -> set[str]:
         """Ids of external plugins present on disk - installed, loaded or not.

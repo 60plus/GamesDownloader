@@ -327,6 +327,56 @@ class RomHandler(DBBaseHandler):
         return result.scalar_one()
 
     @begin_session
+    async def owned_signatures(
+        self,
+        platform_id: int,
+        *,
+        crcs: set[str] | None = None,
+        md5s: set[str] | None = None,
+        sha1s: set[str] | None = None,
+        fs_names: set[str] | None = None,
+        session: AsyncSession = None,
+    ) -> dict[str, set[str]]:
+        """Which of the given signatures already exist (non-missing) for a
+        platform, in one query bounded by the caller's page.
+
+        Used to mark a ROM-source listing entry "owned" before any download: a
+        hash identifies the exact dump regardless of filename; the filename is
+        the cheap fallback. Returns sets under keys crc / md5 / sha1 / fs_name,
+        holding only the values actually present.
+        """
+        found: dict[str, set[str]] = {"crc": set(), "md5": set(), "sha1": set(), "fs_name": set()}
+        crcs = {c.lower() for c in (crcs or set()) if c}
+        md5s = {c.lower() for c in (md5s or set()) if c}
+        sha1s = {c.lower() for c in (sha1s or set()) if c}
+        fs_names = {c for c in (fs_names or set()) if c}
+        conds = []
+        if crcs:
+            conds.append(func.lower(Rom.crc_hash).in_(crcs))
+        if md5s:
+            conds.append(func.lower(Rom.md5_hash).in_(md5s))
+        if sha1s:
+            conds.append(func.lower(Rom.sha1_hash).in_(sha1s))
+        if fs_names:
+            conds.append(Rom.fs_name.in_(fs_names))
+        if not conds:
+            return found
+        stmt = (
+            select(Rom.crc_hash, Rom.md5_hash, Rom.sha1_hash, Rom.fs_name)
+            .where(Rom.platform_id == platform_id, ~Rom.missing_from_fs, or_(*conds))
+        )
+        for crc, md5, sha1, fs_name in (await session.execute(stmt)).all():
+            if crc:
+                found["crc"].add(crc.lower())
+            if md5:
+                found["md5"].add(md5.lower())
+            if sha1:
+                found["sha1"].add(sha1.lower())
+            if fs_name:
+                found["fs_name"].add(fs_name)
+        return found
+
+    @begin_session
     async def mark_all_missing(self, platform_id: int, *, session: AsyncSession = None) -> None:
         """Set missing_from_fs=True for all ROMs of a platform before re-scan."""
         await session.execute(

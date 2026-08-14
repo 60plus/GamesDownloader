@@ -222,6 +222,145 @@ class LibraryCatalogSpec:
         """
 
 
+class RomSourceSpec:
+    """Hooks for ROM source plugins: a live, browsable listing of ROMs a
+    remote source offers for download into roms/<platform>/.
+
+    Unlike a library catalogue (pre-synced into a storefront), a ROM source is
+    browsed live and lazily: there can be tens of thousands of ROMs behind a
+    source, so nothing is pre-fetched into the database. The plugin lists on
+    demand (paginated) and resolves a single-file download when the user picks
+    an entry; core owns the download (through the SSRF and size guards), the
+    write into roms/<fs_slug>/, and the scan + scrape that follow. Downloaded
+    ROMs are ordinary Rom rows - a source never owns a persistent shelf.
+
+    The listing and resolve hooks may block on HTTP; they are called in a worker
+    thread. Any credential a source needs is the plugin's own concern: it reads
+    its stored config (declared as a `config_schema` in plugin.json, with
+    `password`-type fields for secrets) and returns ready-to-use request headers
+    from rom_source_resolve_download, so secrets never leave the backend.
+    """
+
+    @hookspec
+    def rom_source_id(self) -> str:
+        """Stable identifier for this source (e.g. 'archive-hearto')."""
+
+    @hookspec
+    def rom_source_name(self) -> str:
+        """Display name of this source (e.g. 'Internet Archive - 1G1R')."""
+
+    @hookspec
+    def rom_source_meta(self) -> dict[str, Any]:
+        """Optional presentation and state. Any key may be omitted:
+
+            tile_asset    str  - plugin assets/ path for the source tile art,
+                                 served via /api/plugins/{id}/assets/{path}.
+            icon_asset    str  - plugin assets/ path for a small icon shown next
+                                 to the source. Defaults to the plugin's own
+                                 logo.png/logo.svg when omitted; a theme heads
+                                 the source with it instead of a generic glyph.
+            requires_auth bool - whether the source needs configured credentials
+                                 before it can list or download.
+            configured    bool - whether the plugin currently has what it needs
+                                 (e.g. credentials present). When False and
+                                 requires_auth is True, core shows the source as
+                                 "configure to enable" and refuses listing.
+        """
+
+    @hookspec
+    def rom_source_platforms(self) -> list[dict[str, Any]]:
+        """Platforms this source offers. One dict per platform:
+
+            fs_slug  str - GD canonical platform folder slug. Must exist in
+                          PLATFORM_MAP; an unmapped slug is dropped and logged by
+                          core, never guessed into a random folder. The plugin
+                          owns the mapping from the source's own platform naming
+                          to this slug.
+            display  str - optional label override (default: the PLATFORM_MAP
+                          name).
+            count    int - optional number of ROMs available, if known cheaply.
+        """
+
+    @hookspec
+    def rom_source_list(
+        self,
+        fs_slug: str,
+        page: int,
+        page_size: int,
+        query: str | None,
+        region: str | None,
+        sort: str | None,
+        collection: str | None,
+        fmt: str | None,
+        kind: str | None,
+    ) -> dict[str, Any]:
+        """Live, paginated listing of ROMs for one platform. Return:
+
+            items  list of dicts, one per ROM:
+                id        str - stable entry id within this source, passed back
+                               to rom_source_resolve_download.
+                title     str - display title. Core strips the region tag for
+                               display and shows region as a badge.
+                filename  str - the canonical on-disk filename (No-Intro name,
+                               extension included) the ROM will be saved as.
+                region    str - optional region code (USA/Europe/Japan/World..).
+                size      int - optional size in bytes.
+                crc       str - optional CRC32 hash (No-Intro DAT).
+                md5       str - optional MD5 hash.
+                sha1      str - optional SHA1 hash.
+                collection str - optional label of the catalogue this entry came
+                               from. A source that merges several catalogues (the
+                               same platform offered by more than one upstream
+                               set) stamps each entry so the user can tell them
+                               apart and filter.
+                format    str - optional container the ROM arrives in (chd, zip,
+                               iso, ...). Core derives it from the filename when
+                               omitted, so a source only sets it when the
+                               extension would lie.
+                kind      str - optional sort of release: retail, prototype,
+                               demo, beta, sample, unlicensed, bootleg, hack,
+                               translation, aftermarket, homebrew, bios. Only the
+                               source can tell, since it lives in the naming
+                               convention of the set it came from.
+            total  int - total entries matching query (for pagination).
+            collections  list[str] - optional, every collection label available
+                               for this platform, whatever page is being asked
+                               for. Core passes it to the theme as the filter's
+                               options; omit it for a single-catalogue source.
+            formats  list[str] - optional, same idea for the format filter.
+            kinds  list[str] - optional, same idea for the release-type filter.
+
+        `collection`, `fmt` and `kind`, when set, are filters: return only
+        entries from that catalogue / in that container / of that release type.
+        All are passed by keyword and only to a plugin that declares them, so an
+        older signature keeps working.
+        Hashes, when present, let core mark an entry already owned before any
+        download. Called in a worker thread; blocking HTTP is fine.
+        """
+
+    @hookspec
+    def rom_source_resolve_download(self, entry_id: str) -> dict[str, Any]:
+        """Resolve one entry to a concrete, authenticated single-file download:
+
+            url       str - direct URL to the one ROM file (never a whole
+                           multi-GB archive).
+            filename  str - canonical on-disk filename (extension included).
+            fs_slug   str - target platform slug (validated against PLATFORM_MAP).
+            headers   dict[str, str] - optional request headers carrying the
+                           source's auth (e.g. Authorization). Core attaches them
+                           to the guarded download and never logs them.
+            cookies   dict[str, str] - optional cookies carrying the source's
+                           auth. Prefer this over a Cookie header: core puts them
+                           in the request's cookie jar, which - unlike a Cookie
+                           header - survives the redirect archive.org uses to hand
+                           a download to a datanode. A Cookie header is accepted
+                           and folded into the jar for convenience.
+
+        Called in a worker thread; may perform blocking HTTP (e.g. to mint a
+        short-lived member URL).
+        """
+
+
 class LifecycleSpec:
     """Hooks for lifecycle events."""
 

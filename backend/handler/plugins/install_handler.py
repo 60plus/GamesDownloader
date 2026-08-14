@@ -22,10 +22,12 @@ logger = logging.getLogger(__name__)
 
 REQUIRED_MANIFEST_FIELDS = ["id", "name", "version", "author", "type", "entry"]
 # "catalog" is a storefront plugin (library_catalog_* hooks): it lists games a
-# server could download. Without it here read_manifest rejects the manifest and
-# the plugin, though it loads and works, never shows in Settings > Plugins - so
-# its config (the GitHub token a sync needs) is unreachable.
-ALLOWED_TYPES = ["metadata", "download", "library", "catalog", "theme", "widget", "lifecycle"]
+# server could download. "rom_source" is a ROM source plugin (rom_source_* hooks):
+# it lists ROMs a server could download into roms/. Without a type here
+# read_manifest rejects the manifest and the plugin, though it loads and works,
+# never shows in Settings > Plugins - so its config (the credentials a fetch
+# needs) is unreachable.
+ALLOWED_TYPES = ["metadata", "download", "library", "catalog", "rom_source", "theme", "widget", "lifecycle"]
 
 
 def _version_tuple(v: str) -> tuple[int, ...]:

@@ -944,10 +944,12 @@ app.include_router(requests_router)
 # ── ROM / Emulation ───────────────────────────────────────────────────────────
 from endpoints.roms.roms_router import router as roms_router                         # noqa: E402
 from endpoints.roms.savestate_router import router as savestate_router               # noqa: E402
+from endpoints.roms.rom_sources_router import router as rom_sources_router           # noqa: E402
 from endpoints.settings.roms_settings_router import router as roms_settings_router  # noqa: E402
 
 app.include_router(roms_router)
 app.include_router(savestate_router)
+app.include_router(rom_sources_router)
 app.include_router(roms_settings_router)
 
 # ── Global search (Home navbar) ───────────────────────────────────────────────

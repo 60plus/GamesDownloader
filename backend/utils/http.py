@@ -11,6 +11,26 @@ import httpx
 
 from utils.net_guard import assert_fetch_allowed, make_request_guard
 
+def loggable_error(e: BaseException) -> str:
+    """An exception boiled down to something safe to write into a log.
+
+    httpx puts the whole request URL into the message of an HTTP error, and a
+    provider that authenticates through the query string then leaves its secret
+    in the log in clear: the IGDB token endpoint is called with client_id and
+    client_secret as query parameters, so `str(exc)` from that call carries the
+    secret verbatim. Nothing built from the message is safe, so this reports the
+    exception type and, for an HTTP error, the status code - never the URL.
+    """
+    if isinstance(e, httpx.HTTPStatusError):
+        return f"HTTP {e.response.status_code}"
+    if isinstance(e, httpx.TimeoutException):
+        return "timed out"
+    if isinstance(e, httpx.RequestError):
+        return type(e).__name__
+    # A message a provider raised itself is fine; anything from httpx is not.
+    return f"{type(e).__name__}: {str(e)[:200]}" if not isinstance(e, httpx.HTTPError) else type(e).__name__
+
+
 class MediaTooLarge(ValueError):
     """Raised when a media download would exceed its byte ceiling.
 
