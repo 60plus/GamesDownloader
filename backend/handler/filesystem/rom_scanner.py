@@ -43,6 +43,12 @@ _ROM_EXTENSIONS = {
     "zip", "7z", "rar",                                  # Compressed ROMs
     "rom", "a26", "a52", "lnx", "pce", "vb",            # Misc classics
     "ws", "wsc", "ngp", "ngc", "dsk", "adf",            # Handheld / Amiga
+    # Home computers. Their sets ship disk/tape images rather than cartridge
+    # dumps, and without these a C64 or Atari 8-bit library scans as empty.
+    "d64", "t64", "g64", "d71", "d81", "crt", "tap", "prg",   # Commodore
+    "atr", "atx", "cas", "car",                                # Atari 8-bit
+    "st", "msa", "ipf",                                        # Atari ST
+    "cdt", "sna", "dmk",                                       # Amstrad / misc
 }
 
 

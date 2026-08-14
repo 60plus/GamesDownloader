@@ -130,6 +130,13 @@ PLATFORM_MAP: dict[str, dict] = {
     # ── ZX / Spectrum ─────────────────────────────────────────────────────────
     "zxspectrum":   {"name": "ZX Spectrum",                   "igdb_id": 26,  "ss_id": 76,  "launchbox_name": "Sinclair ZX Spectrum"},
     "zx81":         {"name": "ZX81",                          "igdb_id": 26,  "ss_id": 77,  "launchbox_name": "Sinclair ZX81"},
+    # ── Home computers ─────────────────────────────────────────────────────────
+    "msx":          {"name": "MSX",                           "igdb_id": 27,  "ss_id": 113, "launchbox_name": "Microsoft MSX"},
+    "msx2":         {"name": "MSX2",                          "igdb_id": 53,  "ss_id": 116, "launchbox_name": "Microsoft MSX2"},
+    "amstradcpc":   {"name": "Amstrad CPC",                   "igdb_id": 25,  "ss_id": 65,  "launchbox_name": "Amstrad CPC"},
+    "apple2":       {"name": "Apple II",                      "igdb_id": 75,  "ss_id": 86,  "launchbox_name": "Apple II"},
+    "fmtowns":      {"name": "FM Towns",                      "igdb_id": 118, "ss_id": 253, "launchbox_name": "Fujitsu FM Towns Marty"},
+    "x68000":       {"name": "Sharp X68000",                  "igdb_id": 121, "ss_id": 79,  "launchbox_name": "Sharp X68000"},
     # ── Common hyphenated slug aliases ───────────────────────────────────────────
     "super-nintendo":       {"name": "Super Nintendo",            "igdb_id": 19,  "ss_id": 4,   "launchbox_name": "Super Nintendo Entertainment System"},
     "sega-mega-drive":      {"name": "Sega Mega Drive",           "igdb_id": 29,  "ss_id": 1,   "launchbox_name": "Sega Mega Drive"},
@@ -305,6 +312,12 @@ _HLTB_PLATFORM: dict[str, str] = {
     "amiga1200":    "Amiga",
     "amiga600":     "Amiga",
     "amigacd32":    "Amiga CD32",
+    "msx":          "MSX",
+    "msx2":         "MSX2",
+    "amstradcpc":   "Amstrad CPC",
+    "apple2":       "Apple II",
+    "fmtowns":      "FM Towns",
+    "x68000":       "Sharp X68000",
     "turbografx16": "TurboGrafx-16",
     "turbografxcd": "TurboGrafx-CD",
     "tg-cd":        "TurboGrafx-CD",
