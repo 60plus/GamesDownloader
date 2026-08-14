@@ -13,6 +13,7 @@ export const useSocketStore = defineStore("socket", () => {
   const downloadJobCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const packagingCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const urlUploadCallbacks: Array<(kind: string, data: Record<string, unknown>) => void> = [];
+  const romSourceCallbacks: Array<(kind: string, data: Record<string, unknown>) => void> = [];
   const dashboardQueueCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const dashboardHealthCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   let liveSubs = 0; // dashboard-live consumers sharing this per-tab socket
@@ -35,6 +36,15 @@ export const useSocketStore = defineStore("socket", () => {
   function onUrlUpload(cb: (kind: string, data: Record<string, unknown>) => void) {
     urlUploadCallbacks.push(cb);
     return () => { const i = urlUploadCallbacks.indexOf(cb); if (i >= 0) urlUploadCallbacks.splice(i, 1) }
+  }
+
+  // A ROM-source download (RomDownloader) reports over
+  // romsource:download_progress|complete|error. Same shape as onUrlUpload: the
+  // callback gets the kind plus the payload (keyed on the job id, with entry_id
+  // and fs_slug), so the ROM list follows a row and the download tray shows it.
+  function onRomSource(cb: (kind: string, data: Record<string, unknown>) => void) {
+    romSourceCallbacks.push(cb);
+    return () => { const i = romSourceCallbacks.indexOf(cb); if (i >= 0) romSourceCallbacks.splice(i, 1) }
   }
 
   // One "dashboard live" subscription feeds both the transfer queue and the
@@ -111,6 +121,15 @@ export const useSocketStore = defineStore("socket", () => {
     socket.value.on("upload:url_error", (data) => {
       urlUploadCallbacks.forEach(cb => cb("error", data));
     });
+    socket.value.on("romsource:download_progress", (data) => {
+      romSourceCallbacks.forEach(cb => cb("progress", data));
+    });
+    socket.value.on("romsource:download_complete", (data) => {
+      romSourceCallbacks.forEach(cb => cb("complete", data));
+    });
+    socket.value.on("romsource:download_error", (data) => {
+      romSourceCallbacks.forEach(cb => cb("error", data));
+    });
     socket.value.on("dashboard:queue", (data) => {
       dashboardQueueCallbacks.forEach(cb => cb(data));
     });
@@ -136,5 +155,5 @@ export const useSocketStore = defineStore("socket", () => {
     liveSubs = 0;
   }
 
-  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onUrlUpload, onDashboardQueue, onDashboardHealth, connect, disconnect, reconnectWithFreshToken };
+  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onUrlUpload, onRomSource, onDashboardQueue, onDashboardHealth, connect, disconnect, reconnectWithFreshToken };
 });

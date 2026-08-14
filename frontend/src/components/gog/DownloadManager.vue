@@ -3,12 +3,12 @@
   <div class="dm-tray" :class="{ 'dm-tray--open': expanded, 'dm-tray--has-active': hasActive, 'dm-tray--inline': inline }">
 
     <!-- ── Header bar (always visible when there are jobs) ───────────────── -->
-    <div v-if="jobs.length > 0 || packagingList.length > 0 || urlList.length > 0" class="dm-header" @click="expanded = !expanded">
+    <div v-if="jobs.length > 0 || packagingList.length > 0 || urlList.length > 0 || romList.length > 0" class="dm-header" @click="expanded = !expanded">
       <div class="dm-header-left">
         <!-- Animated icon when downloading -->
         <div class="dm-status-dot" :class="dotClass" />
         <span class="dm-header-title">Downloads</span>
-        <span class="dm-badge">{{ jobs.length + packagingList.length + urlList.length }}</span>
+        <span class="dm-badge">{{ jobs.length + packagingList.length + urlList.length + romList.length }}</span>
       </div>
 
       <!-- Active download quick-info (collapsed view) -->
@@ -26,7 +26,7 @@
 
     <!-- ── Expanded job list ───────────────────────────────────────────────── -->
     <Transition name="dm-slide">
-      <div v-if="expanded && (jobs.length > 0 || packagingList.length > 0 || urlList.length > 0)" class="dm-body">
+      <div v-if="expanded && (jobs.length > 0 || packagingList.length > 0 || urlList.length > 0 || romList.length > 0)" class="dm-body">
 
         <!-- Packaging items (GOG per-platform zip) -->
         <div v-for="pk in packagingList" :key="pk.id" class="dm-job" :class="`dm-job--${pkClass(pk.status)}`">
@@ -83,6 +83,38 @@
             </template>
             <span v-if="u.status === 'failed'" class="dm-stat dm-stat--error" :title="u.error || undefined">{{ truncate(u.error, 40) }}</span>
             <span class="dm-stat dm-stat--pct">{{ Math.round(u.progress_pct) }}%</span>
+          </div>
+        </div>
+
+        <!-- ROM-source downloads (RomDownloader). Socket-fed and self-clearing
+             like the URL section, but keyed on the romsource job id (namespaced
+             "rom:" so it never collides with a GOG job id). Title is the ROM
+             file; the platform slug rides as the sub-label. -->
+        <div v-for="r in romList" :key="r.id" class="dm-job" :class="`dm-job--${pkClass(r.status)}`">
+          <div class="dm-job-head">
+            <div class="dm-job-info">
+              <span class="dm-job-title">{{ r.file_name }}</span>
+              <template v-if="r.platform">
+                <span class="dm-job-sep">·</span>
+                <span class="dm-job-file">{{ r.platform }}</span>
+              </template>
+            </div>
+          </div>
+          <div class="dm-progress-track">
+            <div
+              class="dm-progress-fill"
+              :class="`dm-progress-fill--${pkClass(r.status)}`"
+              :style="{ width: r.status === 'completed' ? '100%' : (r.total ? `${Math.min(r.progress_pct, 100)}%` : '8%') }"
+            />
+          </div>
+          <div class="dm-job-stats">
+            <span class="dm-stat dm-stat--status" :class="`dm-status--${pkClass(r.status)}`">{{ statusLabel(r.status) }}</span>
+            <template v-if="r.status === 'downloading'">
+              <span v-if="r.total" class="dm-stat">{{ formatBytes(r.received) }} / {{ formatBytes(r.total) }}</span>
+              <span v-if="r.speed > 0" class="dm-stat dm-stat--speed">{{ formatSpeed(r.speed) }}</span>
+            </template>
+            <span v-if="r.status === 'failed'" class="dm-stat dm-stat--error" :title="r.error || undefined">{{ truncate(r.error, 40) }}</span>
+            <span class="dm-stat dm-stat--pct">{{ Math.round(r.progress_pct) }}%</span>
           </div>
         </div>
 
@@ -273,10 +305,28 @@ const urlItems = reactive<Record<string, UrlDl>>({})
 const urlList = computed(() => Object.values(urlItems))
 const urlTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+// ROM-source downloads (RomDownloader): socket-fed, self-clearing, keyed by the
+// romsource job id (prefixed so it can never clash with a GOG job or url id).
+interface RomDl {
+  id: string
+  file_name: string        // the ROM filename
+  platform: string         // fs_slug
+  status: string           // downloading | completed | failed
+  received: number
+  total: number
+  speed: number
+  progress_pct: number
+  error: string
+}
+const romItems = reactive<Record<string, RomDl>>({})
+const romList = computed(() => Object.values(romItems))
+const romTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let unsubSocket: (() => void) | null = null
 let unsubPackaging: (() => void) | null = null
 let unsubUrl: (() => void) | null = null
+let unsubRom: (() => void) | null = null
 
 const POLL_INTERVAL = 30000  // ms - fallback only, WebSocket is primary
 
@@ -293,7 +343,8 @@ const hasActivePackaging = computed(() =>
 const hasActive = computed(() =>
   jobs.value.some(j => ['downloading', 'queued', 'paused'].includes(j.status)) ||
   hasActivePackaging.value ||
-  urlList.value.some(u => u.status === 'downloading')
+  urlList.value.some(u => u.status === 'downloading') ||
+  romList.value.some(r => r.status === 'downloading')
 )
 
 const hasFinished = computed(() =>
@@ -301,7 +352,7 @@ const hasFinished = computed(() =>
 )
 
 const dotClass = computed(() => {
-  if (jobs.value.some(j => j.status === 'downloading') || hasActivePackaging.value || urlList.value.some(u => u.status === 'downloading')) return 'dm-status-dot--active'
+  if (jobs.value.some(j => j.status === 'downloading') || hasActivePackaging.value || urlList.value.some(u => u.status === 'downloading') || romList.value.some(r => r.status === 'downloading')) return 'dm-status-dot--active'
   if (jobs.value.some(j => j.status === 'paused'))      return 'dm-status-dot--paused'
   if (jobs.value.some(j => j.status === 'failed'))      return 'dm-status-dot--error'
   return 'dm-status-dot--idle'
@@ -426,6 +477,47 @@ function scheduleUrlClear(id: string, ms: number) {
   urlTimers.set(id, t)
 }
 
+function handleRomSource(kind: string, data: Record<string, unknown>) {
+  const id = 'rom:' + String(data.id ?? '')
+  if (id === 'rom:') return
+  const cur = romItems[id]
+  const fileName = String(data.filename ?? cur?.file_name ?? '')
+  const platform = String(data.fs_slug ?? cur?.platform ?? '')
+  if (kind === 'complete') {
+    romItems[id] = {
+      id, file_name: fileName, platform, status: 'completed',
+      received: cur?.total || cur?.received || 0, total: cur?.total ?? 0,
+      speed: 0, progress_pct: 100, error: '',
+    }
+    scheduleRomClear(id, 5000)
+  } else if (kind === 'error') {
+    romItems[id] = {
+      id, file_name: fileName, platform, status: 'failed',
+      received: cur?.received ?? 0, total: cur?.total ?? 0,
+      speed: 0, progress_pct: cur?.progress_pct ?? 0, error: String(data.error ?? ''),
+    }
+    scheduleRomClear(id, 8000)
+  } else {
+    const pct = Number(data.percent)
+    romItems[id] = {
+      id, file_name: fileName, platform, status: 'downloading',
+      received: Number(data.received ?? 0), total: Number(data.total ?? 0),
+      speed: Number(data.speed ?? 0), progress_pct: pct >= 0 ? pct : 0, error: '',
+    }
+    expanded.value = true
+    // Watchdog like the URL section: a live download emits ~1/s, so 90s of
+    // silence means the backend task is gone (container restart mid-download) and
+    // no terminal event is coming - drop the row so it does not hang "downloading".
+    scheduleRomClear(id, 90000)
+  }
+}
+
+function scheduleRomClear(id: string, ms: number) {
+  const ex = romTimers.get(id); if (ex) clearTimeout(ex)
+  const t = setTimeout(() => { delete romItems[id]; romTimers.delete(id) }, ms)
+  romTimers.set(id, t)
+}
+
 function startPolling() {
   stopPolling()
   pollTimer = setInterval(() => { fetchJobs(); fetchActivePackaging() }, POLL_INTERVAL)
@@ -444,6 +536,7 @@ onMounted(() => {
     unsubSocket = socketStore.onDownloadJob(handleJobUpdate)
     unsubPackaging = socketStore.onPackaging(handlePackaging)
     unsubUrl = socketStore.onUrlUpload(handleUrlUpload)
+    unsubRom = socketStore.onRomSource(handleRomSource)
   } catch { /* socket not available */ }
   // Fallback: slow poll every 30s for full sync
   startPolling()
@@ -454,8 +547,10 @@ onUnmounted(() => {
   if (unsubSocket) { unsubSocket(); unsubSocket = null }
   if (unsubPackaging) { unsubPackaging(); unsubPackaging = null }
   if (unsubUrl) { unsubUrl(); unsubUrl = null }
+  if (unsubRom) { unsubRom(); unsubRom = null }
   pkTimers.forEach(t => clearTimeout(t)); pkTimers.clear()
   urlTimers.forEach(t => clearTimeout(t)); urlTimers.clear()
+  romTimers.forEach(t => clearTimeout(t)); romTimers.clear()
 })
 
 // Auto-expand tray when a new download starts

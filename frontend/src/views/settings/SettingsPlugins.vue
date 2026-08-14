@@ -185,29 +185,9 @@
       <span v-if="listMsg" class="sp-inline-msg" :class="{ 'sp-inline-msg--err': !listOk }">{{ listMsg }}</span>
     </section>
 
-    <!-- Catalogue stores (from library_catalog_* plugins). Sync the first time
-         here to create the store; after that it lives in the store's own page. -->
-    <section v-if="catalogues.length" class="sp-section">
-      <div class="sp-section-head">
-        <h2 class="sp-section-title">{{ t('plugins.catalogues_title') }}</h2>
-        <p class="sp-section-sub">{{ t('plugins.catalogues_desc') }}</p>
-      </div>
-      <div class="sp-cat-list">
-        <div v-for="c in catalogues" :key="String(c.id)" class="sp-cat-row">
-          <span class="sp-cat-name">{{ c.name || c.id }}</span>
-          <span
-            v-if="catMsg[String(c.id)]"
-            class="sp-inline-msg"
-            :class="{ 'sp-inline-msg--err': catErr[String(c.id)] }"
-          >{{ catMsg[String(c.id)] }}</span>
-          <button
-            class="sp-cat-btn"
-            :disabled="catSyncing[String(c.id)]"
-            @click="syncCatalogue(String(c.id))"
-          >{{ catSyncing[String(c.id)] ? t('library.syncing') : t('plugins.catalogue_sync') }}</button>
-        </div>
-      </div>
-    </section>
+    <!-- A catalogue's first sync is hosted inside its plugin's own config panel
+         (the "Sync catalogue" button above, which has the token that sync needs),
+         so a separate "Catalogue stores" list here would just duplicate it. -->
 
     <!-- Install Plugin -->
     <section class="sp-section">
@@ -289,7 +269,8 @@ const listMsg = ref('')
 
 // Catalogues a plugin registered. A catalogue only becomes a browsable store
 // once synced, and the store page (which hosts the full sync) does not exist
-// until then - so the very first sync is triggered from here.
+// until then - so the very first sync is triggered from the plugin's own config
+// panel (catalogueFor + the "Sync catalogue" button), which has the token it needs.
 const catalogues = ref<Array<Record<string, any>>>([])
 const catSyncing = reactive<Record<string, boolean>>({})
 const catMsg = reactive<Record<string, string>>({})

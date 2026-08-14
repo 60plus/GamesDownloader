@@ -99,6 +99,21 @@
         </button>
       </div>
 
+      <!-- ROM Downloader entry (admin, Emulation only) -->
+      <div v-if="activeLib === 'roms' && isAdmin && classicRomSources.length" class="rd-entry">
+        <button
+          v-for="s in classicRomSources"
+          :key="s.id"
+          class="rd-entry-btn"
+          @click="openRomSource(s)"
+          :title="s.name"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><polyline points="12 8 12 14"/><polyline points="9 11 12 14 15 11"/></svg>
+          <span class="rd-entry-label">{{ s.name }}</span>
+          <span v-if="s.requires_auth && s.configured === false" class="rd-entry-badge">{{ t('romsrc.not_configured') }}</span>
+        </button>
+      </div>
+
       <!-- Search -->
       <div class="search-box">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--muted);flex-shrink:0">
@@ -685,6 +700,7 @@ import { useSocketStore } from '@/stores/socket'
 import client from '@/services/api/client'
 import * as libActions from '@/lib/libraryActions'
 import catalogActions from '@/lib/catalogActions'
+import romSourceActions, { type RomSource } from '@/lib/romSourceActions'
 import AmbientBackground from '@/components/common/AmbientBackground.vue'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import ClassicGameDetail from './ClassicGameDetail.vue'
@@ -898,6 +914,20 @@ const userRole = computed(() => {
 
 const isAdmin    = computed(() => authStore.user?.role === 'admin')
 const isUploader = computed(() => ['admin', 'uploader'].includes(authStore.user?.role as string))
+
+// ── ROM sources (RomDownloader) ─────────────────────────────────────────────
+// Admin-only remote ROM catalogues, offered as entry buttons in the Emulation
+// sidebar. The browser screens themselves are core views rendered via
+// <router-view> (isNonLibraryRoute), so this layout only needs the entry point.
+const classicRomSources = ref<RomSource[]>([])
+async function fetchRomSources() {
+  if (!isAdmin.value) { classicRomSources.value = []; return }
+  try { classicRomSources.value = await romSourceActions.list() }
+  catch { classicRomSources.value = [] }
+}
+function openRomSource(s: RomSource) {
+  router.push(romSourceActions.route(s.id))
+}
 
 const filteredGames = computed(() => {
   let list = [...games.value]
@@ -1710,6 +1740,7 @@ onMounted(async () => {
   await libs.fetch()
   await collectionsStore.fetch()
   refreshLibraryCounts()
+  fetchRomSources()
   // Reconnect to a sync that was already running before this page load/refresh
   try {
     const { data } = await client.get('/gog/library/sync/status')
@@ -2316,6 +2347,29 @@ onUnmounted(() => { _unregHomeSections?.() })
 .cl-tp-pct { font-weight: 700; color: var(--text); }
 
 /* ── Platform switcher (Emulation) ───────────────────────────────────────── */
+/* ── ROM Downloader entry (Emulation sidebar) ─────────────────────────────── */
+.rd-entry { display: flex; flex-direction: column; gap: 4px; padding: 2px 12px 6px; }
+.rd-entry-btn {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 10px; border-radius: var(--radius-sm, 8px);
+  border: 1px solid color-mix(in srgb, var(--pl) 30%, transparent);
+  background: color-mix(in srgb, var(--pl) 12%, transparent);
+  color: var(--text); font-size: 12px; font-weight: 600; font-family: inherit;
+  cursor: pointer; transition: all var(--transition);
+}
+.rd-entry-btn:hover {
+  background: color-mix(in srgb, var(--pl) 22%, transparent);
+  border-color: color-mix(in srgb, var(--pl) 50%, transparent);
+}
+.rd-entry-btn svg { color: var(--pl-light, var(--pl)); flex-shrink: 0; }
+.rd-entry-label { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-entry-badge {
+  flex-shrink: 0; font-size: 9px; font-weight: 700; letter-spacing: .3px;
+  padding: 2px 6px; border-radius: 999px; color: #fde68a;
+  background: color-mix(in srgb, #f59e0b 22%, transparent);
+  border: 1px solid color-mix(in srgb, #f59e0b 40%, transparent);
+}
+
 .plat-switcher {
   display: flex; align-items: center; justify-content: space-between;
   padding: 4px 8px; border-bottom: 1px solid var(--glass-border);

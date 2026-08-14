@@ -88,6 +88,23 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/views/emulation/EmulationGameDetail.vue"),
         meta: { title: "ROM Detail", fullBleed: true },
       },
+      // ── ROM Downloader (remote ROM sources, browsed live) ───────────────
+      // A source's platform grid, then its live ROM list. Admin-only (the
+      // endpoints are LIBRARY_ADMIN). Not library routes, so every theme's
+      // layout renders these through its fallback <router-view>; each theme
+      // adds only the entry tile in its Retro grid.
+      {
+        path: "rom-sources/:sourceId",
+        name: "rom-source-platforms",
+        component: () => import("@/views/emulation/RomSourcePlatforms.vue"),
+        meta: { title: "ROM Downloader", fullBleed: true, requiresAdmin: true },
+      },
+      {
+        path: "rom-sources/:sourceId/:fsSlug",
+        name: "rom-source-list",
+        component: () => import("@/views/emulation/RomSourceList.vue"),
+        meta: { title: "ROM Downloader", fullBleed: true, requiresAdmin: true },
+      },
       {
         path: "requests",
         name: "requests",

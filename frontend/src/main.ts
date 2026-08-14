@@ -26,6 +26,7 @@ import { useNotificationStore } from "./stores/notifications";
 import { LIBRARY_ICONS, LIBRARY_ICON_NAMES, libraryIconMarkup } from "./lib/libraryIcons";
 import libraryActions from "./lib/libraryActions";
 import catalogActions from "./lib/catalogActions";
+import romSourceActions, { romActions } from "./lib/romSourceActions";
 import dashboardActions from "./lib/dashboardActions";
 import client from "./services/api/client";
 
@@ -98,6 +99,10 @@ const PLUGIN_SOCKET_EVENTS = new Set([
   // Packaging progress, so a theme can follow __GD__.library.package() jobs
   // ({ id, status: "packaging"|"completed"|"failed", done, total }).
   "download:packaging",
+  // ROM source downloads (__GD__.romSources.download), keyed on the job id.
+  "romsource:download_progress",
+  "romsource:download_complete",
+  "romsource:download_error",
 ]);
 
 function createPluginEventBridge() {
@@ -293,6 +298,21 @@ function createSafeSocketStore() {
   //   catalog.sync(catalogId)            -> re-read the catalogue (admin)
   //   catalog.listCatalogs()             -> catalogues the plugins registered
   catalog: catalogActions,
+  // ROM sources (remote ROM catalogues browsed live, downloaded into roms/).
+  // A theme brings its own tile + platform grid + ROM list and calls these:
+  //   romSources.list()                       -> sources the plugins registered
+  //   romSources.platforms(sourceId)          -> platforms the source offers
+  //   romSources.listRoms(sourceId, fsSlug, {page,pageSize,query,region,sort})
+  //   romSources.download(sourceId, entryIds) -> queue; progress on
+  //     "romsource:download_*" (via __GD__.events)
+  //   romSources.route(sourceId, fsSlug?)     -> the in-app path for a source's
+  //     platform grid, or (with fsSlug) its ROM list - never hardcode the URL
+  //   romSources.platformArt(fsSlug)          -> {icon,name,fanart} console-art
+  //     paths, the same GD serves for the Retro grid
+  // and the general primitive:
+  //   roms.import(url, fsSlug, filename)       -> fetch one ROM by URL into roms/
+  romSources: romSourceActions,
+  roms: romActions,
   // Role-aware Dashboard data (built-in core overview). dashboard.me() returns
   // the signed-in user's own stats; dashboard.admin() returns the server-wide
   // admin overview (admin only). A plugin theme can render its own dashboard

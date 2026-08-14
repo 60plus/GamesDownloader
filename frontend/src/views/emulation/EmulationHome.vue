@@ -57,7 +57,7 @@
     </div>
 
     <!-- Empty state -->
-    <div v-else-if="!platforms.length" class="emu-empty">
+    <div v-else-if="!platforms.length && !sourceTiles.length" class="emu-empty">
       <div class="emu-empty-icon">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
           <rect x="2" y="6" width="20" height="14" rx="2"/>
@@ -75,7 +75,7 @@
     </div>
 
     <!-- Platform grid -->
-    <div v-if="sortedPlatforms.length" class="emu-platform-grid" :style="{
+    <div v-if="sortedPlatforms.length || sourceTiles.length" class="emu-platform-grid" :style="{
       '--card-min':    cardSizeMap[cardSize].min    + 'px',
       '--card-height': cardSizeMap[cardSize].height + 'px',
       '--card-icon':   cardSizeMap[cardSize].icon   + 'px',
@@ -120,6 +120,32 @@
           <span class="emu-platform-name-text" style="display:none">{{ p.name }}</span>
           <span class="emu-platform-count">{{ p.rom_count }} {{ t('emulation.roms_count') }}</span>
         </div>
+      </div>
+
+      <!-- ROM source tiles (RomDownloader). Data-driven from __GD__.romSources;
+           admin-only. The tile art (tlo.png) carries its own wordmark, so no
+           icon/name overlay - just the background and a "not configured" ribbon. -->
+      <div
+        v-for="s in sourceTiles"
+        :key="'src-' + s.id"
+        class="emu-platform-card emu-source-card"
+        @click="openSource(s)"
+        :title="s.plugin_name ? `${s.plugin_name} - ${s.name}` : s.name"
+      >
+        <!-- Like the console cards, only the background image is swapped for the
+             source's own art (full-bleed cover + a bottom shade to sit at the
+             same weight). No console icon / wordmark overlay. -->
+        <img
+          v-if="s.tile_bg"
+          :src="s.tile_bg"
+          :alt="s.name"
+          class="emu-source-bg"
+          @error="($event.target as HTMLImageElement).style.display='none'"
+        />
+        <div class="emu-source-shade" />
+        <span v-if="s.requires_auth && s.configured === false" class="emu-source-badge">
+          {{ t('romsrc.not_configured', 'Not configured') }}
+        </span>
       </div>
     </div>
 
@@ -247,6 +273,7 @@
 import { computed, onMounted, ref, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import client from '@/services/api/client'
+import romSourceActions, { type RomSource } from '@/lib/romSourceActions'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { usePlatformMetaStore } from '@/stores/platformMeta'
@@ -279,6 +306,23 @@ const platforms = ref<Platform[]>([])
 const loading   = ref(true)
 const scanning  = ref(false)
 const scanMsg   = ref('')
+
+// ── ROM sources (RomDownloader tiles) ──────────────────────────────────────
+// Admin-only remote ROM catalogues, rendered as tiles after the real platforms.
+const sourceTiles = ref<RomSource[]>([])
+
+async function fetchRomSources() {
+  if (!isAdmin.value) { sourceTiles.value = []; return }
+  try {
+    sourceTiles.value = await romSourceActions.list()
+  } catch {
+    sourceTiles.value = []
+  }
+}
+
+function openSource(s: RomSource) {
+  router.push(romSourceActions.route(s.id))
+}
 
 // ── Sort ─────────────────────────────────────────────────────────────────────
 const sortBy = ref<'name_asc' | 'name_desc' | 'roms_desc' | 'roms_asc'>((localStorage.getItem('emu_home_sort') as any) || 'name_asc')
@@ -508,6 +552,7 @@ function platformCardStyle(fsSlug: string): Record<string, string> {
 onMounted(() => {
   fetchPlatforms()
   fetchKnownPlatforms()
+  fetchRomSources()
   platformMeta.fetchIfNeeded()
 })
 </script>
@@ -726,6 +771,33 @@ onMounted(() => {
 .emu-platform-count {
   font-size: var(--fs-xs, 10px); color: rgba(255,255,255,.5);
   font-weight: 500;
+}
+
+/* ── ROM source tile (RomDownloader) ────────────────────────────────────── */
+.emu-source-card {
+  background: #0c0817;
+}
+.emu-source-bg {
+  position: absolute; inset: 0; z-index: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  transition: transform .3s;
+}
+.emu-source-card:hover .emu-source-bg { transform: scale(1.04); }
+/* Always-on bottom shade (like the console cards' footer gradient) so the tile
+   integrates with the dark grid instead of reading as a bright block. */
+.emu-source-shade {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: linear-gradient(180deg, rgba(0,0,0,.04) 0%, rgba(0,0,0,.28) 55%, rgba(0,0,0,.72) 100%);
+}
+.emu-source-badge {
+  position: absolute; z-index: 2; top: 10px; right: 10px;
+  padding: 3px 9px; border-radius: 999px;
+  font-size: var(--fs-xs, 10px); font-weight: 700; letter-spacing: .3px;
+  color: #fde68a;
+  background: color-mix(in srgb, #f59e0b 22%, rgba(0,0,0,.55));
+  border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
+  backdrop-filter: blur(3px);
 }
 
 /* ── Misc ───────────────────────────────────────────────────────────────── */
