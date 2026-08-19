@@ -44,10 +44,15 @@ Every area below has a dedicated page in the [Wiki](https://github.com/60plus/Ga
 - **GOG** account sync with queued downloads, pause/resume/retry, checksum verification, and per-platform packaging. Multi-user: everyone can connect their own GOG account, with owner tracking and deduplication.
 - **Custom games** uploaded through the browser (a local file or a direct URL) or added by magnet / `.torrent`, each landing in whichever library you are viewing, organised by OS, type, version, and language.
 - **ROM library** scanned per platform, matched by hash (CRC32 / MD5 / SHA1 from inside `.zip` / `.7z`) for spot-on results.
-- Full detail: [Library](https://github.com/60plus/GamesDownloader/wiki/Library) · [GOG Integration](https://github.com/60plus/GamesDownloader/wiki/GOG-Integration) · [ROMs & Emulation](https://github.com/60plus/GamesDownloader/wiki/ROMs-and-Emulation)
+- **Collections** that cut across all of it: hand-picked shelves with their own cover, hero and description, scraped like any other title, sitting as tiles on the home screen. A collection can hold a game from any library, and it can hold other collections.
+- **Catalogues you can browse** rather than only files you own: a plugin can put a storefront beside your libraries, or a **ROM source** in front of a remote archive, and what you pick lands in the right folder and is scanned and scraped like anything you copied in yourself.
+- Full detail: [Library](https://github.com/60plus/GamesDownloader/wiki/Library) · [Collections](https://github.com/60plus/GamesDownloader/wiki/Collections) · [GOG Integration](https://github.com/60plus/GamesDownloader/wiki/GOG-Integration) · [ROMs & Emulation](https://github.com/60plus/GamesDownloader/wiki/ROMs-and-Emulation)
 
 ### In-browser emulation
-- Play ROMs directly in the browser via **EmulatorJS** (NES, SNES, GBA, Genesis, N64, PS1, arcade, and more), with save states, battery saves, bezels, and gamepad support.
+- Play ROMs directly in the browser via **EmulatorJS** (NES, SNES, GBA, Genesis, N64, PS1, arcade, and more), with nine screenshotted save-state slots, bezels, and gamepad support.
+- **Your memory card travels with you.** The card a game writes to is kept on the server as you play and put into whatever browser you sign in from next, so a save made at the desk is there on the laptop. The card already in a browser is never overwritten, and one button takes it out again.
+- **Firmware where the cores want it**: BIOS files live in settings, per console, and are handed to the emulator when a game starts.
+- **The Amiga is a real Amiga.** Kickstart handling, **WHDLoad hard-drive installs**, and a multi-floppy title as one library entry with disk swapping from the pause menu. It saves the way an Amiga saves, to a disk rather than to a battery, and that disk is kept for you and put back wherever you play next, exactly as a memory card is.
 - **Couch Mode**: a full-screen, controller-first console UI with a platform carousel and a complete emulator settings system.
 - Full detail: [ROMs & Emulation](https://github.com/60plus/GamesDownloader/wiki/ROMs-and-Emulation)
 
