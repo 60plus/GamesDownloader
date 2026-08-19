@@ -298,11 +298,19 @@ def _rom_tile(r) -> dict:
 
 
 async def _saves_for(session: AsyncSession, user_id: int, rom_ids: list[int]) -> dict[int, list[dict]]:
-    """Every save these ROMs hold, keyed by rom_id, newest first.
+    """The savestates these ROMs hold, keyed by rom_id, newest first.
 
-    Two queries for the whole strip rather than one per tile: the slot rail on a
+    One query for the whole strip rather than one per tile: the slot rail on a
     Continue-playing tile needs this the moment it renders, and a fetch per hover
     would be a request storm on a home page.
+
+    Savestates only, deliberately. Every entry here becomes something the player
+    can click to resume from, and a battery save cannot answer for that: it is
+    the memory inside the cartridge, so it puts the save back in the machine but
+    leaves the game at its title screen, waiting to be told to load. It travels
+    with the ROM on every launch either way. A ROM whose only save is a battery
+    one still appears in Continue playing - see _continue_playing, which reads
+    both tables - it just opens instead of promising a resume.
     """
     out: dict[int, list[dict]] = {}
     if not rom_ids:
@@ -312,30 +320,17 @@ async def _saves_for(session: AsyncSession, user_id: int, rom_ids: list[int]) ->
         .where(RomSaveState.user_id == user_id, RomSaveState.rom_id.in_(rom_ids))
         .order_by(desc(RomSaveState.updated_at))
     )).scalars().all()
-    saves = (await session.execute(
-        select(RomSave)
-        .where(RomSave.user_id == user_id, RomSave.rom_id.in_(rom_ids))
-        .order_by(desc(RomSave.updated_at))
-    )).scalars().all()
     for s in states:
         out.setdefault(s.rom_id, []).append({
             # `save` is what the player wants on the URL: ?resume=1&save=<this>
             "save": f"state:{s.id}",
+            # Always "state" now. Kept because themes read it, and a field that
+            # quietly disappears breaks one written against an earlier GD.
             "kind": "state",
             "slot": s.slot,
             "screenshot": _screenshot_url(s.id, s.screenshot_path),
             "updated_at": s.updated_at.isoformat() if s.updated_at else None,
         })
-    for s in saves:
-        out.setdefault(s.rom_id, []).append({
-            "save": "battery",
-            "kind": "battery",
-            "slot": None,
-            "screenshot": None,
-            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
-        })
-    for rid in out:
-        out[rid].sort(key=lambda e: e["updated_at"] or "", reverse=True)
     return out
 
 

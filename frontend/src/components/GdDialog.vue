@@ -6,7 +6,18 @@
 
           <!-- Icon -->
           <div class="gd-dlg-icon" :class="dialogState.danger ? 'gd-dlg-icon--danger' : 'gd-dlg-icon--info'">
-            <svg v-if="dialogState.danger" width="18" height="18" viewBox="0 0 24 24" fill="none"
+            <!-- A picture of the thing being asked about, where one was given:
+                 the cartridge a save belongs to says which game far faster than
+                 reading the sentence. Falls back to the round icon when there is
+                 no picture, and again if the picture fails to load. -->
+            <img
+              v-if="dialogState.image && !imageBroken"
+              :src="dialogState.image"
+              class="gd-dlg-art"
+              alt=""
+              @error="imageBroken = true"
+            />
+            <svg v-else-if="dialogState.danger" width="18" height="18" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" stroke-width="2.2">
               <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
               <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
@@ -50,6 +61,11 @@ import { ref, watch, nextTick } from 'vue'
 import { dialogState } from '@/composables/useDialog'
 
 const confirmBtnRef = ref<HTMLButtonElement | null>(null)
+
+// Cleared whenever the picture changes, so one broken image does not leave every
+// later dialog showing the fallback icon.
+const imageBroken = ref(false)
+watch(() => dialogState.image, () => { imageBroken.value = false })
 
 // Auto-focus confirm button when dialog opens
 watch(() => dialogState.visible, async (v) => {
@@ -127,6 +143,16 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   background: rgba(139, 92, 246, 0.12);
   color: var(--pl-light, #a78bfa);
   border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+/* Art shown in place of the icon. width/height stay auto so the picture keeps
+   its own proportions: cartridge and memory-card art runs from roughly square
+   to very slim, and a fixed box would slice most of it. Only the bounds are set,
+   and the frame around it is not drawn, since this is a picture and not a badge. */
+.gd-dlg-art {
+  max-width: 62%; max-height: 104px;
+  border-radius: 4px;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.55));
 }
 
 /* Content */

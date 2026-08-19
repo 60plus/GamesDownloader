@@ -40,6 +40,31 @@ class SaveStateHandler(DBBaseHandler):
         return list(result.scalars().all())
 
     @begin_session
+    async def list_states_for_rom(
+        self, rom_id: int, *, session: AsyncSession = None
+    ) -> list[RomSaveState]:
+        """Every player's savestates for one ROM.
+
+        Not scoped to a user, unlike everything around it, because the caller
+        is removing the ROM itself: what has to be found is every file that
+        would otherwise be left behind, whoever it belongs to.
+        """
+        result = await session.execute(
+            select(RomSaveState).where(RomSaveState.rom_id == rom_id)
+        )
+        return list(result.scalars().all())
+
+    @begin_session
+    async def list_saves_for_rom(
+        self, rom_id: int, *, session: AsyncSession = None
+    ) -> list[RomSave]:
+        """Every player's battery saves for one ROM. See list_states_for_rom."""
+        result = await session.execute(
+            select(RomSave).where(RomSave.rom_id == rom_id)
+        )
+        return list(result.scalars().all())
+
+    @begin_session
     async def list_all_states_for_user(
         self, user_id: int, *, session: AsyncSession = None
     ) -> list[RomSaveState]:

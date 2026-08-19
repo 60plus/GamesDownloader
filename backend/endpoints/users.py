@@ -45,9 +45,19 @@ async def get_preferences(request: Request) -> dict:
 
 @router.put("/me/preferences")
 async def save_preferences(request: Request, data: dict = Body(...)) -> dict:
-    """Save the current user's UI appearance preferences."""
+    """Save the current user's preferences.
+
+    The keys sent are merged over the ones already stored rather than replacing
+    them wholesale. Every caller owns a slice of this dictionary and sends only
+    its own: the theme store writes its appearance keys, the ROM settings write
+    whether saves sync themselves. Replacing meant whichever of them saved last
+    silently wiped the other's settings - and since the theme store saves on a
+    debounce after any appearance change, that would have been often.
+    """
     _require_auth(request)
-    await _users_db.update(request.state.user, {"preferences": data})
+    merged = dict(request.state.user.preferences or {})
+    merged.update(data)
+    await _users_db.update(request.state.user, {"preferences": merged})
     return {"ok": True}
 
 

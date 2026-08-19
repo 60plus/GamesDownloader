@@ -70,13 +70,13 @@
 
             <!-- Action buttons below the cover -->
             <div class="gd-cover-actions">
-              <button v-if="ejsCore" class="gd-btn-play gd-btn-play--cover" @click="requestPlay">
+              <button v-if="ejsCore" class="gd-btn-play gd-btn-play--cover" @click="requestPlay()">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none">
                   <polygon points="5,3 19,12 5,21"/>
                 </svg>
                 {{ t('detail.play') }}
               </button>
-              <button class="gd-btn-dl gd-btn-dl--cover" @click="downloadRom">
+              <button class="gd-btn-dl gd-btn-dl--cover" @click="downloadRom()">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                   <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
@@ -209,12 +209,53 @@
                 </svg>
                 {{ clearing ? t('detail.clearing') : t('detail.clear') }}
               </button>
+
+              <!-- Admin, not editor: this is the one action here with nothing
+                   behind it. A cleared scrape can be scraped again. -->
+              <button v-if="isAdmin" class="gd-btn-danger" :disabled="deleting" @click="onDelete" :title="t('detail.delete_rom')">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <line x1="12" y1="11" x2="12" y2="17"/>
+                </svg>
+                {{ deleting ? t('detail.deleting') : t('common.delete') }}
+              </button>
             </div>
 
             <!-- File info row -->
             <div class="gd-file-info-row">
               <span class="gd-file-name">{{ rom.fs_name }}</span>
               <span class="gd-file-size">{{ formatSize(rom.fs_size_bytes) }}</span>
+            </div>
+
+            <!-- Disks of a title split across floppies. Playing always inserts
+                 the whole set, so these choose which disk the machine starts
+                 from - which matters for the sets that put a level editor or a
+                 second scenario on a later disk. -->
+            <div v-if="diskSet.length" class="gd-disks">
+              <span class="gd-disks-label">{{ t('detail.disks') }}</span>
+              <div
+                v-for="d in diskSet"
+                :key="d.id"
+                class="gd-disk"
+                :class="{ 'gd-disk--current': d.current }"
+                :title="d.name"
+              >
+                <button v-if="ejsCore" class="gd-disk-btn" :title="t('detail.play_disk')" @click="requestPlay(d.id)">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+                  </svg>
+                  {{ t('detail.disk_n', { n: d.number }) }}
+                </button>
+                <span v-else class="gd-disk-btn gd-disk-btn--static">{{ t('detail.disk_n', { n: d.number }) }}</span>
+                <button class="gd-disk-dl" :title="t('detail.download_disk')" @click="downloadRom(d.id)">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                </button>
+              </div>
             </div>
 
           </div>
@@ -538,7 +579,7 @@ import HeroBackground from '@/components/common/HeroBackground.vue'
 import { getEjsCore } from '@/utils/ejsCores'
 import { ratingVal } from '@/utils/rating'
 
-const { gdConfirm } = useDialog()
+const { gdConfirm, gdAlert } = useDialog()
 const { t } = useI18n()
 
 const route      = useRoute()
@@ -549,8 +590,18 @@ const themeStore = useThemeStore()
 const isAdmin  = computed(() => auth.user?.role === 'admin')
 const canEdit  = computed(() => ['admin', 'uploader', 'editor'].includes(auth.user?.role as string))
 
+// Only a ROM that belongs to a disk set is ever listed here, and the scanner
+// assigns the group and the number together - so a disk always has both.
+interface RomDisk {
+  id: number
+  number: number
+  name: string
+  current: boolean
+}
+
 interface RomDetail {
   id: number
+  disks?: RomDisk[]
   platform_slug: string
   platform_fs_slug: string | null
   platform_name: string
@@ -610,6 +661,7 @@ const pubLogoFailed    = ref(false)
 const wheelFailed      = ref(false)
 const scraping      = ref(false)
 const clearing      = ref(false)
+const deleting      = ref(false)
 const showEditPanel = ref(false)
 
 // ── Player ────────────────────────────────────────────────────────────────────
@@ -634,11 +686,20 @@ const ejsCore = computed(() =>
 )
 
 // Arriving from the dashboard "Continue playing" tile (?resume=1) asks the player
-// to auto-load a save once the game boots. An optional ?save= names WHICH one
-// ("state:<id>" from a slot tile's Play button, or "battery"); without it the
-// player takes the newest savestate.
+// to auto-load a savestate once the game boots. An optional ?save= names WHICH
+// one ("state:<id>" from a slot tile's Play button); without it the player takes
+// the newest. A battery save is never named here - it goes into the machine on
+// every launch, resume or not.
 const wantResume = computed(() => route.query.resume === '1')
 const resumeSave = computed(() => String(route.query.save || ''))
+
+// A title split across floppies is one library entry; the rest of its disks are
+// hidden everywhere else and only reachable from here.
+const diskSet = computed<RomDisk[]>(() => rom.value?.disks || [])
+
+// Which disk the machine should start from, chosen from that list. Null means
+// the one the entry itself names, which is disk 1 for every ordinary set.
+const pendingDisk = ref<number | null>(null)
 
 const playerUrl = computed(() => {
   if (!rom.value || !ejsCore.value) return ''
@@ -651,10 +712,12 @@ const playerUrl = computed(() => {
   if (rom.value.bezel_path && bezelEnabled.value) p.set('bezel_url', rom.value.bezel_path)
   if (wantResume.value) p.set('resume', '1')
   if (wantResume.value && resumeSave.value) p.set('save', resumeSave.value)
+  if (pendingDisk.value) p.set('disk', String(pendingDisk.value))
   return `/player.html?${p.toString()}`
 })
 
-function requestPlay() {
+function requestPlay(diskId?: number) {
+  pendingDisk.value = diskId ?? null
   const saved = localStorage.getItem(PREF_KEY) as 'full' | 'window' | 'tab' | null
   // Load bezel pref for this specific game (default on)
   if (rom.value?.bezel_path && rom.value.id) {
@@ -816,9 +879,21 @@ async function fetchRom() {
   }
 }
 
-function downloadRom() {
+async function downloadRom(diskId?: number) {
   if (!rom.value) return
-  window.open(`/api/roms/${rom.value.id}/download`, '_blank')
+  // Saving a file means navigating the browser, and a navigation sends no
+  // Authorization header - pointing it straight at the authenticated route
+  // only ever produced "Not authenticated". Ask for a short-lived ticket over
+  // the authenticated connection first, then navigate to that.
+  try {
+    // Without a disk named, the whole title is wanted - which for a game
+    // split across floppies means every disk, not the one the entry carries.
+    const whole = !diskId && diskSet.value.length > 1 ? '?whole_set=1' : ''
+    const { data } = await client.post(`/roms/${diskId ?? rom.value.id}/download-ticket${whole}`)
+    window.open(data.url, '_blank')
+  } catch {
+    gdAlert(t('detail.download_failed'))
+  }
 }
 
 async function triggerScrape() {
@@ -849,6 +924,53 @@ async function onClearMetadata() {
     await fetchRom()
   } catch { /* ignore */ } finally {
     clearing.value = false
+  }
+}
+
+// Removing a ROM asks twice, and the first question is built from what the
+// server says would actually go. Two things make this destructive and neither
+// is visible on the page: a floppy title is several entries that only work
+// together, and the saves that go with them can belong to other people.
+async function onDelete() {
+  if (!rom.value) return
+  const id = rom.value.id
+  let preview: { disks: { name: string }[]; saves: number; on_disk: boolean }
+  try {
+    preview = (await client.get(`/roms/${id}/removal`)).data
+  } catch {
+    await gdAlert(t('detail.delete_failed', 'Could not read what would be removed.'))
+    return
+  }
+
+  const lines = [t('detail.delete_body').replace('{name}', rom.value.name || rom.value.fs_name)]
+  if (preview.disks.length > 1) {
+    lines.push(t('detail.delete_rom_disks').replace('{n}', String(preview.disks.length)))
+  }
+  if (preview.saves > 0) {
+    lines.push(t('detail.delete_rom_saves').replace('{n}', String(preview.saves)))
+  }
+  if (!await gdConfirm(lines.join('\n\n'), { danger: true, title: t('detail.delete_rom') })) return
+
+  // Only worth asking when there is a file to ask about, and the answer that
+  // keeps it is the one on the cancel button.
+  let withFiles = false
+  if (preview.on_disk) {
+    withFiles = await gdConfirm(t('detail.delete_rom_files_body'), {
+      danger: true,
+      title: t('detail.delete_rom_files_title'),
+      confirmText: t('detail.delete_files_yes'),
+      cancelText: t('detail.delete_files_no'),
+    })
+  }
+
+  deleting.value = true
+  try {
+    await client.delete(`/roms/${id}`, { params: { delete_files: withFiles } })
+    router.push({ name: 'emulation-library', params: { platform: rom.value.platform_slug } })
+  } catch {
+    await gdAlert(t('detail.delete_failed', 'Could not delete this ROM.'))
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -1196,6 +1318,26 @@ onUnmounted(() => {
 }
 .gd-file-name { font-size: 11px; color: rgba(255,255,255,.3); font-family: monospace; }
 .gd-file-size { font-size: 11px; color: rgba(255,255,255,.28); }
+
+/* Disks of a multi-floppy title */
+.gd-disks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.gd-disks-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: rgba(255,255,255,.32); margin-right: 2px; }
+.gd-disk {
+  display: inline-flex; align-items: stretch; border-radius: 6px; overflow: hidden;
+  background: color-mix(in srgb, var(--pl) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl) 26%, transparent);
+}
+.gd-disk--current { border-color: color-mix(in srgb, var(--pl) 55%, transparent); }
+.gd-disk-btn, .gd-disk-dl {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px;
+  background: none; border: 0; cursor: pointer;
+  color: rgba(255,255,255,.72); font-size: 11px; font-weight: 600;
+  transition: background .15s, color .15s;
+}
+.gd-disk-btn:hover, .gd-disk-dl:hover { background: color-mix(in srgb, var(--pl) 26%, transparent); color: #fff; }
+.gd-disk-btn--static { cursor: default; }
+.gd-disk-btn--static:hover { background: none; color: rgba(255,255,255,.72); }
+.gd-disk-dl { padding: 4px 7px; border-left: 1px solid color-mix(in srgb, var(--pl) 26%, transparent); color: rgba(255,255,255,.5); }
 
 .spin { animation: gd-spin .8s linear infinite; }
 @keyframes gd-spin { to { transform: rotate(360deg); } }

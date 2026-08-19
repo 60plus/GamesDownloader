@@ -23,9 +23,13 @@ def _build_app() -> Starlette:
     async def player(request):
         return HTMLResponse("<h1>player</h1>")
 
+    async def vamigaweb(request):
+        return HTMLResponse("<h1>vAmigaWeb</h1>")
+
     routes = [
         Route("/", index),
         Route("/player.html", player),
+        Route("/vamigaweb/index.html", vamigaweb),
     ]
     app = Starlette(routes=routes)
     app.add_middleware(SecurityHeadersMiddleware)
@@ -72,6 +76,15 @@ def test_player_route_is_csp_exempt():
     r = client.get("/player.html")
     assert "content-security-policy" not in r.headers
     assert r.headers.get("cross-origin-opener-policy") == "same-origin"
+
+
+def test_vamigaweb_route_is_csp_exempt():
+    # The player frames this page, so it needs the same exemption and the same
+    # cross-origin isolation headers, or the frame never loads.
+    r = client.get("/vamigaweb/index.html")
+    assert "content-security-policy" not in r.headers
+    assert r.headers.get("cross-origin-opener-policy") == "same-origin"
+    assert r.headers.get("cross-origin-embedder-policy") == "credentialless"
 
 
 def test_baseline_headers_present():

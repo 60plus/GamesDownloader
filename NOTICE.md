@@ -89,6 +89,18 @@ Fetched at build time, not in the git repository:
 
 - **EmulatorJS** v4.2.3 (https://github.com/EmulatorJS/EmulatorJS) -
   GPL-3.0, includes RetroArch cores (various licences per core)
+- **vAmigaWeb** (https://github.com/vAmigaWeb/vAmigaWeb) - GPL-3.0, a
+  WebAssembly port of **vAmiga** by Dirk W. Hoffmann
+  (https://github.com/dirkwhoffmann/vAmiga), ported by Mithrendal.  Served at
+  `/vamigaweb/` and used for Amiga WHDLoad titles only.  The image bundles the
+  project's own binary deployment
+  (https://github.com/vAmigaWeb/vAmigaWeb.github.io), pinned to one commit;
+  the complete corresponding source is at the first URL above.  Two changes are
+  made at build time and nowhere else: the upstream site's analytics beacon is
+  removed, and its documentation, debug console, source maps and script editor
+  are dropped.  Bundled AROS Kickstart replacement ROMs are part of that
+  deployment and come from the **AROS Research Operating System** project
+  (https://aros.sourceforge.io), APL-1.0.
 - **MariaDB** 11.3 - GPL-2.0
 - **Valkey** 8 (Redis-compatible) - BSD-3-Clause
 - **ClamAV** - GPL-2.0

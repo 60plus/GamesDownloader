@@ -15,6 +15,11 @@ export interface DialogOptions {
   danger?:      boolean   // red confirm button
   confirmText?: string
   cancelText?:  string
+  /** Picture to show instead of the round icon - the cartridge a save belongs
+   *  to, say. Falls back to the icon when empty or when the image fails.
+   *  Nullable because art off the API is `string | null`, and making every
+   *  caller launder that into undefined would be noise. */
+  image?:       string | null
 }
 
 interface DialogState {
@@ -25,6 +30,7 @@ interface DialogState {
   danger:      boolean
   confirmText: string
   cancelText:  string
+  image:       string
   resolve:     ((value: boolean) => void) | null
 }
 
@@ -37,6 +43,7 @@ export const dialogState = reactive<DialogState>({
   danger:      false,
   confirmText: 'OK',
   cancelText:  'Cancel',
+  image:       '',
   resolve:     null,
 })
 
@@ -50,6 +57,10 @@ export function useDialog() {
       dialogState.danger      = opts.danger      ?? false
       dialogState.confirmText = opts.confirmText ?? 'Confirm'
       dialogState.cancelText  = opts.cancelText  ?? 'Cancel'
+      // Always assigned, never left as it was: the state is a singleton, so a
+      // picture from an earlier dialog would otherwise sit above an unrelated
+      // question.
+      dialogState.image       = opts.image       ?? ''
       dialogState.resolve     = resolve
     })
   }
@@ -63,6 +74,7 @@ export function useDialog() {
       dialogState.danger      = opts.danger      ?? false
       dialogState.confirmText = opts.confirmText ?? 'OK'
       dialogState.cancelText  = ''
+      dialogState.image       = opts.image       ?? ''
       dialogState.resolve     = (v) => resolve()
     })
   }

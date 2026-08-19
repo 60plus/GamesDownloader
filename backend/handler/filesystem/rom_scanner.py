@@ -21,6 +21,7 @@ from pathlib import Path
 
 from handler.database.rom_handler import rom_handler, rom_platform_handler
 from handler.metadata.rom_platform_map import PLATFORM_MAP, slug_from_fs_slug
+from utils.disk_sets import group_disks
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,13 @@ _ROM_EXTENSIONS = {
     "atr", "atx", "cas", "car",                                # Atari 8-bit
     "st", "msa", "ipf",                                        # Atari ST
     "cdt", "sna", "dmk",                                       # Amstrad / misc
+    # Amiga beyond the plain floppy. The Amiga core reads all of these, and
+    # .lha in particular is how WHDLoad ships: a hard-drive install rather than
+    # a disk image, which is the form most of the Amiga catalogue takes.
+    # Left out on purpose: .slave and .info live inside a WHDLoad archive rather
+    # than standing alone, .uae is a config file, and .raw is too generic a name
+    # to claim as a ROM.
+    "lha", "adz", "dms", "hdf", "hdz", "fdi",                  # Amiga
 }
 
 
@@ -227,8 +235,36 @@ async def scan_roms_path(roms_path: str) -> dict:
                 sha1_hash=sha1_hash,
             )
 
+        # ── Multi-disk sets ──────────────────────────────────────────────────
+        # Which files belong together can only be decided once the whole
+        # directory has been seen: disk 1 is not part of a set until disk 2
+        # shows up beside it. The lowest-numbered disk stands for the game and
+        # the rest are marked extra, which is what the library listings filter
+        # on - the files stay, they simply stop appearing as separate games.
+        by_stem: dict[str, str] = {}
+        for rom_file in rom_files:
+            by_stem.setdefault(rom_file.stem, rom_file.name)
+        grouped = group_disks(by_stem)
+
+        groups: dict[str, list[tuple[int, str]]] = {}
+        for stem, (key, number) in grouped.items():
+            groups.setdefault(key, []).append((number, by_stem[stem]))
+
+        assignments: dict[str, tuple[str | None, int | None, bool]] = {
+            f.name: (None, None, False) for f in rom_files
+        }
+        for key, members in groups.items():
+            primary = min(n for n, _ in members)
+            for number, name in members:
+                assignments[name] = (key, number, number != primary)
+        if rom_files:
+            await rom_handler.apply_disk_groups(platform.id, assignments)
+
+        sets = sum(1 for m in groups.values() if len(m) > 1)
         logger.info(
-            "Scanned platform %s - %d ROM(s) found", fs_slug, len(rom_files)
+            "Scanned platform %s - %d ROM(s) found%s",
+            fs_slug, len(rom_files),
+            f", {sets} multi-disk title(s)" if sets else "",
         )
 
     # Clean up platforms whose folder no longer exists

@@ -350,7 +350,8 @@
         </div>
 
         <!-- Library: V1-style game detail -->
-        <ClassicGameDetail v-else :game-id="activeGameId" :active-lib="classicDetailLib" :refresh-tick="detailRefreshTick" />
+        <ClassicGameDetail v-else :game-id="activeGameId" :active-lib="classicDetailLib"
+                           :refresh-tick="detailRefreshTick" @deleted="onGameDeleted" />
 
       </div>
 
@@ -1346,6 +1347,14 @@ function stepPlatform(dir: number) {
   if (idx < 0 && romPlatforms.value.length) { selectPlatform(romPlatforms.value[0].slug); return }
   const next = (idx + dir + romPlatforms.value.length) % romPlatforms.value.length
   selectPlatform(romPlatforms.value[next].slug)
+}
+
+// The detail page cannot leave by itself - this layout decides what is open -
+// so a game that has just been deleted hands back and the list is read again.
+function onGameDeleted() {
+  activeGameId.value = ''
+  fetchGames()
+  refreshLibraryCounts()
 }
 
 function selectPlatform(slug: string) {

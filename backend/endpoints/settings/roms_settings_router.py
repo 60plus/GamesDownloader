@@ -12,6 +12,7 @@ from config import ROMS_PATH
 from config import config_manager
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope as Scopes
+from handler.roms import rom_source_handler
 
 router = APIRouter(prefix="/api/settings/roms", tags=["settings-roms"])
 
@@ -22,6 +23,7 @@ class RomSettingsBody(BaseModel):
     library_path: str | None = None
     auto_scan_on_start: bool = False
     launchbox_enabled: bool = True
+    max_rom_bytes: int = 0
 
 
 @protected_route(router.get, "", scopes=[Scopes.SETTINGS_READ])
@@ -31,16 +33,28 @@ async def get_rom_settings(request: Request) -> dict:
         "library_path":       cfg.get("library_path") or ROMS_PATH,
         "auto_scan_on_start": cfg.get("auto_scan_on_start", False),
         "launchbox_enabled":  cfg.get("launchbox_enabled", True),
+        # The ceiling actually enforced, not the stored key: unset means the
+        # built-in default, and a screen showing a different number from the one
+        # the download obeys would be worse than showing nothing.
+        "max_rom_bytes":      rom_source_handler.max_rom_bytes(),
     }
 
 
 @protected_route(router.post, "", scopes=[Scopes.SETTINGS_WRITE])
 async def save_rom_settings(request: Request, body: RomSettingsBody) -> dict:
-    config_manager.save_section("roms", {
+    # Merge, never replace. save_section() overwrites the whole section, so
+    # writing a fixed set of keys here drops every other key the section holds.
+    # That is exactly how a hand-set max_rom_bytes used to disappear on the
+    # first save from this screen.
+    cfg = dict(config_manager.get_section("roms"))
+    cfg.update({
         "library_path":       body.library_path or ROMS_PATH,
         "auto_scan_on_start": body.auto_scan_on_start,
         "launchbox_enabled":  body.launchbox_enabled,
+        # 0 means "no override": fall back to the built-in ceiling.
+        "max_rom_bytes":      max(body.max_rom_bytes, 0),
     })
+    config_manager.save_section("roms", cfg)
     return {"ok": True}
 
 

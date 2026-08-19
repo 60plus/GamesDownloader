@@ -50,11 +50,11 @@
           <!-- Hover overlay: Play + Download + Edit metadata -->
           <div class="cover-overlay">
             <!-- ROM play -->
-            <button v-if="activeLib === 'roms' && ejsCore" class="cov-btn cov-btn--play" title="Play" @click="requestPlay">
+            <button v-if="activeLib === 'roms' && ejsCore" class="cov-btn cov-btn--play" title="Play" @click="requestPlay()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5,3 19,12 5,21"/></svg>
             </button>
             <!-- ROM download -->
-            <button v-if="activeLib === 'roms'" class="cov-btn" title="Download ROM" @click="downloadRom">
+            <button v-if="activeLib === 'roms'" class="cov-btn" title="Download ROM" @click="downloadRom()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
             <!-- GOG download -->
@@ -73,6 +73,17 @@
             </button>
             <button v-if="isAdmin" class="cov-btn cov-btn--danger" :disabled="clearing" @click="onClearClick" :title="t('detail.clear_metadata')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            </button>
+            <!-- Removing the entry, which Classic never offered at all: the
+                 trash can beside it clears metadata and looks identical, so
+                 this one carries the crossed-out disc instead. Not for GOG,
+                 where the entry is a copy of something synced and Unpublish is
+                 the action that means what a player expects. -->
+            <button v-if="isAdmin && activeLib !== 'gog'" class="cov-btn cov-btn--danger"
+                    :disabled="deleting" @click="onDeleteClick" :title="t('common.delete')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <circle cx="12" cy="12" r="9"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
             </button>
             <button v-if="isAdmin && packablePlatforms.length" class="cov-btn" @click="packageOpen = true" :title="t('packaging.package_now')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 8v13H3V8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
@@ -217,6 +228,36 @@
             </div>
             <div class="icard-row"><span class="icard-label">Platform: </span><span class="icard-val">{{ game.platform_name || '-' }}</span></div>
             <div class="icard-row"><span class="icard-label">File: </span><span class="icard-val">{{ (game as any).fs_name || game.fs_name_no_ext || '-' }}</span></div>
+            <!-- A title split across floppies is one entry; the rest of its
+                 disks live nowhere else in the interface. Playing inserts the
+                 whole set either way, so these pick the one to start from. -->
+            <template v-if="diskSet.length">
+              <div class="icard-row"><span class="icard-label">{{ t('detail.disks') }}: </span></div>
+              <div class="cdisks">
+                <div
+                  v-for="d in diskSet"
+                  :key="d.id"
+                  class="cdisk"
+                  :class="{ 'cdisk--current': d.current }"
+                  :title="d.name"
+                >
+                  <button v-if="ejsCore" class="cdisk-btn" :title="t('detail.play_disk')" @click="requestPlay(d.id)">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                      <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+                    </svg>
+                    {{ t('detail.disk_n', { n: d.number }) }}
+                  </button>
+                  <span v-else class="cdisk-btn">{{ t('detail.disk_n', { n: d.number }) }}</span>
+                  <button class="cdisk-dl" :title="t('detail.download_disk')" @click="downloadRom(d.id)">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </template>
             <div class="icard-row"><span class="icard-label">Extension: </span><span class="icard-val">{{ game.fs_extension || '-' }}</span></div>
             <div class="icard-row"><span class="icard-label">{{ t('detail.size') }}: </span><span class="icard-val">{{ game.fs_size_bytes ? formatSize(game.fs_size_bytes) : '-' }}</span></div>
             <div class="icard-row"><span class="icard-label">{{ t('detail.players') }}: </span><span class="icard-val">{{ game.player_count || '-' }}</span></div>
@@ -590,6 +631,7 @@ import DownloadDialog from '@/components/gog/DownloadDialog.vue'
 import { useThemeStore } from '@/stores/theme'
 import { useCollectionsStore } from '@/stores/collections'
 import { useNotifications } from '@/composables/useNotifications'
+import { useDialog } from '@/composables/useDialog'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
 import { sanitizeHtml } from '@/utils/sanitize'
@@ -597,6 +639,7 @@ import { getEjsCore } from '@/utils/ejsCores'
 
 const themeStore = useThemeStore()
 const { success: notifySuccess, error: notifyError } = useNotifications()
+const { gdConfirm } = useDialog()
 const authStore = useAuthStore()
 const { t } = useI18n()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
@@ -610,6 +653,9 @@ function openInLibrary() {
 }
 
 const props = defineProps<{ gameId: string | number; refreshTick?: number; activeLib?: string }>()
+// The layout owns which game is open, so a page whose game has just been
+// deleted has to hand the decision back rather than route itself away.
+const emit = defineEmits<{ (e: 'deleted'): void }>()
 
 interface LibFile {
   id: number; filename: string; display_name: string
@@ -687,6 +733,7 @@ const libDlSelected    = ref<Set<number>>(new Set())
 const libDownloading   = ref(false)
 const showScrapeDialog = ref(false)
 const clearing         = ref(false)
+const deleting         = ref(false)
 const packageOpen      = ref(false)
 const packablePlatforms = ref<string[]>([])
 
@@ -1068,24 +1115,78 @@ async function scrapeGame(preserveExternal: boolean) {
   } catch { scraping.value = false }
 }
 
-async function downloadRom() {
+async function downloadRom(diskId?: number) {
   if (!game.value) return
-  const token = localStorage.getItem('gd3_token') || ''
-  const url = `/api/roms/${game.value.id}/download`
-  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-  if (!resp.ok) return
-  const blob = await resp.blob()
-  const cd = resp.headers.get('Content-Disposition') || ''
-  const m = cd.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
-  const filename = m ? m[1].replace(/['"]/g, '') : (game.value as any).fs_name || 'rom'
-  const objUrl = URL.createObjectURL(blob)
-  const a = document.createElement('a'); a.href = objUrl; a.download = filename; a.click()
-  setTimeout(() => URL.revokeObjectURL(objUrl), 10000)
+  // Was: fetch the whole file into a blob and save that. It worked, but it read
+  // the entire ROM into memory first - fine for a floppy image, fatal for a
+  // disc. A short-lived ticket lets the browser stream it to disk instead.
+  try {
+    // Without a disk named, the whole title is wanted - which for a game
+    // split across floppies means every disk, not the one the entry carries.
+    const whole = !diskId && diskSet.value.length > 1 ? '?whole_set=1' : ''
+    const { data } = await client.post(`/roms/${diskId ?? game.value.id}/download-ticket${whole}`)
+    window.open(data.url, '_blank')
+  } catch {
+    /* the button simply does nothing, as before */
+  }
 }
 
 function onClearClick() {
   if (!game.value || clearing.value) return
   showClearDialog.value = true
+}
+
+// Removing the entry. Asks twice, and the first question says what would
+// actually go - for a ROM that is read from the server, because a floppy title
+// is several entries and the saves attached to them can belong to other people.
+async function onDeleteClick() {
+  if (!game.value || deleting.value) return
+  const id = game.value.id
+  const isRom = props.activeLib === 'roms'
+  const lines = [t('detail.delete_body').replace('{name}', game.value.title)]
+  let onDisk = (game.value.files?.length ?? 0) > 0
+
+  if (isRom) {
+    try {
+      const p = (await client.get(`/roms/${id}/removal`)).data
+      onDisk = p.on_disk
+      if (p.disks.length > 1) lines.push(t('detail.delete_rom_disks').replace('{n}', String(p.disks.length)))
+      if (p.saves > 0) lines.push(t('detail.delete_rom_saves').replace('{n}', String(p.saves)))
+    } catch {
+      notifyError(t('detail.delete_failed'))
+      return
+    }
+  }
+
+  if (!await gdConfirm(lines.join('\n\n'), { danger: true, title: t('common.delete') })) return
+
+  let withFiles = false
+  if (onDisk) {
+    withFiles = await gdConfirm(
+      isRom ? t('detail.delete_rom_files_body') : t('detail.delete_files_body'),
+      {
+        danger: true,
+        title: isRom ? t('detail.delete_rom_files_title') : t('detail.delete_files_title'),
+        confirmText: t('detail.delete_files_yes'),
+        cancelText: t('detail.delete_files_no'),
+      },
+    )
+  }
+
+  deleting.value = true
+  const title = game.value.title
+  try {
+    const path = isRom ? `/roms/${id}` : `/library/games/${id}`
+    await client.delete(path, { params: { delete_files: withFiles } })
+    notifySuccess(t('detail.deleted').replace('{name}', title))
+    // Classic keeps the detail open from the layout, so leaving is the
+    // layout's to do - the entry this page is showing no longer exists.
+    emit('deleted')
+  } catch {
+    notifyError(t('detail.delete_failed'))
+  } finally {
+    deleting.value = false
+  }
 }
 
 async function clearMetadata() {
@@ -1240,6 +1341,16 @@ const ejsCore = computed(() =>
     : null
 )
 
+// Only a ROM that belongs to a disk set is ever listed here, and the scanner
+// assigns the group and the number together - so a disk always has both.
+const diskSet = computed<{ id: number; number: number; name: string; current: boolean }[]>(
+  () => (game.value as any)?.disks || []
+)
+
+// Which disk the machine starts from. Null means the one this entry names,
+// which is disk 1 for every ordinary set.
+const pendingDisk = ref<number | null>(null)
+
 const playerUrl = computed(() => {
   if (!game.value || !ejsCore.value) return ''
   const g = game.value
@@ -1250,10 +1361,12 @@ const playerUrl = computed(() => {
     platform: g.platform_fs_slug || '',
   })
   if (g.bezel_path && bezelEnabled.value) p.set('bezel_url', g.bezel_path)
+  if (pendingDisk.value) p.set('disk', String(pendingDisk.value))
   return `/player.html?${p.toString()}`
 })
 
-function requestPlay() {
+function requestPlay(diskId?: number) {
+  pendingDisk.value = diskId ?? null
   const saved = localStorage.getItem(PREF_KEY_EMU) as 'full' | 'window' | 'tab' | null
   // Load bezel pref for this specific game (default off)
   if (game.value?.bezel_path && game.value.id) {
@@ -1653,6 +1766,25 @@ onUnmounted(() => window.removeEventListener('message', onPlayerMessage))
   color: var(--pl-light, #a78bfa); transition: all .15s ease;
 }
 .genre-tag--link:hover { border-color: var(--pl); color: var(--text, #fff); }
+
+/* Disks of a multi-floppy title */
+.cdisks { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 0 4px; }
+.cdisk {
+  display: inline-flex; align-items: stretch; border-radius: 10px; overflow: hidden;
+  background: color-mix(in srgb, var(--pl) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl) 35%, transparent);
+}
+.cdisk--current { border-color: var(--pl); }
+.cdisk-btn, .cdisk-dl {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+  background: none; border: 0; cursor: pointer; white-space: nowrap;
+  color: var(--pl-light, #a78bfa); font-size: 11px;
+  transition: all .15s ease;
+}
+.cdisk-btn:hover, .cdisk-dl:hover { background: color-mix(in srgb, var(--pl) 30%, transparent); color: var(--text, #fff); }
+span.cdisk-btn { cursor: default; }
+span.cdisk-btn:hover { background: none; color: var(--pl-light, #a78bfa); }
+.cdisk-dl { padding: 2px 7px; border-left: 1px solid color-mix(in srgb, var(--pl) 35%, transparent); }
 
 /* Language flags - flag-icons sprite, name on :title tooltip.
    The wrapper carries the size + hover transform; the inner `<span class="fi fi-XX">`

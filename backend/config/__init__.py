@@ -41,6 +41,10 @@ ROMS_PATH: Final[str] = _env("GD_ROMS_PATH", str(Path(BASE_PATH) / "games" / "ro
 GAMES_PATH: Final[str] = _env("GD_GAMES_PATH", str(Path(BASE_PATH) / "games"))
 DOWNLOADS_PATH: Final[str] = _env("GD_DOWNLOADS_PATH", str(Path(BASE_PATH) / "downloads"))
 PLUGINS_PATH: Final[str] = _env("GD_PLUGINS_PATH", str(Path(BASE_PATH) / "plugins"))
+# Emulator firmware (BIOS, Kickstarts, and the like). Kept out of RESOURCES_PATH
+# for the same reason as the saves: these are files someone supplied under their
+# own licence, and the static mount has no authentication in front of it.
+FIRMWARE_PATH: Final[str] = _env("GD_FIRMWARE_PATH", str(Path(BASE_PATH) / "firmware"))
 
 # ── Database ──────────────────────────────────────────────────────────────────
 DB_HOST: Final[str] = _env("DB_HOST", "localhost")

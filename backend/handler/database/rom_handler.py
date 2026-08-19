@@ -45,7 +45,7 @@ class RomPlatformHandler(DBBaseHandler):
         rom_count_col = func.count(Rom.id)
         stmt = (
             select(RomPlatform, rom_count_col.label("rom_count"))
-            .outerjoin(Rom, (Rom.platform_id == RomPlatform.id) & (~Rom.missing_from_fs))
+            .outerjoin(Rom, (Rom.platform_id == RomPlatform.id) & (~Rom.missing_from_fs) & (~Rom.extra_disk))
             .group_by(RomPlatform.id)
             .having(rom_count_col > 0)
             .order_by(RomPlatform.name)
@@ -103,7 +103,7 @@ class RomPlatformHandler(DBBaseHandler):
     @begin_session
     async def total_roms(self, *, session: AsyncSession = None) -> int:
         result = await session.execute(
-            select(func.count(Rom.id)).where(~Rom.missing_from_fs)
+            select(func.count(Rom.id)).where(~Rom.missing_from_fs, ~Rom.extra_disk)
         )
         return result.scalar_one()
 
@@ -112,7 +112,7 @@ class RomPlatformHandler(DBBaseHandler):
         """Return one ROM that has a cover (for home card display)."""
         result = await session.execute(
             select(Rom)
-            .where(Rom.cover_path.isnot(None), ~Rom.missing_from_fs)
+            .where(Rom.cover_path.isnot(None), ~Rom.missing_from_fs, ~Rom.extra_disk)
             .order_by(func.rand())
             .limit(1)
         )
@@ -131,7 +131,7 @@ class RomPlatformHandler(DBBaseHandler):
             select(RomPlatform.fs_slug, Rom.background_path, Rom.cover_path)
             .join(Rom, Rom.platform_id == RomPlatform.id)
             .where(
-                ~Rom.missing_from_fs,
+                ~Rom.missing_from_fs, ~Rom.extra_disk,
                 (Rom.background_path.isnot(None)) | (Rom.cover_path.isnot(None)),
             )
             .order_by(func.rand())
@@ -157,6 +157,11 @@ _METADATA_FIELDS: frozenset[str] = frozenset({
     "developer_ss_id", "publisher_ss_id",
     "hltb_id", "hltb_main_s", "hltb_extra_s", "hltb_complete_s",
     "is_identified",
+    # Typed by hand rather than scraped - an Amiga title asks for its save disk
+    # by name, and no source knows that name. Deliberately absent from the clear
+    # list below: a re-scrape replaces what a scraper found, not what a player
+    # told GD.
+    "save_disk_name",
 })
 
 
@@ -195,7 +200,7 @@ class RomHandler(DBBaseHandler):
         result = await session.execute(
             select(Rom)
             .options(selectinload(Rom.platform))
-            .where(~Rom.missing_from_fs)
+            .where(~Rom.missing_from_fs, ~Rom.extra_disk)
             .order_by(Rom.id.desc())
             .limit(limit)
         )
@@ -208,7 +213,7 @@ class RomHandler(DBBaseHandler):
             select(Rom)
             .options(selectinload(Rom.platform))
             .where(
-                ~Rom.missing_from_fs,
+                ~Rom.missing_from_fs, ~Rom.extra_disk,
                 or_(
                     Rom.ss_score.is_not(None),
                     Rom.igdb_rating.is_not(None),
@@ -232,7 +237,7 @@ class RomHandler(DBBaseHandler):
     ) -> tuple[list[Rom], int]:
         base = (
             select(Rom)
-            .where(Rom.platform_id == platform_id, ~Rom.missing_from_fs)
+            .where(Rom.platform_id == platform_id, ~Rom.missing_from_fs, ~Rom.extra_disk)
         )
         if search:
             term = f"%{search}%"
@@ -322,7 +327,7 @@ class RomHandler(DBBaseHandler):
         """Count non-missing ROMs for a platform."""
         result = await session.execute(
             select(func.count(Rom.id))
-            .where(Rom.platform_id == platform_id, ~Rom.missing_from_fs)
+            .where(Rom.platform_id == platform_id, ~Rom.missing_from_fs, ~Rom.extra_disk)
         )
         return result.scalar_one()
 
@@ -363,7 +368,7 @@ class RomHandler(DBBaseHandler):
             return found
         stmt = (
             select(Rom.crc_hash, Rom.md5_hash, Rom.sha1_hash, Rom.fs_name)
-            .where(Rom.platform_id == platform_id, ~Rom.missing_from_fs, or_(*conds))
+            .where(Rom.platform_id == platform_id, ~Rom.missing_from_fs, ~Rom.extra_disk, or_(*conds))
         )
         for crc, md5, sha1, fs_name in (await session.execute(stmt)).all():
             if crc:
@@ -390,6 +395,51 @@ class RomHandler(DBBaseHandler):
         await session.execute(
             update(Rom).where(Rom.id == rom_id).values(missing_from_fs=False)
         )
+
+    @begin_session
+    async def get_disk_set(
+        self, platform_id: int, disk_group: str, *, session: AsyncSession = None
+    ) -> list[Rom]:
+        """Every disk of one title, in insertion order.
+
+        Deliberately ignores extra_disk: this is the one place that wants the
+        disks the listings hide, so the game's own page can offer them.
+        """
+        result = await session.execute(
+            select(Rom)
+            .where(
+                Rom.platform_id == platform_id,
+                Rom.disk_group == disk_group,
+                ~Rom.missing_from_fs,
+            )
+            .order_by(Rom.disk_number)
+        )
+        return list(result.scalars().all())
+
+    @begin_session
+    async def apply_disk_groups(
+        self,
+        platform_id: int,
+        assignments: dict[str, tuple[str | None, int | None, bool]],
+        *,
+        session: AsyncSession = None,
+    ) -> None:
+        """Record which ROMs are disks of one title, for a whole platform.
+
+        Written after the directory walk rather than during it, because whether
+        a file is one of a set depends on what else is beside it: the first disk
+        of a pair only becomes part of a set when the second one turns up.
+
+        Every ROM found on disk gets an entry, including the ones that belong to
+        no set - clearing their fields is what lets a title stop being a set
+        when its other disks are deleted.
+        """
+        for fs_name, (group, number, extra) in assignments.items():
+            await session.execute(
+                update(Rom)
+                .where(Rom.platform_id == platform_id, Rom.fs_name == fs_name)
+                .values(disk_group=group, disk_number=number, extra_disk=extra)
+            )
 
     @begin_session
     async def upsert(
@@ -460,6 +510,39 @@ class RomHandler(DBBaseHandler):
         await session.refresh(rom)
         return rom
 
+
+    @begin_session
+    async def disk_set(self, rom_id: int, *, session: AsyncSession = None) -> list[Rom]:
+        """Every ROM belonging to the same title, in disk order.
+
+        A title that arrived on several floppies is several rows, and they only
+        mean anything together: one of them alone cannot be started and cannot
+        be grouped back. Callers that act on a ROM act on this list.
+
+        A ROM that is not part of a set answers with itself, so the caller has
+        one shape to handle rather than two.
+        """
+        rom = await session.get(Rom, rom_id)
+        if rom is None:
+            return []
+        if not rom.disk_group:
+            return [rom]
+        result = await session.execute(
+            select(Rom)
+            .where(Rom.platform_id == rom.platform_id, Rom.disk_group == rom.disk_group)
+            .order_by(Rom.disk_number, Rom.fs_name)
+        )
+        return list(result.scalars().all())
+
+    @begin_session
+    async def delete(self, rom_id: int, *, session: AsyncSession = None) -> bool:
+        """Drop one ROM row. Saves and play history follow it by cascade."""
+        rom = await session.get(Rom, rom_id)
+        if rom is None:
+            return False
+        await session.delete(rom)
+        await session.flush()
+        return True
 
     @begin_session
     async def clear_metadata(self, rom_id: int, *, session: AsyncSession = None) -> Rom | None:

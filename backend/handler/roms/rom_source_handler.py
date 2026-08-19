@@ -21,6 +21,7 @@ import itertools
 import logging
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -40,12 +41,15 @@ logger = logging.getLogger(__name__)
 # Streaming write chunk and the coarse per-file size backstop. The plugin is
 # responsible for resolving to a single ROM (never a whole multi-GB archive);
 # this ceiling only stops a mis-resolved whole-platform archive from filling a
-# disk. It sits above the largest single disc image in circulation (a dual-layer
-# DVD rip runs to ~8.5 GB, a packaged Xbox 360 title to ~13 GB) and well below
-# the platform-sized archives it is there to catch. Raise it with the
-# `max_rom_bytes` setting if a source ever needs more.
+# disk, so it has to clear the largest single disc image in circulation. That is
+# a dual-layer Blu-ray, not a DVD: the earlier 16 GiB ceiling was picked from a
+# dual-layer DVD (~8.5 GB) and a packaged Xbox 360 title (~13 GB), which put
+# every PS3 and Wii U disc above it - a PS3 rip runs past 40 GB - and rejected
+# the lot. 64 GiB clears a full 50 GB disc with room to spare and still sits far
+# below the platform-sized archives it is there to catch, which run to hundreds
+# of GB. Settings > ROMs overrides it per install.
 _CHUNK_WRITE = 256 * 1024
-_DEFAULT_MAX_ROM_BYTES = 16 * 1024 ** 3
+_DEFAULT_MAX_ROM_BYTES = 64 * 1024 ** 3
 
 # Region tags parsed from a No-Intro filename, kept out of the displayed title.
 _REGION_TAGS = {
@@ -480,7 +484,38 @@ async def preview_entry(
 
 # ── Download (the reusable delivery primitive) ─────────────────────────────────
 
-def _max_rom_bytes() -> int:
+# Left unwritten on the volume a ROM lands on. The default compose puts the
+# library and the database on one disk, so a download that fills it to the last
+# byte does not merely fail itself, it takes MariaDB down with it. A gigabyte is
+# enough for the database to keep writing while somebody clears space.
+_DISK_HEADROOM_BYTES = 1024 ** 3
+
+
+def assert_room_for(dest_dir: Path, need: int) -> None:
+    """Refuse a download that would not fit, before a byte is written.
+
+    Only possible when the source declares a length. One that does not still has
+    the running size cap, which stops a runaway, just not a disk that was nearly
+    full to begin with.
+    """
+    try:
+        free = shutil.disk_usage(dest_dir).free
+    except OSError:
+        return          # cannot tell: carry on rather than refuse a good download
+    if need + _DISK_HEADROOM_BYTES > free:
+        raise ValueError(
+            f"Not enough free space: this ROM needs {need / 1024 ** 3:.1f} GB "
+            f"and only {free / 1024 ** 3:.1f} GB is free."
+        )
+
+
+def max_rom_bytes() -> int:
+    """The per-file ceiling in force, honouring the Settings > ROMs override.
+
+    Public because the settings endpoint shows the effective value: a screen
+    that displayed a stale default while the download used something else would
+    be worse than no screen at all.
+    """
     try:
         cfg = config_manager.get_section("roms")
         val = int(cfg.get("max_rom_bytes") or 0)
@@ -721,7 +756,7 @@ async def _rom_download_job(
     dest_dir = Path(_roms_base()) / fs_slug
     dest_path = dest_dir / filename
     part_path = dest_dir / (filename + ".part")
-    max_bytes = _max_rom_bytes()
+    max_bytes = max_rom_bytes()
     size = 0
     started = time.monotonic()
     last_emit = 0.0
@@ -765,6 +800,8 @@ async def _rom_download_job(
                 total = int(resp.headers.get("content-length") or 0)
                 if total and total > max_bytes:
                     raise ValueError("ROM exceeds the maximum allowed size.")
+                if total:
+                    assert_room_for(dest_dir, total)
                 with open(part_path, "wb") as fh:
                     async for chunk in resp.aiter_bytes(_CHUNK_WRITE):
                         fh.write(chunk)

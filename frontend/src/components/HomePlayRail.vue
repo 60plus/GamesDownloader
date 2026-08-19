@@ -64,8 +64,7 @@
               @mouseenter="preview = s.screenshot ? { rom: it.rom_id, url: s.screenshot } : null"
               @mouseleave="preview = null"
             >
-              <i v-if="s.kind === 'battery'" class="mdi mdi-sd"></i>
-              <template v-else>{{ s.slot ?? "•" }}</template>
+              {{ s.slot ?? "•" }}
             </button>
           </div>
         </div>
@@ -110,10 +109,9 @@ function shotFor(it: RecentRom): string | null {
   return preview.value && preview.value.rom === it.rom_id ? preview.value.url : null
 }
 
+// Only savestates reach this rail, so every chip is a slot.
 function slotTitle(s: RomSaveRef): string {
-  return s.kind === 'battery'
-    ? t('profile.battery_saves', 'Battery save')
-    : `${t('profile.slot', 'Slot')} ${s.slot ?? ''}`
+  return `${t('profile.slot', 'Slot')} ${s.slot ?? ''}`
 }
 
 function open(it: RecentRom, save?: string): void {

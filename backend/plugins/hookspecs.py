@@ -416,3 +416,55 @@ class WidgetSpec:
     @hookspec
     def widget_get_cards(self) -> list[dict[str, Any]] | None:
         """Return widget card definitions for the dashboard."""
+
+
+class FirmwareSourceSpec:
+    """Hooks for a plugin that can fetch emulator firmware.
+
+    Firmware itself is core's business: the store, the upload from disk and the
+    delivery into the emulator all work with no plugin installed, because ROMs
+    can be copied in by hand and a BIOS has to be no harder. What a plugin adds
+    is the option to fetch a file the user would otherwise go looking for.
+
+    Core keeps the parts that must not be delegated. It decides which filenames a
+    core actually asks for, refuses anything else, and performs the download
+    itself through the SSRF guard, so a plugin hands over a URL and its own
+    credentials rather than bytes from wherever it pleases.
+
+    Keyed by the libretro core name (``puae``, ``pcsx_rearmed``), not by the
+    EmulatorJS one, because that is how firmware is catalogued everywhere else
+    and because several EmulatorJS names share a single core.
+    """
+
+    @hookspec
+    def firmware_source_name(self) -> str:
+        """Display name shown next to the offer (e.g. 'Internet Archive')."""
+
+    @hookspec
+    def firmware_offers(self, libretro_core: str, paths: list[str]) -> dict[str, Any]:
+        """Which of *paths* this plugin could supply for *libretro_core*.
+
+        Return a dict keyed by the path, each value a dict:
+
+            label str - optional, what the user is being offered (a set name).
+            size  int - optional, bytes, if known without fetching.
+            md5   str - optional, expected checksum, if the source publishes one.
+
+        A path the plugin cannot supply is simply left out. Called in a worker
+        thread; may perform blocking HTTP, but should stay cheap - it runs when
+        an administrator opens the firmware screen.
+        """
+
+    @hookspec
+    def firmware_resolve_download(self, libretro_core: str, path: str) -> dict[str, Any]:
+        """Resolve one firmware file to a concrete download:
+
+            url     str - direct URL to that single file.
+            headers dict[str, str] - optional request headers carrying the
+                         source's auth. Core attaches them and never logs them.
+            cookies dict[str, str] - optional cookies carrying the source's auth.
+
+        Core validates the stored name against its own registry regardless of
+        what is returned here, so a plugin cannot place a file under a name the
+        emulator core never asked for.
+        """

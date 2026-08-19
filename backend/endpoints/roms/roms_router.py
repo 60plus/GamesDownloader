@@ -11,23 +11,28 @@ query / body params - otherwise FastAPI will receive "multiple values" errors.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from config import ROMS_PATH, config_manager
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope as Scopes
 from handler.database.rom_handler import rom_handler, rom_platform_handler
+from handler.database.save_state_handler import save_state_handler
 from handler.filesystem.rom_scanner import scan_roms_path
+from handler.roms import rom_removal
 from handler.metadata.rom_scrape_handler import scrape_roms_batch
 from handler.metadata.rom_platform_map import PLATFORM_MAP, get_cover_aspect as _get_cover_aspect
+from utils import download_tickets
 from utils.ratings import rom_rating_agg_of
 
 logger = logging.getLogger(__name__)
@@ -60,6 +65,7 @@ class RomMetadataUpdate(BaseModel):
     lb_rating: float | None = None      # LaunchBox 0-10
     plugin_ratings: dict | None = None  # {provider_id: {name, rating, logo_url}}
     player_count: str | None = None
+    save_disk_name: str | None = None
     hltb_id:         int | None = None
     hltb_main_s:     int | None = None
     hltb_extra_s:    int | None = None
@@ -515,7 +521,24 @@ async def get_rom(request: Request, rom_id: int) -> dict:
     rom = await rom_handler.get_with_platform(rom_id)
     if rom is None:
         raise HTTPException(status_code=404, detail="ROM not found")
+    # A title split across floppies shows as one game; its other disks are
+    # hidden from every listing, so this is the only place they can be offered.
+    # Most of them just boot the same game, but not all - a fair few sets put a
+    # level editor or a second scenario on a later disk, which is worth being
+    # able to start directly.
+    disks: list[dict] = []
+    if rom.disk_group:
+        disks = [
+            {
+                "id": d.id,
+                "number": d.disk_number,
+                "name": d.fs_name,
+                "current": d.id == rom.id,
+            }
+            for d in await rom_handler.get_disk_set(rom.platform_id, rom.disk_group)
+        ]
     return {
+        "disks":           disks,
         "id":              rom.id,
         "platform_id":     rom.platform_id,
         "platform_slug":    rom.platform.slug    if rom.platform else None,
@@ -544,6 +567,7 @@ async def get_rom(request: Request, rom_id: int) -> dict:
         "lb_rating":         rom.lb_rating,
         "plugin_ratings":    rom.plugin_ratings,
         "player_count":      rom.player_count,
+        "save_disk_name":    rom.save_disk_name,
         "alternative_names": rom.alternative_names,
         "franchises":        rom.franchises,
         "cover_path":      rom.cover_path,
@@ -655,6 +679,9 @@ async def update_rom_metadata(
     if body.lb_rating is not None:      data["lb_rating"] = body.lb_rating
     if body.plugin_ratings is not None: data["plugin_ratings"] = body.plugin_ratings
     if body.player_count is not None: data["player_count"] = body.player_count
+    # An Amiga title asks for its save disk by name; blank means GD picks one.
+    if body.save_disk_name is not None:
+        data["save_disk_name"] = body.save_disk_name.strip()[:30] or None
     if body.hltb_id is not None:        data["hltb_id"]        = body.hltb_id
     if body.hltb_main_s is not None:    data["hltb_main_s"]    = body.hltb_main_s
     if body.hltb_extra_s is not None:   data["hltb_extra_s"]   = body.hltb_extra_s
@@ -1345,8 +1372,7 @@ async def get_rom_ss_media(
 
 # ── ROM download ──────────────────────────────────────────────────────────────
 
-@protected_route(router.get, "/{rom_id}/download", scopes=[Scopes.LIBRARY_READ])
-async def download_rom(request: Request, rom_id: int) -> FileResponse:
+async def _rom_file_response(rom_id: int) -> FileResponse:
     rom = await rom_handler.get_by_id(rom_id)
     if rom is None:
         raise HTTPException(status_code=404, detail="ROM not found")
@@ -1362,6 +1388,97 @@ async def download_rom(request: Request, rom_id: int) -> FileResponse:
         filename=rom.fs_name,
         media_type="application/octet-stream",
     )
+
+
+@protected_route(router.get, "/{rom_id}/download", scopes=[Scopes.LIBRARY_READ])
+async def download_rom(request: Request, rom_id: int) -> FileResponse:
+    """Download a ROM with an Authorization header - for API clients.
+
+    The interface cannot use this: saving a file means navigating the browser to
+    a URL, and a navigation sends no header. It asks for a ticket instead.
+    """
+    return await _rom_file_response(rom_id)
+
+
+@protected_route(router.post, "/{rom_id}/download-ticket", scopes=[Scopes.LIBRARY_READ])
+async def issue_download_ticket(request: Request, rom_id: int, whole_set: bool = False) -> dict:
+    """A short-lived link the browser can be pointed at.
+
+    Access is decided here, on an authenticated request; the link that comes out
+    only proves that decision was made, for this user, a few minutes ago.
+
+    *whole_set* asks for every disk of a title that was split across floppies,
+    as one archive: downloading a two-disk game one file at a time is not what
+    anybody means by "download this game".
+    """
+    rom = await rom_handler.get_by_id(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    user_id = request.state.user.id
+    if whole_set and rom.disk_group:
+        expires_at, sig = download_tickets.issue(rom_id, user_id, kind="set")
+        return {
+            "url": f"/api/roms/{rom_id}/download-set/{user_id}/{expires_at}/{sig}",
+            "expires_at": expires_at,
+        }
+    expires_at, sig = download_tickets.issue(rom_id, user_id)
+    return {
+        "url": f"/api/roms/{rom_id}/download/{user_id}/{expires_at}/{sig}",
+        "expires_at": expires_at,
+    }
+
+
+# Deliberately NOT @protected_route: this is the URL the browser navigates to,
+# and a navigation carries no Authorization header. The ticket takes the place
+# of the session - it names one ROM and one user, and it stops working within
+# minutes of being issued.
+@router.get("/{rom_id}/download/{user_id}/{expires_at}/{sig}")
+async def download_rom_with_ticket(
+    rom_id: int, user_id: int, expires_at: int, sig: str
+) -> FileResponse:
+    if not download_tickets.valid(rom_id, user_id, expires_at, sig):
+        raise HTTPException(status_code=403, detail="This download link has expired")
+    return await _rom_file_response(rom_id)
+
+
+@router.get("/{rom_id}/download-set/{user_id}/{expires_at}/{sig}")
+async def download_disk_set_with_ticket(
+    rom_id: int, user_id: int, expires_at: int, sig: str
+) -> Response:
+    """Every disk of a title split across floppies, as one archive."""
+    if not download_tickets.valid(rom_id, user_id, expires_at, sig, kind="set"):
+        raise HTTPException(status_code=403, detail="This download link has expired")
+    rom = await rom_handler.get_with_platform(rom_id)
+    if rom is None or not rom.disk_group:
+        raise HTTPException(status_code=404, detail="ROM not found")
+
+    disks = await rom_handler.get_disk_set(rom.platform_id, rom.disk_group)
+
+    def pack() -> bytes:
+        buf = io.BytesIO()
+        # Stored, not deflated: a disk image is already about as small as it
+        # gets, and compressing megabytes to save nothing only costs the player
+        # time waiting for the download to start.
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+            for disk in disks:
+                path = Path(disk.fs_path) / disk.fs_name
+                if path.is_file():
+                    z.write(path, disk.fs_name)
+        return buf.getvalue()
+
+    data = await asyncio.to_thread(pack)
+    name = _safe_download_name(rom.name or rom.fs_name_no_ext or str(rom_id)) + ".zip"
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+def _safe_download_name(name: str) -> str:
+    """A file name a browser will accept without argument."""
+    keep = "".join(c for c in name if c.isalnum() or c in " ._-()[]")
+    return keep.strip() or "disks"
 
 
 # ── Clear metadata ────────────────────────────────────────────────────────────
@@ -1394,6 +1511,70 @@ async def clear_all_roms_metadata(request: Request) -> dict:
     """Clear scraped metadata for ALL ROMs across all platforms."""
     count = await rom_handler.clear_all_metadata()
     return {"ok": True, "cleared": count}
+
+
+@protected_route(router.get, "/{rom_id}/removal", scopes=[Scopes.LIBRARY_ADMIN])
+async def rom_removal_preview(request: Request, rom_id: int) -> dict:
+    """What deleting this ROM would take with it.
+
+    Asked before the question is put to the player, because the two things that
+    make this destructive are invisible from the page: a floppy title is
+    several rows that only mean anything together, and the saves that go with
+    them may belong to people other than whoever is looking.
+    """
+    disks = await rom_handler.disk_set(rom_id)
+    if not disks:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    states, saves = 0, 0
+    for disk in disks:
+        states += len(await save_state_handler.list_states_for_rom(disk.id))
+        saves += len(await save_state_handler.list_saves_for_rom(disk.id))
+    return {
+        "disks": [{"id": d.id, "name": d.fs_name, "number": d.disk_number} for d in disks],
+        "saves": states + saves,
+        "on_disk": any((Path(d.fs_path) / d.fs_name).is_file() for d in disks),
+    }
+
+
+@protected_route(router.delete, "/{rom_id}", scopes=[Scopes.LIBRARY_ADMIN])
+async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) -> dict:
+    """Take a ROM out of the library, and its whole set when it has one.
+
+    Saves go either way: they are reached through the ROM and through nothing
+    else, so a row that is gone takes them with it rather than leaving bytes
+    charged against a quota that nothing can reach. The ROM file is different -
+    it is the one thing here the player supplied rather than GD fetched - so it
+    stays unless *delete_files* says otherwise.
+
+    Note that a file left on disk comes back as a library entry on the next
+    scan. That is the honest behaviour of a library that reads a directory, and
+    it is why the screen asks about the file rather than deciding alone.
+    """
+    disks = await rom_handler.disk_set(rom_id)
+    if not disks:
+        raise HTTPException(status_code=404, detail="ROM not found")
+
+    result = rom_removal.Removal()
+    for disk in disks:
+        platform = await rom_platform_handler.get_by_id(disk.platform_id)
+        slug = platform.slug if platform else "unknown"
+
+        states = await save_state_handler.list_states_for_rom(disk.id)
+        saves = await save_state_handler.list_saves_for_rom(disk.id)
+        result.saves += await asyncio.to_thread(rom_removal.delete_save_files, states, saves)
+
+        if await asyncio.to_thread(rom_removal.delete_media_dir, slug, disk.id):
+            result.media_dirs += 1
+        if delete_files and await asyncio.to_thread(rom_removal.delete_rom_file, disk):
+            result.rom_files += 1
+
+        if await rom_handler.delete(disk.id):
+            result.roms += 1
+            result.names.append(disk.fs_name)
+
+    logger.info("Deleted %d ROM row(s), %d file(s), %d save(s): %s",
+                result.roms, result.rom_files, result.saves, ", ".join(result.names))
+    return {"ok": True, **result.as_dict()}
 
 
 # ── ROM Upload ────────────────────────────────────────────────────────────────

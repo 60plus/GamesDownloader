@@ -21,6 +21,7 @@ from config import PLUGINS_PATH
 from plugins.hookspecs import (
     PROJECT_NAME,
     DownloadProviderSpec,
+    FirmwareSourceSpec,
     FrontendProviderSpec,
     LibraryCatalogSpec,
     LibrarySourceSpec,
@@ -44,6 +45,7 @@ class PluginManager:
         self._pm.add_hookspecs(LifecycleSpec)
         self._pm.add_hookspecs(FrontendProviderSpec)
         self._pm.add_hookspecs(WidgetSpec)
+        self._pm.add_hookspecs(FirmwareSourceSpec)
 
         # Mapping of plugin_id -> plugin instance for targeted load/unload
         self._instances: dict[str, Any] = {}

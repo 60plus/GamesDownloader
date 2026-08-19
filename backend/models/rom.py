@@ -94,6 +94,24 @@ class Rom(Base):
     is_identified:  Mapped[bool] = mapped_column(Boolean, default=False)
     missing_from_fs: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # ── Multi-disk sets ───────────────────────────────────────────────────────
+    # A game too big for one floppy shipped on several, and dumps keep that: one
+    # file per disk, each scanned as its own row. These tie the rows back
+    # together so the library shows one game while every disk stays a real entry
+    # underneath - the scanner fills them, nothing else writes them.
+    #
+    # extra_disk is what the listings filter on, exactly as they filter
+    # missing_from_fs: it marks every disk of a set except the one that stands
+    # for the game. Deriving it once beats a window function in a dozen queries.
+    disk_group:  Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    disk_number: Mapped[int | None] = mapped_column(nullable=True)
+    extra_disk:  Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # What an Amiga game calls the disk it saves to. Titles ask for one by name
+    # and refuse anything else - Legion wants "ARCHIWUM" and says so on its
+    # title screen - so this cannot be guessed and has to be told to GD.
+    save_disk_name: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
     # ── Notifications ─────────────────────────────────────────────────────────
     # When the "recently added" notification was sent for this ROM. NULL = not
     # yet announced (eligible once it has a cover). Set once to avoid re-spam.

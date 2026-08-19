@@ -38,6 +38,22 @@
             </button>
           </div>
         </div>
+
+        <div class="sr-divider" />
+
+        <div class="sr-row"
+          @mouseenter="setHint(t('rhint.max_rom_size_title'), t('rhint.max_rom_size_body'))"
+          @mouseleave="clearHint"
+        >
+          <div class="sr-row-label">
+            <span class="sr-label">{{ t('roms.max_rom_size') }}</span>
+            <span class="sr-sub">{{ t('roms.max_rom_size_hint') }}</span>
+          </div>
+          <div class="sr-row-control sr-row-control--num">
+            <input v-model.number="maxRomGiB" type="number" min="1" max="512" step="1" class="sr-input" />
+            <span class="sr-unit">GiB</span>
+          </div>
+        </div>
       </div>
 
       <div class="sr-actions">
@@ -264,6 +280,21 @@
         </div>
 
         <div class="sr-row"
+          @mouseenter="setHint(t('roms.ejs_debug', 'Emulator diagnostics'), t('rhint.ejs_debug', 'Prints the emulator core log to the browser console, where messages such as a missing BIOS or an unsupported file appear. Open the console with F12 while the game is running. Leave this off for normal play: some cores write thousands of lines a second.'))"
+          @mouseleave="clearHint"
+        >
+          <div class="sr-row-label">
+            <span class="sr-label">{{ t('roms.ejs_debug', 'Emulator diagnostics') }}</span>
+            <span class="sr-sub">{{ t('roms.ejs_debug_hint', 'Core log in the browser console, for reporting problems') }}</span>
+          </div>
+          <div class="sr-row-control">
+            <button class="sr-toggle" :class="{ 'sr-toggle--on': ejsDebug }" @click="toggleEjsDebug">
+              <span class="sr-toggle-thumb" />
+            </button>
+          </div>
+        </div>
+
+        <div class="sr-row"
           @mouseenter="setHint(t('roms.auto_sync_saves', 'Cloud auto-sync saves'), t('rhint.auto_sync_saves', 'When enabled, the in-browser emulator periodically uploads the battery save (.srm) to the server while you play. The server deduplicates by content hash so unchanged saves do not waste storage.'))"
           @mouseleave="clearHint"
         >
@@ -298,6 +329,17 @@
       </div>
     </section>
 
+    <!-- ── Firmware ───────────────────────────────────────────────────────────── -->
+    <section class="sr-section">
+      <div class="sr-section-head">
+        <h2 class="sr-section-title">{{ t('roms.firmware_title', 'Emulator firmware') }}</h2>
+        <p class="sr-section-sub">
+          {{ t('roms.firmware_desc', 'BIOS files the cores ask for. Supply them from disk; GD hands them to the emulator when a game starts.') }}
+        </p>
+      </div>
+      <SettingsFirmware :platforms="platforms" />
+    </section>
+
     <!-- ── Priority note ──────────────────────────────────────────────────────── -->
     <div class="sr-note">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -310,10 +352,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import client from '@/services/api/client'
 import { useSettingsHint } from '@/composables/useSettingsHint'
 import { useI18n } from '@/i18n'
+import SettingsFirmware from './SettingsFirmware.vue'
 
 const { t } = useI18n()
 const { setHint, clearHint } = useSettingsHint()
@@ -328,15 +371,43 @@ function toggleEjsThreads() {
   ejsThreadsChanged.value = ejsThreads.value !== _ejsInitial
 }
 
-// ── Save auto-sync (localStorage) ────────────────────────────────────────────
-// Default OFF: opt-in feature. When enabled, persists battery saves to the
-// server every N seconds while a game is running so a tab crash does not
-// lose progress.
-const autoSyncSaves = ref(localStorage.getItem('gd_auto_sync_saves') === '1')
+// ── Emulator diagnostics (localStorage) ──────────────────────────────────────
+// Off by default.  EmulatorJS only forwards the core's own log to the browser
+// console when EJS_DEBUG_XX is set, and that log is the only place a missing
+// BIOS or an unsupported file is ever named.  Kept as a diagnostic rather than
+// a normal setting because some cores write thousands of lines a second.
+const ejsDebug = ref(localStorage.getItem('gd_ejs_debug') === '1')
+function toggleEjsDebug() {
+  ejsDebug.value = !ejsDebug.value
+  localStorage.setItem('gd_ejs_debug', ejsDebug.value ? '1' : '0')
+}
+
+// ── Save auto-sync (per account) ─────────────────────────────────────────────
+// Persists battery saves to the server every N seconds while a game is running,
+// so closing the tab does not lose progress. Default ON, and stored on the
+// account rather than in this browser: it used to live in localStorage, which
+// meant a save made in one browser was invisible in the next.
+//
+// The interval stays local on purpose - how often to poll is a property of the
+// machine you are playing on, not of who you are.
+const autoSyncSaves = ref(true)
 const autoSyncInterval = ref(parseInt(localStorage.getItem('gd_auto_sync_interval') || '60', 10))
-function toggleAutoSyncSaves() {
+
+onMounted(async () => {
+  try {
+    const { data } = await client.get('/users/me/preferences')
+    autoSyncSaves.value = data?.autoSyncSaves !== false
+  } catch { /* offline: leave the default on */ }
+})
+
+async function toggleAutoSyncSaves() {
   autoSyncSaves.value = !autoSyncSaves.value
-  localStorage.setItem('gd_auto_sync_saves', autoSyncSaves.value ? '1' : '0')
+  try {
+    // Only this key is sent; the server merges it over what is already stored.
+    await client.put('/users/me/preferences', { autoSyncSaves: autoSyncSaves.value })
+  } catch {
+    autoSyncSaves.value = !autoSyncSaves.value   // put the switch back
+  }
 }
 function saveAutoSyncInterval() {
   if (![30, 60, 120, 300].includes(autoSyncInterval.value)) autoSyncInterval.value = 60
@@ -379,13 +450,29 @@ const EXTRAS_GROUPS = [
 
 // ── General settings ──────────────────────────────────────────────────────────
 
+const GIB = 1024 ** 3
+
 const form = ref({
   library_path:       '/data/games/roms',
   auto_scan_on_start: false,
   launchbox_enabled:  true,
+  // Placeholder only, so the field never flashes a zero. load() replaces it
+  // with the ceiling the server actually enforces.
+  max_rom_bytes:      64 * GIB,
 })
 const saving   = ref(false)
 const savedMsg = ref('')
+
+// The setting stores bytes; the field speaks GiB, because nobody sizes a disc
+// image in bytes. A cleared or nonsense value goes back to 0, which the server
+// reads as "no override, use the built-in ceiling".
+const maxRomGiB = computed({
+  get: () => Math.round((form.value.max_rom_bytes || 0) / GIB),
+  set: (v: number) => {
+    const n = Number(v)
+    form.value.max_rom_bytes = Number.isFinite(n) && n > 0 ? Math.round(n) * GIB : 0
+  },
+})
 
 async function load() {
   try {
@@ -393,6 +480,7 @@ async function load() {
     form.value.library_path       = data.library_path       ?? '/data/games/roms'
     form.value.auto_scan_on_start = data.auto_scan_on_start ?? false
     form.value.launchbox_enabled  = data.launchbox_enabled  ?? true
+    form.value.max_rom_bytes      = data.max_rom_bytes      ?? 64 * GIB
   } catch { /* ignore */ }
 }
 
@@ -530,6 +618,9 @@ onMounted(() => { load(); loadPresets() })
 .sr-sub   { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
 .sr-row-control { display: flex; align-items: center; }
 .sr-row-control--wide { flex: 0 0 280px; }
+.sr-row-control--num  { flex: 0 0 130px; gap: 8px; }
+.sr-row-control--num .sr-input { flex: 1; min-width: 0; }
+.sr-unit { font-size: 11px; color: var(--muted); }
 
 /* ── Input ────────────────────────────────────────────────────────────────── */
 .sr-input {

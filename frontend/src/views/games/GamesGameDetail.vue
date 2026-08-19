@@ -1137,16 +1137,19 @@ async function republishGame() {
 
 async function deleteGame() {
   if (!game.value) return
-  if (!await gdConfirm(`Delete "${game.value.title}"? This removes it from the library.`, { danger: true, title: 'Delete game' })) return
+  if (!await gdConfirm(t('detail.delete_body').replace('{name}', game.value.title),
+                       { danger: true, title: t('common.delete') })) return
   // Offer to also remove the downloaded files from disk. This frees space and,
   // for GOG games, the server clears the "owned" mark either way. Only ask when
   // the game actually has files on disk.
   let deleteFiles = false
   if ((game.value.files?.length ?? 0) > 0) {
-    deleteFiles = await gdConfirm(
-      'Also delete the downloaded files from disk? This frees space and cannot be undone. Choose "Keep files" to leave them in place.',
-      { danger: true, title: 'Delete files?', confirmText: 'Delete files', cancelText: 'Keep files' },
-    )
+    deleteFiles = await gdConfirm(t('detail.delete_files_body'), {
+      danger: true,
+      title: t('detail.delete_files_title'),
+      confirmText: t('detail.delete_files_yes'),
+      cancelText: t('detail.delete_files_no'),
+    })
   }
   try {
     await client.delete(`/library/games/${game.value.id}`, { params: { delete_files: deleteFiles } })

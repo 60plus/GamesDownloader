@@ -233,6 +233,23 @@
                     </svg>
                     Unpublish
                   </button>
+                  <!-- Beside Unpublish rather than instead of it: unpublishing
+                       takes the copy out of the library and leaves what was
+                       downloaded, which is what somebody usually wants. This
+                       one exists for when the files are the point. -->
+                  <button
+                    class="gd-btn-unpublish"
+                    :disabled="publishLoading"
+                    @click="deleteFromLibrary"
+                    :title="t('common.delete')"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                      <line x1="12" y1="11" x2="12" y2="17"/>
+                    </svg>
+                    {{ t('common.delete') }}
+                  </button>
                 </template>
                 <!-- When not published: show Publish button -->
                 <button
@@ -706,8 +723,10 @@ import { sanitizeHtml } from '@/utils/sanitize'
 import { ratingVal } from '@/utils/rating'
 import HeroBackground from '@/components/common/HeroBackground.vue'
 import { useI18n } from '@/i18n'
+import { useDialog } from '@/composables/useDialog'
 
 const { t } = useI18n()
+const { gdConfirm } = useDialog()
 
 interface Game {
   id: number; gog_id: number; title: string; slug?: string
@@ -839,6 +858,34 @@ async function publishToLibrary(pendingDownload = false) {
     setTimeout(() => publishMsg.value = '', 6000)
   } catch (e: any) {
     publishMsg.value = e?.response?.data?.detail || 'Publish failed'
+  } finally {
+    publishLoading.value = false
+  }
+}
+
+// Removing the library copy and, if asked, what was downloaded with it. The
+// GOG entry itself stays: it is the account's, not GD's, and the next sync
+// would bring it back anyway. What the server does clear is the "owned" mark,
+// so the shelf stops claiming a game whose files are gone.
+async function deleteFromLibrary() {
+  if (!game.value || !publishedId.value || publishLoading.value) return
+  if (!await gdConfirm(t('detail.delete_body').replace('{name}', game.value.title),
+                       { danger: true, title: t('common.delete') })) return
+  const withFiles = await gdConfirm(t('detail.delete_files_body'), {
+    danger: true,
+    title: t('detail.delete_files_title'),
+    confirmText: t('detail.delete_files_yes'),
+    cancelText: t('detail.delete_files_no'),
+  })
+  publishLoading.value = true
+  publishMsg.value = ''
+  try {
+    await client.delete(`/library/games/${publishedId.value}`, { params: { delete_files: withFiles } })
+    publishedId.value = null
+    publishMsg.value = t('detail.deleted').replace('{name}', game.value.title)
+    setTimeout(() => publishMsg.value = '', 4000)
+  } catch (e: any) {
+    publishMsg.value = e?.response?.data?.detail || t('detail.delete_failed')
   } finally {
     publishLoading.value = false
   }

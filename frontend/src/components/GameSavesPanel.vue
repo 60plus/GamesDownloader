@@ -152,7 +152,7 @@
                     <span v-if="busy === 'st' + g.slots[slot]!.id" class="gsp-spin gsp-spin--sm"></span>
                     <i v-else class="mdi mdi-download"></i>
                   </button>
-                  <button class="gsp-btn gsp-btn--del" :disabled="busyId === 'st' + g.slots[slot]!.id" @click="del('state', g.slots[slot]!.id)" :title="t('profile.delete_save', 'Delete')">
+                  <button class="gsp-btn gsp-btn--del" :disabled="busyId === 'st' + g.slots[slot]!.id" @click="del('state', g.slots[slot]!.id, g.name, g.slots[slot]!.screenshot_url, slot)" :title="t('profile.delete_save', 'Delete')">
                     <span v-if="busyId === 'st' + g.slots[slot]!.id" class="gsp-spin gsp-spin--sm"></span>
                     <i v-else class="mdi mdi-trash-can-outline"></i>
                   </button>
@@ -202,7 +202,7 @@
                   <span v-if="busy === 'st' + ls.id" class="gsp-spin gsp-spin--sm"></span>
                   <i v-else class="mdi mdi-download"></i>
                 </button>
-                <button class="gsp-btn gsp-btn--del" :disabled="busyId === 'st' + ls.id" @click="del('state', ls.id)" :title="t('profile.delete_save', 'Delete')">
+                <button class="gsp-btn gsp-btn--del" :disabled="busyId === 'st' + ls.id" @click="del('state', ls.id, g.name, ls.screenshot_url)" :title="t('profile.delete_save', 'Delete')">
                   <span v-if="busyId === 'st' + ls.id" class="gsp-spin gsp-spin--sm"></span>
                   <i v-else class="mdi mdi-trash-can-outline"></i>
                 </button>
@@ -224,15 +224,26 @@
               <img v-if="g.support" :src="g.support" class="gsp-cart" :alt="g.name" />
               <i v-else class="mdi mdi-sd gsp-shot-ph gsp-shot-ph--bat"></i>
               <span class="gsp-badge gsp-badge--bat">{{ t("profile.battery_saves", "Battery save") }}</span>
+              <!-- No Play button here, unlike a slot. A slot resumes: it puts the
+                   machine back exactly where it stood. A battery save cannot -
+                   it is the memory inside the cartridge, and the game still has
+                   to be started and told to load from its own menu. The save is
+                   in the machine on every launch anyway, so a button here would
+                   promise a jump back into the action that never happens. -->
               <div class="gsp-acts">
-                <button class="gsp-btn gsp-btn--play" @click="play(g, 'battery')" :title="t('profile.play_from_save', 'Play from this save')">
-                  <i class="mdi mdi-play"></i>
-                </button>
                 <button class="gsp-btn" :disabled="!!busy" @click="exportBattery(bs.id)" :title="t('common.download', 'Download')">
                   <span v-if="busy === 'sv' + bs.id" class="gsp-spin gsp-spin--sm"></span>
                   <i v-else class="mdi mdi-download"></i>
                 </button>
-                <button class="gsp-btn gsp-btn--del" :disabled="busyId === 'sv' + bs.id" @click="del('save', bs.id)" :title="t('profile.delete_battery', 'Delete')">
+                <!-- The bin deletes the copy here. This takes the card out of
+                     the browser you are sitting at, which is the one the game
+                     actually reads - deleting the copy and finding the game
+                     still remembers everything is what sent us looking. -->
+                <button class="gsp-btn" :disabled="!!busy" @click="ejectCard(bs, g.name, g.support)"
+                        :title="t('profile.eject_battery', 'Take this card out of this browser (the copy here stays)')">
+                  <i class="mdi mdi-eject-outline"></i>
+                </button>
+                <button class="gsp-btn gsp-btn--del" :disabled="busyId === 'sv' + bs.id" @click="del('save', bs.id, g.name, g.support)" :title="t('profile.delete_battery', 'Delete')">
                   <span v-if="busyId === 'sv' + bs.id" class="gsp-spin gsp-spin--sm"></span>
                   <i v-else class="mdi mdi-trash-can-outline"></i>
                 </button>
@@ -284,9 +295,11 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "@/i18n";
+import { useDialog } from "@/composables/useDialog";
 import dashboardActions, { type SavesData, type GameSaveItem } from "@/lib/dashboardActions";
 
 const { t } = useI18n();
+const { gdConfirm } = useDialog();
 const router = useRouter();
 const zoom = ref<{ url: string; caption: string } | null>(null);
 const data = ref<SavesData | null>(null);
@@ -490,17 +503,147 @@ function recalcUsed(): void {
     data.value.saves.reduce((a, s) => a + s.file_size_bytes, 0);
 }
 
-async function del(kind: "state" | "save", id: number): Promise<void> {
+/* Takes a memory card out of the browser you are sitting at.
+ *
+ * The bin next to this deletes the copy on the server. This is the other half:
+ * the emulator keeps its own card in this browser and reads that one, which is
+ * why deleting a save here and finding the game unchanged was so baffling.
+ *
+ * The emulator stores it under an IndexedDB database named for its mount point,
+ * keyed by the full path - "/data/saves/<core>/<game>.srm". We do not know which
+ * core wrote it, so the card is matched on the file name at the end of the path.
+ * Only this browser is touched; the copy on the server is left where it is, and
+ * the next launch will find no card here and put that copy back in.
+ */
+async function ejectCard(bs: GameSaveItem, gameName: string, art?: string | null): Promise<void> {
+  // Asks first, like the bin does. This is usually undoable, since the copy on
+  // the server goes back in on the next launch, which is why the question is
+  // not dressed in red. Usually is not always though: whatever this browser has
+  // written since the last time it sent the card up exists nowhere else, and
+  // that much really does go. The question says so rather than promising a
+  // clean undo it cannot guarantee.
+  const go = await gdConfirm(
+    t("profile.confirm_eject",
+      "Take the card for {game} out of this browser? The copy on the server stays and the next launch puts it back, but anything this browser has not sent up yet would be lost.")
+      .replace("{game}", gameName),
+    {
+      title:       t("profile.confirm_eject_title", "Take this card out?"),
+      confirmText: t("profile.confirm_eject_go", "Take it out"),
+      cancelText:  t("common.cancel", "Cancel"),
+      danger:      true,
+      // The same cartridge the battery tile shows, so the question is obviously
+      // about the card in front of you. The dialog falls back to its own icon
+      // when a game has no art.
+      image:       art,
+    },
+  );
+  if (!go) return;
+
+  // Speaks through the panel's own notice bar, like every other action here.
+  // This used to raise alert(), which a browser is free to mute for the rest of
+  // the session once someone ticks "prevent additional dialogs" - and then the
+  // card came out with nothing said at all, which reads like a dead button.
+  const dbs = (await indexedDB.databases?.()) ?? [];
+  if (!dbs.some((d) => d.name === "/data/saves")) {
+    ejectLog("no card storage in this browser");
+    say(t("profile.eject_none", "This browser has no card for that game."), true);
+    return;
+  }
+  const removed = await new Promise<number>((resolve) => {
+    const open = indexedDB.open("/data/saves");
+    open.onerror = () => resolve(-1);
+    open.onsuccess = () => {
+      const db = open.result;
+      if (!db.objectStoreNames.contains("FILE_DATA")) return resolve(0);
+      const tx = db.transaction("FILE_DATA", "readwrite");
+      const store = tx.objectStore("FILE_DATA");
+      let hits = 0;
+      const cursor = store.openKeyCursor();
+      cursor.onsuccess = (e) => {
+        const c = (e.target as IDBRequest<IDBCursor>).result;
+        if (!c) return;
+        if (String(c.key).endsWith("/" + bs.file_name)) {
+          store.delete(c.key);
+          hits++;
+        }
+        c.continue();
+      };
+      tx.oncomplete = () => resolve(hits);
+      tx.onerror = () => resolve(-1);
+    };
+  });
+
+  ejectLog(bs.file_name + ": removed " + removed + " entr" + (removed === 1 ? "y" : "ies"));
+  if (removed < 0) {
+    say(t("profile.eject_failed", "Could not reach this browser's card storage."), true);
+  } else if (removed === 0) {
+    say(t("profile.eject_none", "This browser has no card for that game."), true);
+  } else {
+    say(t("profile.eject_done", "The card is out of this browser. The copy here stays, and starting the game again puts it back in.")
+        + " " + playerOpenWarning());
+  }
+}
+
+/* The player half of this logs under the same tag, so one filter follows a card
+ * whichever end it went out of. */
+function ejectLog(what: string): void {
+  try { console.log("[gd-card] " + what); } catch { /* console gone, no matter */ }
+}
+
+/* A game running in another tab still holds its own card and will write it out
+ * when that tab closes, undoing this. Cheap to say, and it saves the puzzle. */
+function playerOpenWarning(): string {
+  return t("profile.eject_player_open", "If the game is open in another tab, close it first - it would write its card back.");
+}
+
+/* Asks first. Deleting a save unlinks the file and drops its row, and there is
+ * no copy behind it, so a mis-aimed click on a bin that sits next to eject and
+ * download costs somebody their progress for good. The question names the game
+ * and, for a slot, which one, because "Delete this save?" on its own does not
+ * tell you whether you are about to lose the right thing.
+ *
+ * gdConfirm rather than window.confirm: a browser can mute native dialogs for a
+ * whole session, and a confirmation nobody sees is worse than none at all. */
+async function del(kind: "state" | "save", id: number, gameName: string,
+                   art?: string | null, slot?: number): Promise<void> {
   const tag = (kind === "state" ? "st" : "sv") + id;
   if (busyId.value) return;
+
+  const question = kind === "save"
+    ? t("profile.confirm_delete_battery",
+        "Delete the battery save for {game}? Everything saved inside the game goes with it, and it cannot be undone.")
+        .replace("{game}", gameName)
+    : slot
+      ? t("profile.confirm_delete_slot", "Delete slot {n} of {game}? This cannot be undone.")
+          .replace("{n}", String(slot)).replace("{game}", gameName)
+      : t("profile.confirm_delete_state", "Delete this save state for {game}? This cannot be undone.")
+          .replace("{game}", gameName);
+
+  const go = await gdConfirm(question, {
+    title:       t("profile.confirm_delete_title", "Delete this save?"),
+    danger:      true,
+    confirmText: t("common.delete", "Delete"),
+    cancelText:  t("common.cancel", "Cancel"),
+    // Show what is about to go: a slot's own screenshot, or the cartridge the
+    // battery save came out of. Falls back to the warning icon without art.
+    image:       art,
+  });
+  if (!go) return;
+
   busyId.value = tag;
   try {
     if (kind === "state") {
       await dashboardActions.deleteSaveState(id);
       if (data.value) data.value.states = data.value.states.filter((s) => s.id !== id);
+      say(t("profile.delete_state_done", "Save state deleted."));
     } else {
       await dashboardActions.deleteBatterySave(id);
       if (data.value) data.value.saves = data.value.saves.filter((s) => s.id !== id);
+      // Worth spelling out: this removed the server's copy only. The browser
+      // you played in still holds its own card and the game will read that one,
+      // which is what made deleting a save and finding the game unchanged so
+      // baffling. Eject is the other half.
+      say(t("profile.delete_battery_done", "Battery save deleted from the server. A browser you played in may still hold its own card - eject it there too."));
     }
     recalcUsed();
   } catch (e: any) {

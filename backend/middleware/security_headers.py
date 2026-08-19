@@ -23,8 +23,8 @@ Adds a minimal set of defensive HTTP headers to every response:
       injected <script> (from a game title/description, username or scraper
       metadata) cannot execute.  style-src keeps 'unsafe-inline' on purpose -
       theme plugins inject inline <style> and the admin installs them knowingly.
-      The /player and /emulatorjs routes are exempted (EmulatorJS needs
-      unrestricted JS + SharedArrayBuffer via COOP/COEP).
+      The /player, /emulatorjs and /vamigaweb routes are exempted (both
+      emulators need unrestricted JS + SharedArrayBuffer via COOP/COEP).
       connect-src is 'self' only: socket.io talks to its own origin, so no
       wildcard ws:/wss: (which would allow exfiltration to any host) is needed.
       img-src drops http: (no mixed content) - all scraper media is served
@@ -75,7 +75,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers.setdefault("Cache-Control", "private, max-age=0, must-revalidate")
         # CSP: skip for player.html (EmulatorJS needs unrestricted JS execution)
         # COOP/COEP: enable SharedArrayBuffer for EmulatorJS threads
-        if request.url.path.startswith("/player") or request.url.path.startswith("/emulatorjs"):
+        # /vamigaweb is the second emulator (Amiga WHDLoad); it is framed by the
+        # player, so it needs the same treatment or the frame is blocked.
+        if (
+            request.url.path.startswith("/player")
+            or request.url.path.startswith("/emulatorjs")
+            or request.url.path.startswith("/vamigaweb")
+        ):
             response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
             response.headers["Cross-Origin-Embedder-Policy"] = "credentialless"
             return response

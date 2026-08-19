@@ -846,6 +846,14 @@
                 <input v-model="editFields.player_count" class="mep-input" placeholder="1, 1-4…" />
               </div>
 
+              <!-- Amiga games save to a floppy and ask for it by name; the
+                   name is usually written on the title screen and cannot be
+                   guessed, so it is told to GD here. -->
+              <div v-if="isAmiga" class="mep-field">
+                <label class="mep-field-label">{{ t('meta.save_disk_name') }}</label>
+                <input v-model="editFields.save_disk_name" class="mep-input" maxlength="30" placeholder="ARCHIWUM…" />
+              </div>
+
             </div>
           </div>
 
@@ -995,6 +1003,12 @@ interface AllMedia {
 }
 
 const props = defineProps<{ rom: RomDetail }>()
+
+// The save-disk name only means anything on the Amiga, where a game asks for
+// its save floppy by name.
+const isAmiga = computed(() =>
+  String((props.rom as any).platform_fs_slug || (props.rom as any).platform_slug || '').toLowerCase() === 'amiga'
+)
 const emit  = defineEmits<{
   (e: 'close'): void
   (e: 'saved'): void
@@ -1096,6 +1110,7 @@ const editFields = ref({
   regions:      (props.rom.regions   || []).join(', '),
   languages:    (props.rom.languages || []).join(', '),
   player_count: props.rom.player_count || '',
+  save_disk_name: (props.rom as any).save_disk_name || '',
 })
 
 // ── Plugin scraper ratings (0-10 per provider), like the games editor:
@@ -1201,6 +1216,7 @@ const hasChanges = computed(() => {
   if (f.regions   !== (props.rom.regions   || []).join(', ')) return true
   if (f.languages !== (props.rom.languages || []).join(', ')) return true
   if (f.player_count !== (props.rom.player_count || '')) return true
+  if (f.save_disk_name !== ((props.rom as any).save_disk_name || '')) return true
   return false
 })
 
@@ -1432,6 +1448,7 @@ async function save() {
     if (f.regions   !== (props.rom.regions   || []).join(', ')) payload.regions   = parseArr(f.regions)
     if (f.languages !== (props.rom.languages || []).join(', ')) payload.languages = parseArr(f.languages)
     if (f.player_count !== (props.rom.player_count || '')) payload.player_count = f.player_count
+    if (f.save_disk_name !== ((props.rom as any).save_disk_name || '')) payload.save_disk_name = f.save_disk_name
 
     if (Object.keys(payload).length) {
       await client.patch(`/roms/${props.rom.id}`, payload)

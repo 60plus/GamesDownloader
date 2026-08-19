@@ -1,7 +1,8 @@
 # GamesDownloaderV3 — Multi-stage Dockerfile
 # Stage 1: Build Vue frontend
 # Stage 2: Download EmulatorJS (self-hosted, no CDN dependency)
-# Stage 3: Python backend + built frontend + EmulatorJS
+# Stage 3: Download vAmigaWeb (self-hosted, Amiga WHDLoad only)
+# Stage 4: Python backend + built frontend + both emulators
 
 # ── Stage 1: Frontend build ──────────────────────────────────────────────────
 FROM node:22-alpine AS frontend-build
@@ -24,7 +25,36 @@ RUN wget -q "https://github.com/EmulatorJS/EmulatorJS/releases/download/v${EMULA
     7z x -y "${EMULATORJS_VERSION}.7z" -o/emulatorjs && \
     rm -f "${EMULATORJS_VERSION}.7z"
 
-# ── Stage 3: Backend + serve ─────────────────────────────────────────────────
+# ── Stage 3: Download vAmigaWeb ──────────────────────────────────────────────
+# EmulatorJS covers every platform in the library except one case: its Amiga
+# core aborts on WHDLoad hard-drive installs, which is the form most of the
+# Amiga catalogue takes.  vAmigaWeb runs them, so WHDLoad titles are handed to
+# this emulator and everything else stays on EmulatorJS.
+#
+# This repository is the project's own binary deployment; sources and licence
+# (GPL-3.0) live at https://github.com/vAmigaWeb/vAmigaWeb.  Pinned to a commit
+# rather than a tag: the deployment repo publishes no releases, and the commit
+# hash is itself the integrity check that a downloaded archive would need.
+FROM alpine:3.20 AS vamigaweb-stage
+RUN apk add --no-cache git ca-certificates
+
+ARG VAMIGAWEB_COMMIT=03c6f00eb73a742625fb36e32b2ea447e3b98289
+
+RUN git init -q /vamigaweb && cd /vamigaweb && \
+    git remote add origin https://github.com/vAmigaWeb/vAmigaWeb.github.io.git && \
+    git fetch -q --depth 1 origin "${VAMIGAWEB_COMMIT}" && \
+    git checkout -q FETCH_HEAD && \
+    test -f vAmiga.wasm && \
+    # Drop what a self-hosted instance never serves: the upstream site's own
+    # documentation and demo downloads (25 MB), the debug console, the source
+    # maps and the in-app script editor.
+    rm -rf .git doc js/eruda.js js/cm6 js/*.map && \
+    # Remove the upstream site's analytics beacon.  A self-hosted install must
+    # not phone a third party on every launch, and nothing else references it.
+    sed -i 's#<script src=https://cloud\.umami\.is/script\.js[^>]*></script>##' index.html && \
+    ! grep -q "umami" index.html
+
+# ── Stage 4: Backend + serve ─────────────────────────────────────────────────
 FROM python:3.13-slim
 
 # System deps + Node.js (for plugin .vue compilation on startup)
@@ -38,6 +68,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     transmission-daemon \
     transmission-cli \
     ffmpeg \
+    lhasa \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
@@ -79,8 +110,12 @@ COPY --from=frontend-build /build/dist /app/static
 # EmulatorJS self-hosted (served at /emulatorjs/data/)
 COPY --from=emulatorjs-stage /emulatorjs /app/static/emulatorjs
 
+# vAmigaWeb self-hosted (served at /vamigaweb/) - Amiga WHDLoad only.
+# GPL-3.0; see NOTICE.md for the source link the licence requires.
+COPY --from=vamigaweb-stage /vamigaweb /app/static/vamigaweb
+
 # Data directories (clamav = virus definitions volume)
-RUN mkdir -p /data/{config,resources,games,downloads,plugins,redis,clamav} \
+RUN mkdir -p /data/{config,resources,games,downloads,plugins,redis,clamav,firmware} \
     && mkdir -p /data/config/transmission \
     && mkdir -p /data/downloads/torrents/.incomplete \
     && mkdir -p /app/static/plugin-layouts

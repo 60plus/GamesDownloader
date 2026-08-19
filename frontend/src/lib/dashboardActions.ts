@@ -19,11 +19,16 @@ export interface DaySample { date: string; count: number; bytes?: number }
  * make the server compute the download series and request list for nothing. */
 export interface DashboardParams { days?: number; start?: string; end?: string; sections?: string[] }
 
-/** One save a ROM holds. `save` is the value the player wants on the URL:
- * /emulation/<slug>/<id>?resume=1&save=<save>. Battery saves have no slot and
- * no screenshot; the .srm is opaque bytes. */
+/** One savestate a ROM holds. `save` is the value the player wants on the URL:
+ * /emulation/<slug>/<id>?resume=1&save=<save>.
+ *
+ * Savestates only. A battery save is never listed here: it restores the memory
+ * inside the cartridge rather than the running machine, so it cannot be resumed
+ * from, and it is loaded on every launch regardless. `kind` is therefore always
+ * "state" - the field stays so a theme written against an earlier GD keeps
+ * working. */
 export interface RomSaveRef {
-  save: string; kind: "state" | "battery"; slot: number | null;
+  save: string; kind: "state"; slot: number | null;
   screenshot: string | null; updated_at: string | null;
 }
 // `rating` is the blended 0-5 score (every source the ROM carries), NOT the raw

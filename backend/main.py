@@ -174,6 +174,12 @@ async def _init_db() -> None:
         ("roms",           "plugin_ratings",    "JSON NULL"),
         ("roms",           "alternative_names", "JSON NULL"),
         ("roms",           "franchises",        "JSON NULL"),
+        # Multi-disk sets: one file per disk, tied back together so the library
+        # shows the game rather than its floppies.
+        ("roms",           "disk_group",        "VARCHAR(255) NULL"),
+        ("roms",           "disk_number",       "INT NULL"),
+        ("roms",           "extra_disk",        "TINYINT(1) NOT NULL DEFAULT 0"),
+        ("roms",           "save_disk_name",    "VARCHAR(30) NULL"),
         ("roms",           "hltb_id",           "INT NULL"),
         ("roms",           "hltb_main_s",        "INT NULL"),
         ("roms",           "hltb_extra_s",       "INT NULL"),
@@ -361,6 +367,17 @@ async def _init_db() -> None:
         )
     else:
         await _relocate_saves()
+
+    # ── Firmware: adopt anything parked while /data/firmware had no volume ────
+    # firmware_root() writes to /data/config/firmware when the real directory is
+    # not mounted, so BIOS files survive a container recreate on an install
+    # running an older compose. Once the mount appears, move them onto it.
+    try:
+        from handler.roms.firmware_handler import adopt_fallback_firmware
+
+        await asyncio.to_thread(adopt_fallback_firmware)
+    except Exception as exc:
+        logger.warning("Firmware relocation failed: %s", exc)
 
     # ── Battery-save dedupe (must precede the unique index below) ─────────────
     # A ROM has exactly one battery save per user - the .srm is the whole SRAM
@@ -945,11 +962,15 @@ app.include_router(requests_router)
 from endpoints.roms.roms_router import router as roms_router                         # noqa: E402
 from endpoints.roms.savestate_router import router as savestate_router               # noqa: E402
 from endpoints.roms.rom_sources_router import router as rom_sources_router           # noqa: E402
+from endpoints.roms.firmware_router import router as firmware_router                 # noqa: E402
+from endpoints.roms.whdload_router import router as whdload_router                   # noqa: E402
 from endpoints.settings.roms_settings_router import router as roms_settings_router  # noqa: E402
 
 app.include_router(roms_router)
 app.include_router(savestate_router)
 app.include_router(rom_sources_router)
+app.include_router(firmware_router)
+app.include_router(whdload_router)
 app.include_router(roms_settings_router)
 
 # ── Global search (Home navbar) ───────────────────────────────────────────────
@@ -1007,6 +1028,17 @@ if os.path.isdir(STATIC_PATH):
 
     @app.exception_handler(404)
     async def spa_fallback(request, exc):
+        # The fallback exists so a deep link into the client-side router still
+        # serves the app. An API call is not a deep link: answering it with the
+        # index page hands the caller HTML under a 200, so "not found" arrives
+        # looking like success and only fails later, when the body will not
+        # parse.
+        if request.url.path.startswith("/api/"):
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                {"detail": getattr(exc, "detail", "Not found")}, status_code=404
+            )
         index = os.path.join(STATIC_PATH, "index.html")
         if os.path.exists(index):
             return FileResponse(

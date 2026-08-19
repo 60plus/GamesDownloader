@@ -200,6 +200,23 @@
     .gd-picker-empty { color: #4a4a6a; font-size: 13px; text-align: center; padding: 24px; }
     .gd-state-item.gd-focused { outline: 2px solid rgba(167,139,250,.7); background: rgba(167,139,250,.07); }
     .gd-picker-tab.gd-tab-focused { outline: 2px solid rgba(167,139,250,.5); }
+    .gd-eject-card {
+      display: block; width: 100%; margin-top: 10px; padding: 10px 12px;
+      background: color-mix(in srgb, #a78bfa 12%, transparent);
+      border: 1px solid color-mix(in srgb, #a78bfa 28%, transparent);
+      border-radius: 8px; color: #cfc6f5; font: inherit; font-size: 13px;
+      text-align: left; cursor: pointer;
+    }
+    .gd-eject-card:hover { background: color-mix(in srgb, #a78bfa 20%, transparent); }
+    .gd-eject-card span { display: block; margin-top: 3px; font-size: 11px; color: #8b84a8; }
+    /* The label is a span too, so it has to opt out of the hint styling above. */
+    .gd-eject-card .gd-eject-label { margin-top: 0; font-size: 13px; color: inherit; }
+    /* Second press. Red only once it is actually about to happen. */
+    .gd-eject-card--armed {
+      background: color-mix(in srgb, #f87171 16%, transparent);
+      border-color: color-mix(in srgb, #f87171 42%, transparent); color: #fca5a5;
+    }
+    .gd-eject-card--armed:hover { background: color-mix(in srgb, #f87171 24%, transparent); }
 
     .gd-state-item {
       display: flex; align-items: center; gap: 16px;
@@ -239,6 +256,18 @@
     #game {
       width: 100vw; height: 100vh;
     }
+
+    /* vAmigaWeb's player builds its own layout inside whatever element it is
+       handed, so this only has to be the full viewport and out of the way when
+       the platform is not an Amiga. */
+    #gd-vamiga-wrap { display: none; }
+    /* Fixed rather than in the flow: #game is a full-viewport block that stays
+       in the document even when EmulatorJS never loads, so a sibling after it
+       lands a screen further down - which looks exactly like a black screen. */
+    #gd-vamiga-wrap.active { display: block; position: fixed; inset: 0; z-index: 5; }
+    #gd-vamiga-wrap #player_container { width: 100%; height: 100%; background: #000; }
+    #gd-vamiga-wrap #vAmigaWeb { border: 0; width: 100%; height: 100%; }
+    #gd-vamiga-wrap .player_icon_btn { background: transparent; color: #fff; }
 
     /* ── Bezel overlay ─────────────────────────────────────────────────────── */
     /* object-fit:cover scales the 16:9 bezel to cover the full viewport.     */
@@ -479,6 +508,10 @@
 <!-- EmulatorJS target -->
 <div id="game"></div>
 
+<!-- vAmigaWeb target (Amiga only). Its player replaces this element with its
+     own container, so it needs a parent of its own rather than sharing #game. -->
+<div id="gd-vamiga-wrap"><div id="gd-vamiga-host"></div></div>
+
 <!-- Fullscreen prompt - shown as fallback when browser blocks auto-fullscreen -->
 <div id="gd-fs-prompt">
   <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -503,6 +536,12 @@
     </div>
     <div class="gd-mi" data-gd="loadstate">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Load State
+    </div>
+    <!-- Only for a title that came on more than one floppy. Here rather than
+         inside Emulator Settings: swapping a disk is something the game asked
+         for, not a setting, and it is wanted mid-play. -->
+    <div class="gd-mi" data-gd="disks" style="display:none">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><rect x="8" y="13" width="8" height="8"/><rect x="8" y="3" width="6" height="5"/></svg>Disks
     </div>
     <div class="gd-mi" data-gd="settings">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Emulator Settings
@@ -553,10 +592,15 @@ const PLATFORM   = params.get('platform') || '';
 const BEZEL_URL      = params.get('bezel_url') || null;
 const BEZEL_FROM_API = params.get('bezel') === '1';   // fetch bezel_path from ROM API
 const AUTO_FULLSCREEN = params.get('autoFullscreen') === '1';
-const RESUME          = params.get('resume') === '1';   // auto-load a save (Continue playing)
-// Which save RESUME should load: "state:<id>" for one specific savestate (a Play
-// button on a slot tile), "battery", or empty for "newest, battery as fallback".
+const RESUME          = params.get('resume') === '1';   // auto-load a savestate (Continue playing)
+// Which savestate RESUME should load: "state:<id>" for one in particular (the
+// Play button on a slot tile), or empty for the newest. A battery save is never
+// named here - it is not resumed from, it is put back into the machine on every
+// launch, which is what a cartridge does.
 const RESUME_SAVE     = params.get('save') || '';
+// Which disk of a multi-floppy Amiga title goes in the first drive. The whole
+// set is inserted either way; this only decides what the machine boots from.
+const BOOT_DISK       = params.get('disk') || '';
 
 const API_BASE   = '';
 const TOKEN      = localStorage.getItem('gd3_token') || '';
@@ -703,7 +747,10 @@ async function applySplashArtwork(rom) {
 
 // Tell the player which save is about to be restored. Today this only shows up
 // as a toast 600 ms after the game has already started.
-function showResumeNotice(states, saves) {
+// Savestates only. A battery save is not something the player resumes from -
+// it is put back into the machine on every launch either way - so announcing it
+// here would promise a jump back into the action that nothing is about to make.
+function showResumeNotice(states) {
   if (!RESUME && !RESUME_SAVE) return;
   const el = document.getElementById('gd-sp-resume');
   if (!el) return;
@@ -716,12 +763,8 @@ function showResumeNotice(states, saves) {
     const id = RESUME_SAVE.slice(6);
     const st = (states || []).find(s => String(s.id) === String(id));
     if (st) text = slotText(st);
-  } else if (RESUME_SAVE === 'battery') {
-    if ((saves || []).length) text = 'Resuming from the battery save';
   } else if ((states || []).length) {
     text = slotText(states[0]);   // API sorts newest first
-  } else if ((saves || []).length) {
-    text = 'Resuming from the battery save';
   }
   if (!text) return;
   el.textContent = text;
@@ -808,10 +851,524 @@ function dataUrlToBlob(dataUrl) {
   } catch { return null; }
 }
 
+// ── Amiga savestates (vAmigaWeb) ─────────────────────────────────────────────
+// The Amiga does not run on EmulatorJS, so none of the EJS save plumbing below
+// applies to it. vAmigaWeb keeps its own snapshots in this browser's IndexedDB;
+// GD wants them in its slots instead, on the server, where the rest of the
+// library's saves live. Everything the emulator can do is reachable only from
+// inside its frame, so a small bridge is installed there and spoken to by
+// message. Both directions are covered: GD's own Save state, and the snapshot
+// button in the emulator's own toolbar - which is redirected rather than left
+// writing to a store the player would never find again.
+const IS_AMIGA = EJS_CORE === 'amiga';
+
+const VAMIGA_BRIDGE = `
+  // Redirect the emulator's own snapshot store to GD. The toolbar button and
+  // its name prompt still work exactly as before; only the destination changes.
+  save_snapshot = async (name, data) => {
+    window.parent.postMessage({ gdSnap: 'save', bytes: data }, '*');
+  };
+
+  // The emulator's own snapshot browser walks the titles in its store first and
+  // only then asks for each title's snapshots - so with the writing taken over
+  // by GD it found no titles and never asked. Both ends are answered here.
+  const gd_title = () => {
+    try { return global_apptitle || 'GamesDownloader'; } catch (err) { return 'GamesDownloader'; }
+  };
+  get_stored_app_titles = async (cb) => { if (cb) cb([gd_title()]); };
+  get_snapshots_for_app_title = async () => {
+    window.parent.postMessage({ gdSnap: 'list' }, '*');
+    return await new Promise((resolve) => {
+      const done = (e) => {
+        if (!e.data || e.data.gdSnap !== 'listed') return;
+        window.removeEventListener('message', done);
+        resolve(e.data.list || []);
+      };
+      window.addEventListener('message', done);
+      setTimeout(() => { window.removeEventListener('message', done); resolve([]); }, 10000);
+    });
+  };
+  // Deleting from that browser has to reach GD too, or it would appear to work
+  // and the save would be back on the next look.
+  delete_snapshot_per_id = async (id) => {
+    window.parent.postMessage({ gdSnap: 'delete', id: id }, '*');
+  };
+
+  // The emulator forgets which controller sits in which port every time it
+  // starts, so GD remembers the choice and puts it back.
+  ['port1', 'port2'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      window.parent.postMessage({
+        gdSnap: 'ports',
+        port1: (document.getElementById('port1') || {}).value,
+        port2: (document.getElementById('port2') || {}).value,
+      }, '*');
+    });
+  });
+
+  window.addEventListener('message', async (e) => {
+    const d = e.data || {};
+    if (d.gdSnap === 'take') {
+      // The address points into the emulator's own heap and the snapshot is
+      // freed right after, so the bytes must be copied out, not referenced.
+      const j = JSON.parse(wasm_take_user_snapshot());
+      const bytes = new Uint8Array(Module.HEAPU8.buffer, j.address, j.size).slice(0, j.size);
+      wasm_delete_user_snapshot();
+      window.parent.postMessage({ gdSnap: 'took', bytes: bytes }, '*');
+    } else if (d.gdSnap === 'load') {
+      // The extension is what tells the core this is a snapshot rather than a
+      // disk, and the machine has to be stopped while its state is replaced.
+      if (is_running()) { wasm_halt(); }
+      wasm_loadfile(d.name + '.vAmiga', d.bytes);
+      wasm_run();
+      window.parent.postMessage({ gdSnap: 'loaded' }, '*');
+    } else if (d.gdSnap === 'pause') {
+      if (d.on && is_running()) { wasm_halt(); }
+      if (!d.on && !is_running()) { wasm_run(); }
+    } else if (d.gdSnap === 'pulldisk') {
+      // Read a drive back out. Same call the emulator's own export button
+      // makes, and the only way to see what the game wrote.
+      let bytes = null;
+      try {
+        const j = JSON.parse(wasm_export_disk('df' + d.drive));
+        bytes = new Uint8Array(Module.HEAPU8.buffer, j.address, j.size).slice(0, j.size);
+        Module._wasm_delete_disk();
+      } catch (err) { bytes = null; }
+      window.parent.postMessage({ gdSnap: 'pulled', bytes: bytes }, '*');
+    } else if (d.gdSnap === 'finddisk') {
+      // Which drive holds the disk called this. The player can move it: the
+      // emulator's own zip button offers every drive, and a disk moved by hand
+      // would otherwise stop being saved, because GD kept reading the drive it
+      // had put it in and found that one empty.
+      const ADF = 901120, NAME_AT = 880 * 512 + 512 - 80;
+      let out = { drive: -1, bytes: null };
+      for (let n = 0; n < 4; n++) {
+        let bytes = null;
+        try {
+          if (!wasm_has_disk('df' + n)) continue;
+          const j = JSON.parse(wasm_export_disk('df' + n));
+          bytes = new Uint8Array(Module.HEAPU8.buffer, j.address, j.size).slice(0, j.size);
+          Module._wasm_delete_disk();
+        } catch (err) { continue; }
+        if (!bytes || bytes.length !== ADF) continue;
+        const len = bytes[NAME_AT];
+        if (len > 30) continue;
+        let name = '';
+        for (let i = 0; i < len; i++) name += String.fromCharCode(bytes[NAME_AT + 1 + i]);
+        if (name.toLowerCase() === String(d.name || '').toLowerCase()) {
+          out = { drive: n, bytes: bytes };
+          break;
+        }
+      }
+      window.parent.postMessage({ gdSnap: 'found', drive: out.drive, bytes: out.bytes }, '*');
+    } else if (d.gdSnap === 'pullhd') {
+      // What a WHDLoad title wrote onto its hard drive. The drive is built from
+      // the archive on every launch, so anything saved on it is gone by the next
+      // visit unless it is taken off here and handed back to GD.
+      //
+      // The comparison needs no manifest from the server: the ZIP the drive was
+      // built from is still open in this frame as \`zip\`, so what GD put there is
+      // right here to compare against.
+      let bytes = null;
+      let tag = null;
+      const dir = '/gd_pull';
+      // Deliberately NOT the emulator's own /exported_hd. That one is mounted
+      // through IDBFS, so everything written into it stays in this browser's
+      // database - and on a shared machine the next player would find this
+      // player's saves sitting there.
+      const walk = (at, rel, out) => {
+        for (const name of FS.readdir(at)) {
+          if (name === '.' || name === '..') continue;
+          const full = at + '/' + name;
+          const path = rel ? rel + '/' + name : name;
+          const st = FS.stat(full);
+          if (FS.isDir(st.mode)) walk(full, path, out);
+          else out.push({ path: path, full: full, size: st.size });
+        }
+      };
+      const wipe = (at) => {
+        for (const name of FS.readdir(at)) {
+          if (name === '.' || name === '..') continue;
+          const full = at + '/' + name;
+          if (FS.isDir(FS.stat(full).mode)) { wipe(full); FS.rmdir(full); }
+          else FS.unlink(full);
+        }
+      };
+      try {
+        try { FS.mkdir(dir); } catch (err) { /* already there from last time */ }
+        wipe(dir);
+        wasm_export_as_folder('dh0', dir);
+
+        const found = [];
+        walk(dir, '', found);
+
+        // The archive's own entries, by lowercased path: AmigaDOS does not care
+        // about case, so neither can this.
+        const shipped = {};
+        Object.keys(zip.files).forEach((k) => {
+          const f = zip.files[k];
+          if (!f.dir) shipped[k.replace(/\\\\/g, '/').toLowerCase()] = f;
+        });
+
+        // GD owns these, and the server refuses them outright. Dropping them
+        // here as well means one of them turning up never costs the player the
+        // whole save.
+        const RESERVED = ['s/startup-sequence', 'c/whdload', 'devs/kickstarts/'];
+
+        // A file already in the archive has to be read back to tell whether the
+        // game changed it, and that costs a decompression - so it is only done
+        // for files small enough to be a save. A multi-megabyte file that was
+        // shipped and is still its shipped size is game data, not a savegame.
+        const COMPARE_LIMIT = 1024 * 1024;
+
+        // A short stand-in for the contents, so GD can tell one pull from the
+        // next without comparing archives. The archive itself cannot answer
+        // that: JSZip stamps every entry with the time it was added, so two
+        // pulls of identical files still differ byte for byte, and comparing
+        // those would upload the same save every time the timer came round.
+        const fold = (u8) => {
+          let h = 0x811c9dc5;
+          const step = Math.max(1, Math.floor(u8.length / 512));
+          for (let i = 0; i < u8.length; i += step) {
+            h ^= u8[i];
+            h = (h * 16777619) >>> 0;
+          }
+          return h.toString(16);
+        };
+
+        const out = new JSZip();
+        const marks = [];
+        for (const f of found) {
+          const low = f.path.toLowerCase();
+          if (RESERVED.some((r) => low === r || low.indexOf(r) === 0)) continue;
+          const was = shipped[low];
+          const now = FS.readFile(f.full);
+          if (was) {
+            if (f.size > COMPARE_LIMIT) continue;
+            const before = await was.async('uint8array');
+            if (before.length === now.length) {
+              let same = true;
+              for (let i = 0; i < now.length; i++) {
+                if (now[i] !== before[i]) { same = false; break; }
+              }
+              if (same) continue;
+            }
+          }
+          out.file(f.path, now);
+          marks.push(f.path + ':' + now.length + ':' + fold(now));
+        }
+        if (marks.length) {
+          bytes = await out.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+          tag = marks.sort().join('|');
+        }
+        // And a fingerprint of the raw image, which answers a question the file
+        // listing cannot. That listing shows what the filesystem admits to; the
+        // image shows every block the machine actually wrote. If this moves
+        // between two reads while nothing in the listing does, the writes are
+        // reaching the drive and the fault is in the reading - and if it does
+        // not move, nothing was written at all and no amount of reading harder
+        // would have found it. Sampling would be useless here: a savegame is a
+        // kilobyte in thirteen megabytes, so it hashes the whole thing.
+        let image = 'n/a';
+        try {
+          const j = JSON.parse(wasm_export_disk('dh0'));
+          if (j.size) {
+            // slice() copies out of the emulator's heap, which is also what
+            // makes the bytes acceptable to SubtleCrypto - it refuses a view
+            // onto shared memory.
+            const hdf = new Uint8Array(Module.HEAPU8.buffer, j.address, j.size).slice(0, j.size);
+            const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', hdf));
+            image = Array.from(digest.slice(0, 6))
+              .map((b) => b.toString(16).padStart(2, '0')).join('') + ' (' + j.size + ' B)';
+          }
+          Module._wasm_delete_disk();
+        } catch (err) {
+          image = 'could not be read: ' + err;
+        }
+
+        // One line per read, on purpose. Whether a title saves at all, and when
+        // it decides to write, is the sort of thing only the machine can answer,
+        // and without this the two failures that look identical from the server
+        // - nothing was read, and nothing had changed - cannot be told apart.
+        console.log('GD: read the hard drive back - ' + found.length +
+                    ' files on it, ' + Object.keys(shipped).length +
+                    ' came from the archive, ' + marks.length + ' changed' +
+                    (marks.length ? ': ' + marks.map((m) => m.split(':')[0]).join(', ') : '') +
+                    ' | image ' + image);
+      } catch (err) {
+        console.error('reading the hard drive back failed', err);
+        bytes = null;
+        tag = null;
+      }
+      // Whatever happened, do not leave a copy of the drive in the page.
+      try { wipe(dir); } catch (err) {}
+      window.parent.postMessage({ gdSnap: 'pulledhd', bytes: bytes, tag: tag }, '*');
+    } else if (d.gdSnap === 'swapdisk') {
+      // Put another disk of the set into a drive, mid-game. The archive the
+      // machine was started from is still open here, so the disk comes out of
+      // that rather than off the network again. Deliberately not the
+      // emulator's own insert_file: that one can reset the machine on the way
+      // in, which for a disk swap means losing the game that asked for it.
+      try {
+        const bytes = await zip.file(d.name).async('uint8array');
+        wasm_loadfile(d.name, bytes, d.drive || 0);
+      } catch (err) { console.error('disk swap failed', err); }
+    } else if (d.gdSnap === 'reset') {
+      wasm_reset();
+      wasm_run();
+    } else if (d.gdSnap === 'cfg') {
+      // One call covers most of it; sound and the palette have their own.
+      if (d.kind === 'volume') { set_volume(parseFloat(d.value)); }
+      else if (d.kind === 'palette') { wasm_set_color_palette(d.value); }
+      else { wasm_configure(d.key, d.value); }
+    } else if (d.gdSnap === 'ports') {
+      // A pad only appears in these lists once the browser has seen it, which
+      // can be after the game has started - so this is asked for more than once.
+      ['port1', 'port2'].forEach((id) => {
+        const el = document.getElementById(id);
+        const want = d[id];
+        if (!el || !want || el.value === want) return;
+        if ([].slice.call(el.options).some((o) => o.value === want)) {
+          el.value = want;
+          el.dispatchEvent(new Event('change'));
+        }
+      });
+    }
+  });
+`;
+
+function amigaFrame() {
+  return IS_AMIGA ? document.getElementById('vAmigaWeb') : null;
+}
+
+function amigaPost(msg) {
+  const f = amigaFrame();
+  if (f && f.contentWindow) f.contentWindow.postMessage(msg, '*');
+}
+
+// Which controller the player put in which port. The emulator does not keep
+// this across restarts, so GD does - per ROM, like the bezel and the slot.
+const PORTS_KEY = 'gd3_amiga_ports_' + ROM_ID;
+
+// Waiting on one reply at a time is enough: a save and a load are both started
+// by a person, and neither can be asked for while the other is in flight.
+let _amigaWaiting = null;
+window.addEventListener('message', (e) => {
+  const d = e.data || {};
+  if (!d.gdSnap) return;
+  if (d.gdSnap === 'save') {
+    // The emulator's own snapshot button. GD chose the slot; the player only
+    // pressed save, so tell them where it went.
+    uploadState(d.bytes, amigaShot(d.bytes))
+      .then((ok) => gdToast(ok ? 'Saved to slot ' + currentSlot() : 'Save failed - try again'));
+  } else if (d.gdSnap === 'list') {
+    amigaSendList();
+  } else if (d.gdSnap === 'delete') {
+    // Named outright rather than through deleteItem, which deletes whatever
+    // tab the picker happens to be showing.
+    fetch(`${API_BASE}/api/savestates/states/${d.id}`, { method: 'DELETE', headers: authHeaders() })
+      .then(() => fetchStates())
+      .catch(() => {});
+  } else if (d.gdSnap === 'ports') {
+    try { localStorage.setItem(PORTS_KEY, JSON.stringify({ port1: d.port1, port2: d.port2 })); } catch {}
+  } else if (_amigaWaiting && (d.gdSnap === 'took' || d.gdSnap === 'loaded' || d.gdSnap === 'pulled' || d.gdSnap === 'found' || d.gdSnap === 'pulledhd')) {
+    const done = _amigaWaiting;
+    _amigaWaiting = null;
+    done(d);
+  }
+});
+
+function amigaAsk(msg, timeoutMs) {
+  return new Promise((resolve) => {
+    _amigaWaiting = resolve;
+    amigaPost(msg);
+    setTimeout(() => {
+      if (_amigaWaiting === resolve) { _amigaWaiting = null; resolve(null); }
+    }, timeoutMs || 8000);
+  });
+}
+
+// The picture for a slot, taken from the snapshot itself. A vAmiga snapshot
+// carries its own preview bitmap - the emulator draws its own list from it -
+// which beats reading the canvas back: that is a WebGL surface created without
+// preserveDrawingBuffer and hands back a blank frame.
+function amigaShot(bytes) {
+  try {
+    if (!bytes || bytes.length < 64) return null;
+    const w = bytes[17] * 256 + bytes[16];
+    const h = bytes[21] * 256 + bytes[20];
+    const PIXELS_AT = 40;
+    if (w < 16 || h < 16 || w > 2048 || h > 2048) return null;
+    if (bytes.length < PIXELS_AT + w * h * 4) return null;
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    const img = ctx.createImageData(w, h);
+    img.data.set(bytes.subarray(PIXELS_AT, PIXELS_AT + w * h * 4));
+    ctx.putImageData(img, 0, 0);
+    return c.toDataURL('image/png');
+  } catch { return null; }
+}
+
+// What the emulator's own snapshot list shows. It asks whenever the list is
+// opened, so the answer is built fresh rather than cached.
+async function amigaSendList() {
+  const list = [];
+  try {
+    await fetchStates();
+    for (const s of (cachedStates || [])) {
+      const r = await fetch(s.download_url, { headers: authHeaders() });
+      if (!r.ok) continue;
+      list.push({
+        id: s.id,
+        title: s.slot ? 'GD slot ' + s.slot : 'GD savestate',
+        data: new Uint8Array(await r.arrayBuffer()),
+      });
+    }
+  } catch { /* an empty list is the honest answer when the server is unreachable */ }
+  amigaPost({ gdSnap: 'listed', list: list });
+}
+
+// Put the remembered controllers back. Asked more than once on purpose: a pad
+// only joins these lists once the browser has seen it, which can be well after
+// the game has started.
+function amigaRestorePorts() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(PORTS_KEY) || 'null'); } catch {}
+  if (!saved) return;
+  amigaPost({ gdSnap: 'ports', port1: saved.port1, port2: saved.port2 });
+  setTimeout(() => amigaPost({ gdSnap: 'ports', port1: saved.port1, port2: saved.port2 }), 3000);
+}
+
+async function saveAmigaState() {
+  const reply = await amigaAsk({ gdSnap: 'take' });
+  if (!reply || !reply.bytes || !reply.bytes.length) { gdToast('Save failed - try again'); return false; }
+  const slot = currentSlot();
+  const ok = await uploadState(reply.bytes, amigaShot(reply.bytes));
+  gdToast(ok ? 'Saved to slot ' + slot : 'Save failed - try again');
+  return ok;
+}
+
+async function loadAmigaState(bytes) {
+  await amigaAsk({ gdSnap: 'load', name: ROM_NAME, bytes: bytes }, 15000);
+}
+
+// What the game wrote to its save disk, kept where the rest of the library's
+// saves are. Sent only when the disk has actually changed: an untouched floppy
+// would otherwise be uploaded on every visit and count against the player's
+// quota for nothing.
+// The name written on an Amiga floppy, which is how GD recognises the save disk
+// again after the player has moved it between drives by hand.
+function adfVolumeName(bytes) {
+  const NAME_AT = 880 * 512 + 512 - 80;
+  if (!bytes || bytes.length !== 901120) return '';
+  const len = bytes[NAME_AT];
+  if (len > 30) return '';
+  let name = '';
+  for (let i = 0; i < len; i++) name += String.fromCharCode(bytes[NAME_AT + 1 + i]);
+  return name;
+}
+
+async function amigaKeepSaveDisk() {
+  let drive = window._gdSaveDrive;
+  if (!IS_AMIGA || drive === undefined || drive < 0) return false;
+  if (_amigaWaiting) return false;     // something else is mid-question
+  let reply = await amigaAsk({ gdSnap: 'pulldisk', drive: drive }, 15000);
+  let bytes = reply && reply.bytes;
+  // Nothing in that drive. The player has taken the save disk somewhere else -
+  // the emulator's own zip button lets them - so go and look for it rather than
+  // quietly saving nothing for the rest of the session.
+  if ((!bytes || !bytes.length) && window._gdSaveDiskName) {
+    const found = await amigaAsk({ gdSnap: 'finddisk', name: window._gdSaveDiskName }, 20000);
+    if (found && found.drive >= 0 && found.bytes && found.bytes.length) {
+      window._gdSaveDrive = drive = found.drive;
+      bytes = found.bytes;
+    }
+  }
+  if (!bytes || !bytes.length) return false;
+  const before = window._gdSaveDiskAtStart;
+  if (before && before.length === bytes.length) {
+    let same = true;
+    for (let i = 0; i < bytes.length; i++) { if (bytes[i] !== before[i]) { same = false; break; } }
+    if (same) return false;
+  }
+  if (!(await uploadSave(bytes))) return false;
+  window._gdSaveDiskAtStart = bytes;
+  return true;
+}
+
+// The same job for a WHDLoad title, which has no save disk: it writes onto the
+// hard drive it runs from. The emulator hands back the files that differ from
+// the ones the server packed, which is a savegame and a high-score table rather
+// than the whole drive.
+//
+// Compared by the tag the emulator works out from the contents, not by the
+// bytes of the archive - see the bridge for why those are not comparable.
+let _gdHdSaveTag = null;
+async function amigaKeepHdSaves() {
+  if (!IS_AMIGA || !window._gdAmigaHd) return false;
+  if (_amigaWaiting) return false;     // something else is mid-question
+  // Reading a whole drive back takes longer than reading one floppy, and the
+  // drive can be a hundred megabytes, so this waits a good deal longer.
+  const reply = await amigaAsk({ gdSnap: 'pullhd' }, 60000);
+  if (!reply) { console.warn('GD: the emulator did not answer the hard drive read'); return false; }
+  if (!reply.bytes || !reply.bytes.length) return false;   // nothing had changed
+  if (reply.tag && reply.tag === _gdHdSaveTag) return false;
+  console.log('GD: sending ' + reply.bytes.length + ' bytes of saved files');
+  if (!(await uploadSave(reply.bytes))) return false;
+  _gdHdSaveTag = reply.tag || null;
+  return true;
+}
+
+// Reachable from the browser console as gdPullHd(). Whether a WHDLoad title
+// writes its savegame while it runs or only when it is quit is a question about
+// the game, not about GD, and answering it needs a read at a moment of the
+// tester's choosing rather than whenever the timer comes round.
+window.gdPullHd = amigaKeepHdSaves;
+
+// Keeping the disk only on the way out through GD's own Exit was not enough:
+// close the window, reload, or leave any other way and the disk stayed in the
+// emulator and went with it. Worse, a disk the player had formatted inside the
+// game was lost the same way, so they had to format it again every time. It is
+// checked while they play instead, and once more as the page goes away.
+let _amigaSaveTimer = null;
+function startAmigaSaveWatch() {
+  if (!IS_AMIGA || _amigaSaveTimer) return;
+  // A title is one thing or the other, never both.
+  if (window._gdAmigaHd) {
+    // Reading a hard drive back is far heavier than reading one floppy: every
+    // file on the drive is copied into the page before anything can be
+    // compared. So it runs on a long timer, and on the two moments that
+    // actually decide whether a save survives - the tab going away, and the
+    // player switching to something else, which on a phone is the same thing.
+    const keep = () => { amigaKeepHdSaves().catch(() => {}); };
+    _amigaSaveTimer = setInterval(keep, 120000);
+    window.addEventListener('pagehide', keep);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') keep();
+    });
+    return;
+  }
+  _amigaSaveTimer = setInterval(() => { amigaKeepSaveDisk().catch(() => {}); }, 30000);
+  window.addEventListener('pagehide', () => { amigaKeepSaveDisk().catch(() => {}); });
+}
+
+// The slot GD saves into on the Amiga. EmulatorJS keeps this in its own
+// settings; vAmigaWeb has none, so GD keeps it - per ROM, like the bezel.
+const SLOT_KEY = 'gd3_slot_' + ROM_ID;
+let gdSlot = Math.min(Math.max(parseInt(localStorage.getItem(SLOT_KEY), 10) || 1, 1), 9);
+function setGdSlot(n) {
+  gdSlot = Math.min(Math.max(parseInt(n, 10) || 1, 1), 9);
+  localStorage.setItem(SLOT_KEY, String(gdSlot));
+}
+
 // The slot picked in Settings > Saves. Read straight off the emulator (rather
 // than through the menu helpers, which live in a separate IIFE) so every save
 // path - GD's menu item, Quick Save, EJS_onSaveState - lands in the same slot.
 function currentSlot() {
+  if (IS_AMIGA) return gdSlot;
   try {
     const emu = window.EJS_emulator;
     const raw = (emu && emu.allSettings && emu.allSettings['save-state-slot'])
@@ -851,7 +1408,20 @@ async function uploadState(stateBuffer, screenshotBuffer) {
   return r.ok;
 }
 
+// The last gate before a card leaves this browser, and it belongs here rather
+// than at the call sites. There are six of those, the rule was added to them one
+// at a time, and a blank card slipping past has already cost real saves twice.
+// The timer got the check first, then the exit path, and `EJS_onSaveSave` - which
+// fires whenever the core itself writes the card out, including the empty one it
+// makes on first boot - still had nothing but a length test. Guarding the door
+// instead of each corridor means the next call site added cannot forget.
+//
+// Amiga disks and WHDLoad drive images are never "empty" by this test: an ADF
+// opens with "DOS", not with a uniform fill, so their own changed-since-start
+// guards go on doing the work for them, untouched.
 async function uploadSave(saveBuffer) {
+  if (!saveBuffer || !saveBuffer.length) { cardLog('nothing to send'); return false; }
+  if (cardLooksEmpty(saveBuffer)) { cardLog('refusing to send a blank card'); return false; }
   const fd = new FormData();
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   fd.append('saveFile', new File([saveBuffer], `${ROM_NAME} [${ts}].srm`));
@@ -862,6 +1432,7 @@ async function uploadSave(saveBuffer) {
     body: fd,
   });
   cachedSaves = null;
+  return true;
 }
 
 // ── Save state to the server (GD's own "Save state") ─────────────────────────
@@ -870,6 +1441,7 @@ async function uploadSave(saveBuffer) {
 // (EJS_Buttons.saveState=false), so the old button-click path saved nothing. The
 // button/F2 path is kept only as a last-ditch fallback.
 async function saveStateToServer() {
+  if (IS_AMIGA) return saveAmigaState();
   try {
     const gm = window.EJS_emulator && window.EJS_emulator.gameManager;
     if (gm && typeof gm.getState === 'function') {
@@ -923,9 +1495,13 @@ function gdToast(msg) {
 // the progress is lost. We poll getSaveFile() every N seconds, hash the bytes,
 // and upload only when the content actually changed (server dedups by md5).
 //
-// User preferences (localStorage):
-//   gd_auto_sync_saves      "0" disables (default: enabled)
-//   gd_auto_sync_interval   seconds between checks (default: 60, min: 15)
+// Whether this runs is a property of the account, not of the browser it is
+// played in. It used to live in localStorage, which meant switching browsers
+// silently switched the syncing off - and the first anybody knew of it was a
+// save that existed in one browser and nowhere else.
+//
+//   preferences.autoSyncSaves   false disables (absent = enabled)
+//   gd_auto_sync_interval       seconds between checks, still local (default 60, min 15)
 let _autoSyncTimer  = null;
 let _autoSyncLastHash = null;
 let _autoSyncBusy   = false;
@@ -951,6 +1527,11 @@ async function _autoSyncTick() {
     bytes = window.EJS_emulator.gameManager.getSaveFile();
   } catch { return; }
   if (!bytes || !bytes.length) return;
+  // Never send a blank card. A browser opening the game for the first time makes
+  // itself an empty one, and with syncing on by default that blank would land on
+  // the server on top of the only copy of somebody's save. Nothing is lost by
+  // staying quiet: a card with nothing on it is not worth keeping anyway.
+  if (cardLooksEmpty(bytes)) return;
   const h = _quickHash(bytes);
   if (h === _autoSyncLastHash) return;
   _autoSyncBusy = true;
@@ -964,10 +1545,27 @@ async function _autoSyncTick() {
   }
 }
 
-function startAutoSync() {
+// Asks the account whether it wants its saves synced. Absent means yes: losing
+// a save hurts more than one small request a minute, and a player who has never
+// touched the setting is exactly the one who would not know to turn it on.
+// A failed request also means yes, for the same reason - the fallback should be
+// the one that keeps data, not the one that quietly drops it.
+async function _autoSyncWanted() {
+  try {
+    const r = await fetch(`${API_BASE}/api/users/me/preferences`, { headers: authHeaders() });
+    if (!r.ok) return true;
+    const p = await r.json();
+    return p.autoSyncSaves !== false;
+  } catch {
+    return true;
+  }
+}
+
+async function startAutoSync() {
   if (_autoSyncTimer) return;
-  // Opt-in: only run when the user explicitly enabled it in Settings > ROMs
-  if (localStorage.getItem('gd_auto_sync_saves') !== '1') return;
+  if (!(await _autoSyncWanted())) return;
+  // Guard again: the await above gives a second call time to get here first.
+  if (_autoSyncTimer) return;
   let secs = parseInt(localStorage.getItem('gd_auto_sync_interval') || '60', 10);
   if (!Number.isFinite(secs) || secs < 15) secs = 60;
   _autoSyncTimer = setInterval(_autoSyncTick, secs * 1000);
@@ -1020,6 +1618,9 @@ function renderPickerList() {
   const items = pickerMode === 'states' ? (cachedStates || []) : (cachedSaves || []);
   if (!items.length) {
     list.innerHTML = `<div class="gd-picker-empty">No ${pickerMode === 'states' ? 'savestates' : 'saves'} yet</div>`;
+    // Nothing on the server does not mean nothing in this browser, and that
+    // combination is precisely the one worth clearing up - so the button stays.
+    if (pickerMode === 'saves' && !IS_AMIGA) renderEjectButton(list);
     return;
   }
   list.innerHTML = items.map((item, idx) => {
@@ -1039,8 +1640,84 @@ function renderPickerList() {
         </button>
       </div>`;
   }).join('');
+
+  if (pickerMode === 'saves' && !IS_AMIGA) renderEjectButton(list);
+
   _pickerFocus = 0;
   setTimeout(() => _setPickerFocus(0), 0);
+}
+
+// The card the machine is actually using lives in this browser, and the bin on
+// each row only reaches the copy on the server. Deleting there and finding the
+// game still remembers everything is how this whole thread started, so the other
+// half gets its own button, named for what it does. Built from elements rather
+// than markup - nothing here comes from the server, but this list does render
+// names that do, and one habit is easier to keep than two.
+// Two presses, on purpose. The saves panel asks through the app's own dialog
+// before taking a card out; this page has no such dialog, and a browser can mute
+// the native one, so the button asks by itself: the first press turns it into
+// the question, the second one does it. It disarms itself after a few seconds so
+// a forgotten first press cannot be completed by a later, unrelated click.
+function renderEjectButton(list) {
+  const btn = document.createElement('button');
+  btn.className = 'gd-eject-card';
+  const label = document.createElement('span');
+  label.className = 'gd-eject-label';
+  const hint = document.createElement('span');
+  btn.appendChild(label);
+  btn.appendChild(hint);
+
+  let armed = false;
+  const disarm = () => {
+    armed = false;
+    btn.classList.remove('gd-eject-card--armed');
+    label.textContent = 'Take the card out of this browser';
+    hint.textContent = 'The copy on the server stays. Next launch puts it back in.';
+  };
+  disarm();
+
+  btn.addEventListener('click', () => {
+    if (!armed) {
+      armed = true;
+      btn.classList.add('gd-eject-card--armed');
+      label.textContent = 'Press again to take the card out';
+      hint.textContent = 'Anything this browser has not sent up yet goes with it.';
+      setTimeout(() => { if (armed) disarm(); }, 6000);
+      return;
+    }
+    disarm();
+    ejectCardFromBrowser();
+  });
+  list.appendChild(btn);
+}
+
+// Takes the memory card out of this browser, leaving the server's copy alone.
+//
+// The core is still running and would write its own card back out when the page
+// closes, putting back exactly what was just removed - so it loses the pen at
+// the same time. The removal is pushed to the browser's storage straight away
+// rather than left to the automatic sync, because the point of pressing this is
+// that the card is gone now.
+async function ejectCardFromBrowser() {
+  const gm = window.EJS_emulator && window.EJS_emulator.gameManager;
+  if (!gm || typeof gm.getSaveFilePath !== 'function') { gdToast('The machine is not running yet.'); return; }
+  try {
+    const FS = gm.FS;
+    const path = gm.getSaveFilePath();
+    if (FS.analyzePath(path).exists) FS.unlink(path);
+    gm.saveSaveFiles = function () {};
+    await new Promise((done) => {
+      try { FS.syncfs(false, () => done()); } catch { done(); }
+    });
+    cardLog('card taken out of this browser: ' + path);
+    closePicker();
+    // A toast, not alert(): a browser that has been told to stop showing this
+    // page's dialogs would swallow the only sign that anything happened.
+    gdToast('The card is out of this browser. The copy on the server stays and the next launch puts it back in.');
+  } catch (e) {
+    cardLog('could not take the card out: ' + e);
+    gdToast('Could not take the card out: ' + e);
+  }
 }
 
 async function openPicker(mode) {
@@ -1049,6 +1726,7 @@ async function openPicker(mode) {
 
   // Pause emulator while picker is open
   if (window.EJS_emulator) window.EJS_emulator.pause();
+  if (IS_AMIGA) amigaPost({ gdSnap: 'pause', on: true });
 
   // Refresh lists
   await Promise.all([fetchStates(), fetchSaves()]);
@@ -1059,6 +1737,7 @@ async function openPicker(mode) {
 function closePicker() {
   document.getElementById('gd-state-picker').classList.remove('visible');
   if (window.EJS_emulator) window.EJS_emulator.play();
+  if (IS_AMIGA) amigaPost({ gdSnap: 'pause', on: false });
 }
 
 async function loadItem(idx) {
@@ -1067,46 +1746,195 @@ async function loadItem(idx) {
   if (!item) return;
 
   const resp = await fetch(item.download_url, { headers: authHeaders() });
-  if (!resp.ok) { alert('Failed to load file'); return; }
+  if (!resp.ok) { gdToast('Could not load that file from the server'); return; }
   const buf = new Uint8Array(await resp.arrayBuffer());
 
   closePicker();
 
+  if (IS_AMIGA) {
+    // The Amiga has no battery save to write - a floppy is written back to its
+    // own image inside the emulator - so only a savestate can be applied here.
+    if (pickerMode === 'states') await loadAmigaState(buf);
+    return;
+  }
   if (!window.EJS_emulator) return;
   if (pickerMode === 'states') {
     window.EJS_emulator.gameManager.loadState(buf);
   } else {
-    const fs   = window.EJS_emulator.gameManager.FS;
-    const path = window.EJS_emulator.gameManager.getSaveFilePath();
-    fs.writeFile(path, buf);
-    window.EJS_emulator.gameManager.loadSaveFiles();
+    // The same way the automatic one does it, which is RomM's way, which works.
+    // This used to place the card and reload the page to boot with it, and warn
+    // about losing progress first - none of which was needed once the card could
+    // simply be handed to the running machine.
+    if (!writeSaveFileIntoCore(buf)) {
+      cardLog('manual pick: could not write the card into the core');
+      gdToast('Could not put the memory card in');
+    }
+  }
+}
+
+// ── The cartridge's own memory ───────────────────────────────────────────────
+// A battery save is not a resume point. It is the RAM inside the cartridge, so
+// it belongs in the machine on every launch rather than only when the player
+// arrived through Continue playing. Before this it was written only on a
+// ?resume=1 visit, which meant pressing Play on a game whose progress lives in
+// SRAM booted it with that memory wiped - and the game's own load menu had
+// nothing to offer.
+//
+// The Amiga has no battery at all: there the saves live on a floppy, and that
+// floppy is packed into the image the emulator is handed, so it is already in
+// the machine by the time this runs.
+// Put a save file into the running core, the way RomM does it - which is worth
+// copying verbatim, because two earlier attempts at this hung MediEvil solid at
+// "reading memory card" and theirs demonstrably works.
+//
+// Two steps here are not decoration:
+//
+//   * the directories on the way to the save path are created, because at the
+//     moment this runs the core may not have made them yet, and writing into a
+//     directory that does not exist throws;
+//   * the old file is UNLINKED rather than written over. On PSX the core holds
+//     the memory card open, and replacing the contents of a node it is reading
+//     is what wedges it. Unlinking leaves that node alone and puts a new one in
+//     its place.
+// Does this card hold anything?
+//
+// "Has a card" and "has a save" are not the same question, and asking the first
+// one is what made the automatic lending do nothing: the PlayStation core makes
+// itself a formatted card at boot, so a browser that has never played the game
+// still answers "I have a card" - a blank one - and we backed off.
+//
+// A blank PlayStation card is not blank bytes. It carries a header and an empty
+// directory, so it has to be read rather than measured: frame 0 of block 0 is
+// "MC", frames 1 to 15 describe the 15 save blocks, and 0x51 in the first byte
+// of a frame means that block is in use. Anything else - a cartridge's SRAM -
+// has no such structure, and an untouched one is uniform fill.
+function cardLooksEmpty(u8) {
+  if (!u8 || !u8.length) return true;
+  if (u8.length >= 8192 && u8[0] === 0x4d && u8[1] === 0x43) {   // "MC"
+    for (let i = 1; i < 16; i++) if (u8[i * 128] === 0x51) return false;
+    return true;
+  }
+  const fill = u8[0];
+  if (fill !== 0x00 && fill !== 0xff) return false;
+  for (let i = 1; i < u8.length; i++) if (u8[i] !== fill) return false;
+  return true;
+}
+
+function writeSaveFileIntoCore(bytes) {
+  const gm = window.EJS_emulator && window.EJS_emulator.gameManager;
+  if (!gm || typeof gm.getSaveFilePath !== 'function') return false;
+  const FS = gm.FS;
+  const path = gm.getSaveFilePath();
+  const parts = path.split('/');
+  let at = '';
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (parts[i] === '') continue;
+    at += '/' + parts[i];
+    if (!FS.analyzePath(at).exists) FS.mkdir(at);
+  }
+  if (FS.analyzePath(path).exists) FS.unlink(path);
+  FS.writeFile(path, bytes);
+  gm.loadSaveFiles();
+  return true;
+}
+
+// A card is put in only when this browser has none of its own.
+//
+// EmulatorJS keeps its own copy of the memory card here and restores it when the
+// game starts, which is why a game remembers its saves even after the copy on the
+// server has been deleted. That copy is the working card and must never be
+// written over: doing it unconditionally hung MediEvil at "reading memory card".
+//
+// But a browser that has never played this game has no card at all, and then the
+// server's copy is the only one in existence - which is the whole reason for
+// keeping it. So: ask the machine whether it has a card, and supply one only when
+// the answer is no. An existing card is left strictly alone.
+//
+// The question is asked again on every boot, and the answer is only remembered
+// for as long as this page is open. It used to be remembered in sessionStorage,
+// from the abandoned approach where placing a card meant reloading the page and
+// the flag was what stopped a browser that could not keep the card from
+// reloading forever. Nothing reloads any more, so that flag outlived its
+// purpose and did real harm: it survived a reload, it was copied into any tab
+// opened from this one, and it had no idea the card could be ejected
+// underneath it. Ejecting and relaunching, which is the documented way back to
+// the server's copy, then did nothing at all.
+let cardCheckSettled = false;
+
+// Says what it decided and why, on every branch. A page that silently decides
+// not to act is impossible to tell apart from one where the code never ran at
+// all, which is exactly the hole we fell into chasing this.
+function cardLog(what) {
+  try { console.log('[gd-card] ' + what); } catch {}
+}
+
+async function lendServerCardIfBrowserHasNone() {
+  if (IS_AMIGA) { cardLog('Amiga: saves live on a floppy, nothing to do'); return; }
+  if (cardCheckSettled) { cardLog('already settled on this page'); return; }
+
+  // Settled only once the question has an answer, never on the way in. A
+  // transient miss, the emulator not being up yet or a request that failed, is
+  // a reason to let the next attempt try again rather than to go quiet.
+  const settled = () => { cardCheckSettled = true; };
+
+  const gm = window.EJS_emulator && window.EJS_emulator.gameManager;
+  if (!gm) { cardLog('no game manager yet'); return; }
+
+  let mine = null;
+  try {
+    mine = gm.getSaveFile(false);             // false: read it, do not write it out
+  } catch (e) { cardLog('could not read this machine card: ' + e); return; }
+  cardLog('card in this browser: ' + (mine ? mine.length + ' bytes' : 'none')
+          + ', empty=' + cardLooksEmpty(mine));
+  if (!cardLooksEmpty(mine)) { settled(); cardLog('it has saves on it - leaving it alone'); return; }
+
+  try {
+    await fetchSaves();
+    const item = (cachedSaves || [])[0];      // newest first
+    if (!item) { settled(); cardLog('server has no card for this game either'); return; }
+    const resp = await fetch(item.download_url, { headers: authHeaders() });
+    if (!resp.ok) { cardLog('could not fetch the card: HTTP ' + resp.status); return; }
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    cardLog('fetched ' + buf.length + ' bytes, empty=' + cardLooksEmpty(buf));
+    if (!buf.length || cardLooksEmpty(buf)) { settled(); cardLog('nothing worth putting in'); return; }
+    if (!writeSaveFileIntoCore(buf)) { cardLog('could not write it into the core'); return; }
+    settled();
+    cardLog('card is in');
+    const el = document.getElementById('gd-sp-resume');
+    if (el) {
+      el.textContent = 'Your memory card is in';
+      el.style.display = '';
+      requestAnimationFrame(() => el.classList.add('ready'));
+    }
+  } catch (e) {
+    cardLog('gave up: ' + e);
   }
 }
 
 // Auto-resume (?resume=1): load a save once the game has booted.
 //   ?save=state:<id>  one specific savestate - a slot tile's Play button
-//   ?save=battery     the battery save
-//   (omitted)         newest savestate, battery save as the fallback
+//   (omitted)         the newest savestate
 async function autoResume() {
   try {
-    if (!window.EJS_emulator || !window.EJS_emulator.gameManager) return;
+    if (!IS_AMIGA && (!window.EJS_emulator || !window.EJS_emulator.gameManager)) return;
     // Always fetch fresh here: the prefetch is fire-and-forget and may still be
     // in flight (or have failed to []) when this runs, so relying on the cache
     // would silently skip a resume. This runs once, so the cost is negligible.
-    await Promise.all([fetchStates(), fetchSaves()]);
+    await fetchStates();
 
-    const wantId      = RESUME_SAVE.indexOf('state:') === 0
+    const wantId = RESUME_SAVE.indexOf('state:') === 0
       ? parseInt(RESUME_SAVE.slice(6), 10) : null;
-    const wantBattery = RESUME_SAVE === 'battery';
 
     const state = wantId
       ? (cachedStates || []).filter((s) => s.id === wantId)[0]
-      : (wantBattery ? null : (cachedStates || [])[0]);   // API orders newest-first
+      : (cachedStates || [])[0];              // API orders newest-first
 
     if (state) {
       const resp = await fetch(state.download_url, { headers: authHeaders() });
       if (resp.ok) {
-        window.EJS_emulator.gameManager.loadState(new Uint8Array(await resp.arrayBuffer()));
+        const buf = new Uint8Array(await resp.arrayBuffer());
+        if (IS_AMIGA) await loadAmigaState(buf);
+        else window.EJS_emulator.gameManager.loadState(buf);
         gdToast(state.slot ? 'Resumed from slot ' + state.slot : 'Resumed from savestate');
         return;
       }
@@ -1114,20 +1942,6 @@ async function autoResume() {
     if (wantId) {
       // The requested save is gone (deleted elsewhere?). Starting fresh is the
       // honest outcome - silently loading a DIFFERENT save would be worse.
-      gdToast('That save is no longer available');
-      return;
-    }
-
-    const save = (cachedSaves || [])[0];      // battery: asked for, or fallback
-    if (save) {
-      const resp = await fetch(save.download_url, { headers: authHeaders() });
-      if (resp.ok) {
-        const gm = window.EJS_emulator.gameManager;
-        gm.FS.writeFile(gm.getSaveFilePath(), new Uint8Array(await resp.arrayBuffer()));
-        gm.loadSaveFiles();
-        gdToast('Battery save loaded');
-      }
-    } else if (wantBattery) {
       gdToast('That save is no longer available');
     }
   } catch { /* best-effort resume - a failure just starts the game fresh */ }
@@ -1184,9 +1998,20 @@ function exitPlayer() {
   try {
     if (window.EJS_emulator) {
       const sv = window.EJS_emulator.gameManager.getSaveFile();
-      if (sv && sv.length) uploadSave(sv);
+      // Same rule as the timer: a card with nothing on it never goes up. This
+      // path was left out when the check was added to the timer, and it is the
+      // one that matters most - it fires every time somebody leaves, so a
+      // browser that only ever opened the game posted its blank card over the
+      // save on the way out. That cost a real save twice in one evening.
+      if (sv && sv.length && !cardLooksEmpty(sv)) uploadSave(sv);
     }
   } catch {}
+  // The Amiga's equivalent: the floppy the game has been writing its saves to,
+  // or - for a WHDLoad title, which has no floppy - what it wrote onto its hard
+  // drive. Started here and not awaited: leaving the player should not hang on
+  // it, and the upload carries its own keepalive.
+  try { amigaKeepSaveDisk(); } catch {}
+  try { amigaKeepHdSaves(); } catch {}
   // Plugin play tracking: report elapsed seconds (fires lifecycle_on_play_end).
   // fetch+keepalive (not sendBeacon) so the Bearer token can be sent on exit.
   try {
@@ -1214,6 +2039,429 @@ function exitPlayer() {
   // If in iframe (full/window mode), parent handles closing via gd-exit message
 }
 
+// ── Amiga: vAmigaWeb rather than EmulatorJS ──────────────────────────────────
+// The whole platform runs on the second emulator, not just the WHDLoad titles.
+// EmulatorJS cannot run a WHDLoad install at all - its Amiga core aborts inside
+// the wasm build - and splitting one platform across two emulators would mean
+// two sets of controls, two save behaviours and no way for anyone to predict
+// which they were about to get. vAmigaWeb carries AROS, so a plain floppy still
+// needs no Kickstart at all.
+//
+// Files reach the emulator as bytes over postMessage, never as a URL: the ROM
+// is behind an Authorization header that an iframe of ours could not send, and
+// putting a token in a query string to work around that would be worse.
+const VAMIGA_BASE = '/vamigaweb/';
+
+// Runs INSIDE the emulator frame. A ZIP of loose files is not something
+// vAmigaWeb mounts on its own - it has to be converted to a hard drive first,
+// which is what prompt_for_drive(true) does. Reached from here rather than by
+// hand because the alternative is asking the player to press two buttons.
+const VAMIGA_MOUNT_HD = `
+let tries = 0;
+while (typeof last_zip_archive_name === 'undefined' || last_zip_archive_name === null) {
+  if (++tries > 900) { window.parent.postMessage({gdAmiga: 'timeout'}, '*'); return; }
+  await new Promise(r => setTimeout(r, 100));
+}
+window.parent.postMessage({gdAmiga: 'building'}, '*');
+$('#modal_file_slot').modal('hide');
+await prompt_for_drive(true);
+show_drive_select(false);
+insert_file(0);
+window.parent.postMessage({gdAmiga: 'running'}, '*');
+`;
+
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error(src));
+    document.body.appendChild(s);
+  });
+}
+
+async function fetchBytes(url, label) {
+  const resp = await fetch(url, { headers: authHeaders() });
+  if (resp.status === 204) return null;
+  if (!resp.ok) {
+    let detail = '';
+    try { detail = (await resp.json()).detail || ''; } catch {}
+    throw new Error(detail || `${label}: HTTP ${resp.status}`);
+  }
+  const total = Number(resp.headers.get('Content-Length')) || 0;
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    setProgress(received, total);
+  }
+  const out = new Uint8Array(received);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.length; }
+  return out;
+}
+
+async function startAmiga(romMetaP) {
+  setIndeterminate('Preparing the Amiga…', 'Checking what this title needs');
+
+  const plan = await fetch(`${API_BASE}/api/whdload/${ROM_ID}/plan`, { headers: authHeaders() })
+    .then(r => (r.ok ? r.json() : null))
+    .catch(() => null);
+  if (!plan) {
+    showError('Could not prepare the Amiga', 'The server did not answer for this ROM.');
+    return;
+  }
+  if (!plan.ok) {
+    // Named files rather than a generic failure: every one of these is
+    // something an administrator can go and put in place.
+    const what = {
+      whdload: 'the WHDLoad program',
+      kickstart: 'a Kickstart ROM that can boot a hard drive (3.1 for A500/A600, or 2.04)',
+      slave: 'a WHDLoad slave - this archive does not look like an install',
+      archive: 'a readable archive',
+    };
+    showError(
+      'This title needs something first',
+      'Missing: ' + plan.missing.map(m => what[m] || m).join('; ') +
+      '. An administrator can add it under Settings, ROM, firmware.'
+    );
+    return;
+  }
+  if (plan.warning) console.warn('Amiga:', plan.warning);
+
+  // Which of the two ways this title saves. A floppy set writes to a disk GD
+  // hands it; a WHDLoad install writes onto the hard drive it runs from, and
+  // that drive is rebuilt from the archive every launch - so what it wrote has
+  // to be read back off it before the page goes away.
+  window._gdAmigaHd = plan.mode === 'harddrive';
+
+  const romMeta = await romMetaP;
+  const fsName = (romMeta && romMeta.fs_name) || ROM_NAME;
+
+  let payload, payloadName;
+  if (plan.mode === 'harddrive') {
+    setIndeterminate('Building the hard drive…', 'Unpacking the WHDLoad install');
+    payload = await fetchBytes(`${API_BASE}/api/whdload/${ROM_ID}/image`, 'hard drive');
+    // The name decides what the emulator calls the drive it builds, and it has
+    // to end in .zip for the archive to be recognised as one.
+    payloadName = fsName.replace(/\.[^.]+$/, '') + '.zip';
+  } else if (plan.save_disk || (plan.mode === 'floppyset' && !/\.zip$/i.test(fsName))) {
+    // The emulator can only mount what is inside the archive it is handed, so
+    // the server packs the lot: the disks of a title split across floppies,
+    // and the disk this player's saves live on.
+    setIndeterminate('Collecting the disks…', `${plan.disks.length || 1} disks`);
+    payload = await fetchBytes(`${API_BASE}/api/whdload/${ROM_ID}/image`, 'disks');
+    payloadName = fsName.replace(/\.[^.]+$/, '') + '.zip';
+  } else {
+    setLoad('Downloading ROM…', '');
+    payload = await fetchBytes(`${API_BASE}/api/roms/stream/${ROM_ID}`, 'ROM');
+    payloadName = fsName;
+  }
+  if (!payload) { showError('Nothing to run', 'The server returned no data for this ROM.'); return; }
+
+  setIndeterminate('Starting the Amiga…', plan.kickstart || 'Using the built-in AROS Kickstart');
+  const kickstart = await fetchBytes(`${API_BASE}/api/whdload/kickstart`, 'Kickstart')
+    .catch(() => null);
+
+  await loadScriptOnce(VAMIGA_BASE + 'js/vAmigaWeb_player.js');
+  vAmigaWeb_player.vAmigaWeb_url = VAMIGA_BASE;
+
+  const samesite = { bin: payload, name: payloadName };
+  if (kickstart) samesite.kickstart_rom = kickstart;
+  vAmigaWeb_player.samesite_file = samesite;
+
+  // A multi-disk title is one archive holding several .adf files. Give the
+  // machine a drive per disk up to the four an Amiga can have, and name the
+  // disks inside the archive rather than the archive itself - the auto-insert
+  // list matches on member names, so naming the .zip inserts nothing and
+  // leaves a file picker on screen. Beyond four drives the archive stays open
+  // in the emulator and any disk can be swapped in from its own toolbar.
+  let disks = (plan.disks && plan.disks.length) ? plan.disks.slice() : [payloadName];
+  // When the archive was packed by the server the game disk is inside it under
+  // its own name, not the archive's.
+  if (plan.save_disk && !plan.disks.length && /\.zip$/i.test(payloadName)) disks = [fsName];
+  // A disk chosen on the game page goes in df0, the rest keep their order after
+  // it. The set is the same either way - a fair few titles put a level editor
+  // or a second scenario on a later disk, and those want booting directly.
+  if (BOOT_DISK && romMeta && romMeta.disks) {
+    const chosen = romMeta.disks.find(d => String(d.id) === BOOT_DISK);
+    const at = chosen ? disks.indexOf(chosen.name) : -1;
+    if (at > 0) disks = disks.slice(at).concat(disks.slice(0, at));
+  }
+
+  // The save disk goes in last, so it never takes the drive the game boots
+  // from, and a title with more disks than an Amiga has drives keeps it: the
+  // game disks past the fourth can be swapped in from the emulator's own
+  // toolbar, but the disk the game writes to has to be there all along.
+  const saveDrive = plan.save_disk ? Math.min(disks.length, 3) : -1;
+  const gameDisks = disks.slice();
+  if (plan.save_disk) disks = disks.slice(0, 3).concat([plan.save_disk]);
+  window._gdSaveDrive = saveDrive;
+
+  // Offered in the in-game menu so a title that asks for another disk can be
+  // given it without leaving the game. The set, not just the four that fit in
+  // drives: the archive stays open in the emulator, so any of them can be put
+  // in at any time.
+  window._gdAmigaDiskSet = gameDisks.map(function(name, i) {
+    const chosen = romMeta && romMeta.disks
+      ? romMeta.disks.find(function(d) { return d.name === name; }) : null;
+    return {
+      name: name,
+      label: chosen && chosen.number ? 'Disk ' + chosen.number : 'Disk ' + (i + 1),
+    };
+  });
+  window._gdAmigaInDf0 = gameDisks[0];
+
+  const drives = Math.min(Math.max(disks.length, 1), 4);
+  const quote = s => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
+
+  // How many drives the machine is built with. This has to be decided before it
+  // is switched on: asking for a third drive once it is running is accepted and
+  // then quietly ignored, which left the save disk mounted into a drive the
+  // Amiga did not have. The emulator reads this setting from storage as it
+  // starts, and it shares an origin with GD, so writing it here is the same
+  // thing as picking it in the emulator's own settings - only in time.
+  try { localStorage.setItem('OPT_floppy_drive_count', String(drives)); } catch {}
+
+  // The server picks a machine the title can run on; anything the player has
+  // since chosen under Settings, Machine wins over it. Folded in here rather
+  // than sent afterwards, because changing one of these restarts the machine.
+  window._gdAmigaMachine = Object.assign({}, plan.machine);
+  let storedMachine = {};
+  try { storedMachine = JSON.parse(localStorage.getItem('gd3_amiga_cfg_' + ROM_ID) || '{}') || {}; } catch {}
+  const machineCfg = Object.assign({}, plan.machine);
+  Object.keys(machineCfg).forEach((k) => {
+    if (storedMachine[k] !== undefined) machineCfg[k] = storedMachine[k];
+  });
+
+  const machine = Object.entries(machineCfg)
+    .map(([k, v]) => `wasm_configure('${k}','${v}');`).join('\n        ');
+  // Warp only while the drive is loading: on a real Amiga this is a minute of
+  // watching a progress bar, and nobody misses it.
+  const config = {
+    AROS: !kickstart,
+    wait_for_kickstart_injection: !!kickstart,
+    navbar: true,
+    wide: true,
+    border: false,
+    startup_script: `
+      ${plan.mode !== 'harddrive'
+        ? `df_mount_list=[${disks.slice(0, drives).map(quote).join(',')}];`
+        : ''}
+      on_ready_to_run = () => {
+        ${machine}
+        ${plan.mode !== 'harddrive' ? `wasm_configure('floppy_drive_count','${drives}');` : ''}
+        wasm_configure('WARP_MODE','WARP_ALWAYS');
+      }
+      on_hdr_step = () => {
+        on_power_led_dim = () => {
+          wasm_configure('WARP_MODE','WARP_NEVER');
+          on_power_led_dim = () => {};
+        }
+        on_hdr_step = () => {};
+      }
+    `,
+  };
+
+  // Continue playing waits for the machine to be up. A snapshot replaces the
+  // whole machine, so dropping one in while the drive is still being built or
+  // the disks are still being reset would simply be undone by what follows.
+  // Everything the Amiga needs set up once the machine is up. Each step stands
+  // on its own on purpose: they were a single run of statements, and one bad
+  // line in the middle took the in-game menu, the controller and the save disk
+  // down with it, silently, all at once. A step that fails now says so and the
+  // rest still happen.
+  function amigaReady(connected) {
+    hideLoading();
+    const step = (what, fn) => {
+      try { fn(); } catch (err) { console.error('Amiga setup, ' + what + ':', err); }
+    };
+
+    // The save disk is only where GD put it if the machine was actually built
+    // with that many drives. When it was not, the disk is in a drive the Amiga
+    // cannot read and no game will ever find it - say so once, plainly, rather
+    // than leave the player wondering why saving does nothing.
+    step('drive check', () => {
+      if (connected && window._gdSaveDrive >= 0 && connected.indexOf(window._gdSaveDrive) < 0) {
+        console.warn('Amiga: asked for drive df' + window._gdSaveDrive +
+                     ' for the save disk, machine has ' + connected.join(', '));
+        gdToast('This machine has fewer drives than the game needs - saving may not work');
+      }
+    });
+    // Both of these hang off EJS_onGameStart on every other platform, which
+    // never fires here - so without this the in-game menu could not be opened
+    // at all on the Amiga, and the controller had to be picked again each time.
+    step('in-game menu', () => {
+      if (window._startIngameMenuPolling) window._startIngameMenuPolling();
+    });
+    step('controller ports', amigaRestorePorts);
+    step('settings', () => {
+      if (window._gdAmigaRestoreCfg) window._gdAmigaRestoreCfg();
+    });
+    step('resume', () => {
+      if (RESUME) setTimeout(autoResume, 1500);
+    });
+    // Read the save disk once now, so leaving can tell whether the game wrote
+    // anything. Late enough to stay clear of a resume, which uses the same
+    // one-question-at-a-time channel.
+    step('save disk', () => {
+      if (!(window._gdSaveDrive >= 0)) {
+        // A WHDLoad title has no save disk to read first: what it wrote is
+        // worked out by comparing the drive against the archive it was built
+        // from, so there is no "before" to capture and the watch can start now.
+        if (window._gdAmigaHd) {
+          console.log('GD: watching the hard drive for saved files');
+          startAmigaSaveWatch();
+        }
+        return;
+      }
+      setTimeout(() => {
+        amigaAsk({ gdSnap: 'pulldisk', drive: window._gdSaveDrive }, 15000)
+          .then((r) => {
+            if (r && r.bytes && r.bytes.length) {
+              window._gdSaveDiskAtStart = r.bytes;
+              // What it is called now, so it can be found again if the player
+              // moves it to another drive during the session.
+              window._gdSaveDiskName = adfVolumeName(r.bytes);
+            }
+            startAmigaSaveWatch();
+          });
+      }, 6000);
+    });
+  }
+
+  window.addEventListener('message', (e) => {
+    if (!e.data || !e.data.gdAmiga) return;
+    if (e.data.gdAmiga === 'building') setIndeterminate('Building the hard drive…', 'Formatting inside the emulator');
+    if (e.data.gdAmiga === 'running') amigaReady(e.data.drives);
+    if (e.data.gdAmiga === 'timeout') showError('The emulator did not take the disk', 'Reload and try again.');
+  });
+
+  const host = document.getElementById('gd-vamiga-host');
+  vAmigaWeb_player.load(host, encodeURIComponent(JSON.stringify(config)));
+
+  // Teach the frame to speak to GD about saves. Same delay and same reason as
+  // the two scripts below: the frame exists the moment load() returns, but
+  // nothing inside it listens until it has fetched its own wasm.
+  setTimeout(() => amigaPost({ cmd: 'script', script: VAMIGA_BRIDGE }), 1500);
+
+  if (plan.mode === 'harddrive') {
+    // The frame has to exist before it can be spoken to, and it is created
+    // synchronously by load() above - but the emulator inside it is not ready
+    // until it has fetched its own wasm, so the script waits rather than us.
+    setTimeout(() => {
+      const frame = document.getElementById('vAmigaWeb');
+      if (frame) frame.contentWindow.postMessage({ cmd: 'script', script: VAMIGA_MOUNT_HD }, '*');
+    }, 1500);
+  } else if (drives > 1) {
+    // A second drive is added after the machine has already powered on, and
+    // the disks land after that again - which leaves it running a machine that
+    // no longer matches its hardware, and the screen stays black. One reset
+    // once every disk is in its drive is all it takes; a single-drive machine
+    // never gets into that state and is left alone.
+    // Same delay as the hard-drive path and for the same reason: the frame
+    // exists the moment load() returns, but nothing inside it listens until it
+    // has fetched its own wasm, and a message sent before then is simply lost.
+    setTimeout(() => {
+      const frame = document.getElementById('vAmigaWeb');
+      if (!frame) return;
+      // Every drive, not just the first two: the Kickstart only learns how many
+      // drives exist when it resets, so resetting while a disk is still on its
+      // way leaves that drive invisible to the machine. A game asking for its
+      // save disk would then never find it, however correctly it was mounted.
+      frame.contentWindow.postMessage({ cmd: 'script', script: `
+        const wanted = ${JSON.stringify(Array.from({ length: drives }, (_, i) => 'df' + i))};
+        let tries = 0;
+        while (!wanted.every((d) => wasm_has_disk(d))) {
+          if (++tries > 900) { window.parent.postMessage({gdAmiga:'timeout'}, '*'); return; }
+          await new Promise(r => setTimeout(r, 100));
+        }
+        wasm_reset();
+        wasm_run();
+        // What the machine ended up with, which is not always what was asked
+        // for. GD needs it to know whether the drive it put the save disk in
+        // exists at all.
+        const connected = [0,1,2,3].filter((i) => Number(wasm_get_config_item('DRIVE_CONNECT', i)) === 1);
+        window.parent.postMessage({gdAmiga:'running', drives: connected}, '*');
+      ` }, '*');
+    }, 1500);
+  } else {
+    // A single floppy is mounted by the auto-mount list and boots straight
+    // away, so there is nothing to wait for beyond the emulator starting.
+    setTimeout(amigaReady, 4000);
+  }
+}
+
+// ── Firmware archive reader ──────────────────────────────────────────────────
+// The server packs firmware with no compression on purpose, so reading it back
+// needs nothing but offsets: the alternative is shipping an inflate just to
+// unpack a few BIOS images. Entries keep the directory the core expects them
+// in, which is the whole reason GD unpacks this itself instead of handing
+// EmulatorJS a URL - EJS_biosUrl arrives flattened to a bare filename.
+function readStoredZip(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0 && i > buf.length - 65558; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) return [];
+  const count = dv.getUint16(eocd + 10, true);
+  let off = dv.getUint32(eocd + 16, true);
+  const out = [];
+  const dec = new TextDecoder();
+  for (let n = 0; n < count; n++) {
+    if (off + 46 > buf.length || dv.getUint32(off, true) !== 0x02014b50) break;
+    const method    = dv.getUint16(off + 10, true);
+    const size      = dv.getUint32(off + 24, true);
+    const nameLen   = dv.getUint16(off + 28, true);
+    const extraLen  = dv.getUint16(off + 30, true);
+    const commentLen= dv.getUint16(off + 32, true);
+    const local     = dv.getUint32(off + 42, true);
+    const name = dec.decode(buf.subarray(off + 46, off + 46 + nameLen));
+    off += 46 + nameLen + extraLen + commentLen;
+    if (method !== 0) { console.warn('Firmware entry is compressed, skipped:', name); continue; }
+    if (name.endsWith('/')) continue;
+    const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+    out.push({ name, data: buf.subarray(start, start + size) });
+  }
+  return out;
+}
+
+// Write firmware into the emulator's filesystem, directories and all. Hooked to
+// saveDatabaseLoaded because that is the one moment the filesystem exists and
+// the core has not looked at it yet: EmulatorJS fires it after mounting and
+// before it downloads the ROM. Registering through a property setter catches
+// the emulator the instant EmulatorJS assigns it, with no polling.
+function installFirmwareHook(files) {
+  let _emu;
+  Object.defineProperty(window, 'EJS_emulator', {
+    configurable: true,
+    get() { return _emu; },
+    set(v) {
+      _emu = v;
+      try {
+        v.on('saveDatabaseLoaded', (FS) => {
+          for (const f of files) {
+            const parts = f.name.split('/');
+            let dir = '';
+            for (let i = 0; i < parts.length - 1; i++) {
+              if (!parts[i]) continue;
+              dir += '/' + parts[i];
+              try { FS.mkdir(dir); } catch {}
+            }
+            try { FS.writeFile('/' + f.name, f.data); }
+            catch (err) { console.warn('Could not place firmware', f.name, err); }
+          }
+        });
+      } catch (err) { console.warn('Could not hook firmware delivery', err); }
+    },
+  });
+}
+
 // ── Main init ────────────────────────────────────────────────────────────────
 (async () => {
   if (!ROM_ID || !EJS_CORE) {
@@ -1233,11 +2481,27 @@ function exitPlayer() {
     .catch(() => null);
   romMetaP.then(rom => { if (rom) applySplashArtwork(rom); });
 
+  // The Amiga runs on vAmigaWeb, the whole platform of it. Everything else is
+  // EmulatorJS exactly as before - this branch is the only place the two meet.
+  if (EJS_CORE === 'amiga') {
+    document.getElementById('gd-vamiga-wrap').classList.add('active');
+    // EmulatorJS never runs on this path, so its target is dead weight that
+    // would otherwise keep a viewport's worth of black above the emulator.
+    document.getElementById('game').style.display = 'none';
+    try {
+      await startAmiga(romMetaP);
+    } catch (err) {
+      showError('Could not start the Amiga', String(err && err.message || err));
+    }
+    return;
+  }
+
   // Pre-fetch states so the picker is instant on first open, and so the splash
   // can name the save it is about to restore.
   Promise.all([fetchStates(), fetchSaves()])
-    .then(() => showResumeNotice(cachedStates, cachedSaves))
+    .then(() => showResumeNotice(cachedStates))
     .catch(() => {});
+
 
   let romUrl;
   try {
@@ -1248,6 +2512,23 @@ function exitPlayer() {
   }
 
   setIndeterminate('Starting emulator…', '');
+
+  // Firmware, if an administrator has supplied any for this core. Fetched
+  // before EmulatorJS is let in so the hook is armed with the bytes already in
+  // hand. A failure here is deliberately not fatal: most cores need no BIOS at
+  // all, and the ones that do report it themselves once they start.
+  try {
+    const fwRes = await fetch(
+      `${API_BASE}/api/firmware/${encodeURIComponent(EJS_CORE)}/bundle`,
+      { headers: authHeaders() },
+    );
+    if (fwRes.ok && fwRes.status !== 204) {
+      const files = readStoredZip(new Uint8Array(await fwRes.arrayBuffer()));
+      if (files.length) installFirmwareHook(files);
+    }
+  } catch (err) {
+    console.warn('Could not fetch firmware', err);
+  }
 
   // ── EmulatorJS config ────────────────────────────────────────────────────
   window.EJS_player        = '#game';
@@ -1266,13 +2547,40 @@ function exitPlayer() {
     };
   })();
 
-  window.EJS_gameName      = ROM_NAME;
+  // ── Name the emulator sees ───────────────────────────────────────────────────
+  // EmulatorJS only reads a filename off EJS_gameUrl when that URL is not a
+  // blob:, and GD always delivers the ROM as a blob so the transfer can carry an
+  // auth header.  For a blob it falls back to EJS_gameName, which here is the
+  // display title and therefore carries no extension.  Most cores do not care,
+  // but puae picks the Amiga image type from the extension alone, so a bare
+  // .adf or .lha reached it unnamed and came back as "Unsupported file format".
+  // Those cores get the real filename instead.
+  //
+  // Deliberately not done for every core: EJS_gameName is also part of the
+  // localStorage key holding per-game emulator settings, so changing it across
+  // the board would silently reset everyone's pad mappings.
+  const EXT_SENSITIVE_CORES = new Set(['amiga']);
+  let ejsGameName = ROM_NAME;
+  if (EXT_SENSITIVE_CORES.has(EJS_CORE)) {
+    // Already in flight since before the ROM transfer, so this costs nothing.
+    const romMeta = await romMetaP;
+    if (romMeta && romMeta.fs_name) ejsGameName = romMeta.fs_name;
+  }
+
+  window.EJS_gameName      = ejsGameName;
   window.EJS_gameID        = 'gd_' + ROM_ID;
   window.EJS_color         = '#a78bfa';
   window.EJS_startOnLoaded = true;
   // Threads: opt-in via Settings (requires COOP/COEP headers - set by middleware)
   if (localStorage.getItem('gd_ejs_threads') === '1') {
     window.EJS_threads = true;
+  }
+  // Diagnostics: opt-in via Settings. EmulatorJS forwards the core's own log to
+  // the console only when this is set, and that log is where a missing BIOS or
+  // an unsupported file is actually named. Noisy by design - some cores write
+  // thousands of lines a second - so it stays off unless asked for.
+  if (localStorage.getItem('gd_ejs_debug') === '1') {
+    window.EJS_DEBUG_XX = true;
   }
   window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
 
@@ -1502,7 +2810,13 @@ function exitPlayer() {
     // Start the SRAM auto-sync loop now that the emulator is running
     startAutoSync();
 
-    // Continue playing: auto-load the newest save once the core has settled.
+    // Put the card in the way RomM does, because theirs works: on game start,
+    // ten milliseconds later. Not a second and a half, not at EJS_ready - both
+    // were tried and neither took. Their write is the one we already copied;
+    // what was missing was doing it at their moment.
+    setTimeout(lendServerCardIfBrowserHasNone, 10);
+
+    // Continue playing: auto-load the savestate once the core has settled.
     if (RESUME) setTimeout(autoResume, 600);
   };
 
@@ -1576,7 +2890,11 @@ function exitPlayer() {
 
 // ── In-game pause menu + Category-based settings (Start+Select / Esc) ───────
 (function() {
-  const ACTIONS = ['resume','savestate','loadstate','settings','exit'];
+  // Read off the panel rather than written out twice, because one entry comes
+  // and goes: Disks is there only for a title that arrived on several floppies.
+  const _allItems = [...document.querySelectorAll('#gd-ingame-panel .gd-mi')];
+  let _items   = _allItems.slice();
+  let ACTIONS  = _items.map((el) => el.dataset.gd);
   let _open  = false;
   let _focus = 0;
   const _prevBtn = {};   // per-pad previous button states  { padIndex: bool[] }
@@ -1585,7 +2903,17 @@ function exitPlayer() {
   const B = { A:0, B:1, X:2, Y:3, SELECT:8, START:9, UP:12, DOWN:13, LEFT:14, RIGHT:15 };
 
   const _backdrop = document.getElementById('gd-ingame-menu');
-  const _items    = [...document.querySelectorAll('.gd-mi')];
+
+  // Which entries the menu actually has this time. Worked out when it opens,
+  // because how many disks the game came on is not known when the page loads.
+  function _refreshItems() {
+    const many = (window._gdAmigaDiskSet || []).length > 1;
+    _allItems.forEach((el) => {
+      if (el.dataset.gd === 'disks') el.style.display = many ? '' : 'none';
+    });
+    _items  = _allItems.filter((el) => el.style.display !== 'none');
+    ACTIONS = _items.map((el) => el.dataset.gd);
+  }
 
   function _setFocus(i) {
     _focus = ((i % ACTIONS.length) + ACTIONS.length) % ACTIONS.length;
@@ -1596,8 +2924,10 @@ function exitPlayer() {
     if (_open) return;
     // Close any open settings panels
     if (_settingsPage !== 'none') _closeAllSettings(false);
+    _refreshItems();
     _open = true; _focus = 0; _setFocus(0);
     try { window.EJS_emulator?.pause(); } catch {}
+    if (IS_AMIGA) amigaPost({ gdSnap: 'pause', on: true });
     _backdrop.classList.add('gd-menu-open');
   }
 
@@ -1606,6 +2936,7 @@ function exitPlayer() {
     _open = false;
     _backdrop.classList.remove('gd-menu-open');
     if (resume) try { window.EJS_emulator?.play(); } catch {}
+    if (resume && IS_AMIGA) amigaPost({ gdSnap: 'pause', on: false });
   }
 
   function _act(action) {
@@ -1617,6 +2948,11 @@ function exitPlayer() {
     } else if (action === 'loadstate') {
       closeMenu();
       setTimeout(() => openPicker('states'), 150);
+    } else if (action === 'disks') {
+      closeMenu(false);  // stay paused: the game is waiting for the disk
+      _ensureDiskCategory();
+      _subFromPause = true;
+      _openSub('disks');
     } else if (action === 'settings') {
       closeMenu(false);  // close pause menu, keep game paused
       _openCats();
@@ -1634,6 +2970,7 @@ function exitPlayer() {
   let _catFocus     = 0;      // focus index in category list
   let _subFocus     = 0;      // focus index in sub-page items
   let _subItems     = [];     // current sub-page item definitions
+  let _subFromPause = false;  // sub-page opened from the pause menu, not the categories
 
   // Persisted values (audio only - everything else uses EJS API)
   let _vol   = parseInt(localStorage.getItem('gd3_emu_vol') ?? '80', 10);
@@ -1652,9 +2989,20 @@ function exitPlayer() {
     cheats:   '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>',
     core:     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="2" x2="9" y2="4"/><line x1="15" y1="2" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="22"/><line x1="15" y1="20" x2="15" y2="22"/><line x1="2" y1="9" x2="4" y2="9"/><line x1="2" y1="15" x2="4" y2="15"/><line x1="20" y1="9" x2="22" y2="9"/><line x1="20" y1="15" x2="22" y2="15"/></svg>',
     restart:  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>',
+    disks:    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><rect x="8" y="13" width="8" height="8"/><rect x="8" y="3" width="6" height="5"/></svg>',
   };
 
-  const CATS = [
+  // The pages below read and write EmulatorJS, which the Amiga does not run
+  // on. It gets its own set, spoken to the emulator it does run on.
+  const CATS = IS_AMIGA ? [
+    { key: 'audio',    label: 'Audio' },
+    { key: 'graphics', label: 'Graphics' },
+    { key: 'speed',    label: 'Speed' },
+    { key: 'machine',  label: 'Machine' },
+    { key: 'compat',   label: 'Compatibility' },
+    { key: 'saves',    label: 'Save States' },
+    { key: 'restart',  label: 'Restart Game' },
+  ] : [
     { key: 'audio',    label: 'Audio' },
     { key: 'graphics', label: 'Graphics' },
     { key: 'capture',  label: 'Screen Capture' },
@@ -2010,6 +3358,9 @@ function exitPlayer() {
   }
 
   function _getSubItems(cat) {
+    // The Amiga runs on vAmigaWeb, so it is asked directly and none of the
+    // EmulatorJS pages below apply to it.
+    if (IS_AMIGA) return _amigaItems(cat);
     switch (cat) {
       case 'audio': return [
         { key: 'volume', label: 'Volume', type: 'range', min: 0, max: 100, step: 5,
@@ -2133,7 +3484,19 @@ function exitPlayer() {
 
   // ── Rendering ──────────────────────────────────────────────────────────
 
+  // The disk page is reached from the pause menu, but it is still one of the
+  // sub-pages, and a sub-page needs an entry here for its heading. Added when
+  // it is first needed rather than where the list is written, which happens
+  // before anyone knows how many disks this game came on - and in this scope
+  // rather than out where they are counted, because CATS does not exist there.
+  function _ensureDiskCategory() {
+    if ((window._gdAmigaDiskSet || []).length > 1 && !CATS.some(c => c.key === 'disks')) {
+      CATS.unshift({ key: 'disks', label: 'Disks' });
+    }
+  }
+
   function _renderCats() {
+    _ensureDiskCategory();
     const container = document.getElementById('gd-cats-list');
     container.innerHTML = CATS.map((cat, i) => {
       return '<div class="gd-mi' + (i === _catFocus ? ' gd-mi-focus' : '') +
@@ -2277,10 +3640,172 @@ function exitPlayer() {
     }
   }
 
+  // ── Amiga settings ───────────────────────────────────────────────────────
+  // vAmigaWeb takes its settings through one call, so GD offers the same ones
+  // its own panel does. The chosen values are kept by GD rather than read back:
+  // the emulator answers with the internal number behind an enum, not the name
+  // it was given, and keeping them means they also survive to the next launch -
+  // which vAmigaWeb itself does not do.
+  const AMIGA_SETTINGS = {
+    audio: [
+      { key: 'gd_volume', label: 'Volume', kind: 'volume', options: [
+        { value: '0', label: 'Mute' }, { value: '0.25', label: '25%' },
+        { value: '0.5', label: '50%' }, { value: '0.75', label: '75%' },
+        { value: '1', label: '100%' },
+      ], dflt: '0.5' },
+    ],
+    graphics: [
+      { key: 'gd_palette', label: 'Colour Palette', kind: 'palette', options: [
+        { value: 'color', label: 'Colour' }, { value: 'black_white', label: 'Black & White' },
+        { value: 'paper_white', label: 'Paper White' }, { value: 'green', label: 'Green' },
+        { value: 'amber', label: 'Amber' }, { value: 'sepia', label: 'Sepia' },
+      ], dflt: 'color' },
+      { key: 'BLITTER_ACCURACY', label: 'Blitter Accuracy', kind: 'configure', options: [
+        { value: '0', label: 'Fast' }, { value: '1', label: 'Medium' }, { value: '2', label: 'Exact' },
+      ], dflt: '2' },
+    ],
+    speed: [
+      { key: 'WARP_MODE', label: 'Fast Forward', kind: 'configure', options: [
+        { value: 'WARP_NEVER', label: 'Never' }, { value: 'WARP_AUTO', label: 'While Loading' },
+        { value: 'WARP_ALWAYS', label: 'Always' },
+      ], dflt: 'WARP_NEVER' },
+      { key: 'DRIVE_SPEED', label: 'Floppy Speed', kind: 'configure', options: [
+        { value: '1', label: 'Original' }, { value: '2', label: '2x' },
+        { value: '4', label: '4x' }, { value: '8', label: '8x' },
+        { value: '-1', label: 'Instant' },
+      ], dflt: '1' },
+    ],
+    // Changing any of these restarts the machine, which is the emulator's own
+    // behaviour and the reason they are on a page of their own.
+    machine: [
+      { key: 'AGNUS_REVISION', label: 'Agnus', kind: 'configure', options: [
+        { value: 'OCS_OLD', label: 'OCS early (512K)' }, { value: 'OCS', label: 'OCS (512K)' },
+        { value: 'ECS_1MB', label: 'ECS (1MB)' }, { value: 'ECS_2MB', label: 'ECS (2MB)' },
+        { value: 'AGA', label: 'AGA (2MB)' },
+      ] },
+      { key: 'DENISE_REVISION', label: 'Denise', kind: 'configure', options: [
+        { value: 'OCS', label: 'OCS' }, { value: 'ECS', label: 'ECS' }, { value: 'AGA', label: 'AGA' },
+      ] },
+      { key: 'CPU_REVISION', label: 'CPU', kind: 'configure', options: [
+        { value: '0', label: '68000' }, { value: '1', label: '68010' }, { value: '2', label: '68020' },
+      ] },
+      { key: 'CPU_OVERCLOCKING', label: 'CPU Speed', kind: 'configure', options: [
+        { value: '1', label: 'Original' }, { value: '2', label: '2x' },
+        { value: '4', label: '4x' }, { value: '8', label: '8x' },
+      ] },
+      { key: 'CHIP_RAM', label: 'Chip RAM', kind: 'configure', options: [
+        { value: '512', label: '512 KB' }, { value: '1024', label: '1 MB' }, { value: '2048', label: '2 MB' },
+      ] },
+      { key: 'SLOW_RAM', label: 'Slow RAM', kind: 'configure', options: [
+        { value: '0', label: 'None' }, { value: '512', label: '512 KB' }, { value: '1024', label: '1 MB' },
+      ] },
+      { key: 'FAST_RAM', label: 'Fast RAM', kind: 'configure', options: [
+        { value: '0', label: 'None' }, { value: '256', label: '256 KB' }, { value: '512', label: '512 KB' },
+        { value: '1024', label: '1 MB' }, { value: '2048', label: '2 MB' }, { value: '8192', label: '8 MB' },
+      ] },
+    ],
+    compat: [
+      { key: 'CLX_SPR_SPR', label: 'Sprite to Sprite', kind: 'toggle', dflt: 'true' },
+      { key: 'CLX_SPR_PLF', label: 'Sprite to Playfield', kind: 'toggle', dflt: 'true' },
+      { key: 'CLX_PLF_PLF', label: 'Playfield to Playfield', kind: 'toggle', dflt: 'true' },
+    ],
+    saves: [],
+  };
+
+  const AMIGA_CFG_KEY = 'gd3_amiga_cfg_' + ROM_ID;
+
+  function amigaCfg() {
+    try { return JSON.parse(localStorage.getItem(AMIGA_CFG_KEY) || '{}') || {}; } catch { return {}; }
+  }
+
+  function amigaCfgSet(key, value) {
+    const all = amigaCfg();
+    all[key] = value;
+    try { localStorage.setItem(AMIGA_CFG_KEY, JSON.stringify(all)); } catch {}
+  }
+
+  // The machine the server picked for this title is the starting point, so an
+  // untouched setting shows what the game is actually running on.
+  function amigaDefault(item) {
+    const fromPlan = (window._gdAmigaMachine || {})[item.key];
+    return amigaCfg()[item.key] ?? fromPlan ?? item.dflt ?? (item.options ? item.options[0].value : '');
+  }
+
+  function _amigaItems(cat) {
+    if (cat === 'disks') {
+      // Every disk of the set, and pressing one puts it in the first drive.
+      // A game that wants disk B says so and waits: it looks in df0 and
+      // nowhere else, however many drives the machine has, because that is
+      // what a player with one drive would have done. Nothing on screen tells
+      // GD which disk was asked for, so this is as close to automatic as it
+      // gets - two presses instead of leaving the game to find it alone.
+      return (window._gdAmigaDiskSet || []).map(function(disk, i) {
+        return {
+          key: 'disk-' + i, label: disk.label, type: 'action',
+          text: window._gdAmigaInDf0 === disk.name ? 'in df0' : 'insert',
+          fn: function() {
+            amigaPost({ gdSnap: 'swapdisk', name: disk.name, drive: 0 });
+            window._gdAmigaInDf0 = disk.name;
+            gdToast(disk.label + ' inserted');
+            _closeAllSettings();
+          },
+        };
+      });
+    }
+    if (cat === 'saves') {
+      return [{
+        key: 'gd-save-state-slot',
+        label: 'Save State Slot',
+        type: 'cycle',
+        options: Array.from({ length: 9 }, function(_, i) { return { value: String(i + 1), label: 'Slot ' + (i + 1) }; }),
+        get: function() { return String(currentSlot()); },
+        set: function(v) { setGdSlot(v); },
+      }];
+    }
+    return (AMIGA_SETTINGS[cat] || []).map(function(item) {
+      if (item.kind === 'toggle') {
+        return {
+          key: item.key, label: item.label, type: 'toggle',
+          get: function() { return amigaDefault(item) !== 'false'; },
+          set: function(v) { amigaApply(item, v ? 'true' : 'false'); },
+        };
+      }
+      return {
+        key: item.key, label: item.label, type: 'cycle', options: item.options,
+        get: function() { return String(amigaDefault(item)); },
+        set: function(v) { amigaApply(item, String(v)); },
+      };
+    });
+  }
+
+  function amigaApply(item, value) {
+    amigaCfgSet(item.key, value);
+    amigaPost({ gdSnap: 'cfg', kind: item.kind, key: item.key, value: value });
+  }
+
+  // Put everything the player has chosen back after the machine starts. The
+  // server decides the machine a title needs, but a choice made here is the
+  // player's and wins over it.
+  function amigaRestoreCfg() {
+    const stored = amigaCfg();
+    Object.keys(AMIGA_SETTINGS).forEach(function(cat) {
+      // The machine's own settings are not sent here: changing one restarts
+      // the machine, so they are folded into how it is built in the first
+      // place, before the game is put in front of it.
+      if (cat === 'machine') return;
+      (AMIGA_SETTINGS[cat] || []).forEach(function(item) {
+        if (stored[item.key] === undefined) return;
+        amigaPost({ gdSnap: 'cfg', kind: item.kind, key: item.key, value: stored[item.key] });
+      });
+    });
+  }
+  window._gdAmigaRestoreCfg = amigaRestoreCfg;
+
   function _catConfirm() {
     const cat = CATS[_catFocus];
     if (!cat) return;
     if (cat.key === 'restart') {
+      if (IS_AMIGA) { amigaPost({ gdSnap: 'reset' }); _closeAllSettings(); return; }
       _doRestart();
       return;
     }
@@ -2316,6 +3841,15 @@ function exitPlayer() {
 
   function _closeSub() {
     _subPanel.classList.remove('gd-open');
+    // Back where the player came from. A page opened straight off the pause
+    // menu has no category list behind it, and dropping them into one they
+    // never asked for reads as the wrong screen.
+    if (_subFromPause) {
+      _subFromPause = false;
+      _settingsPage = 'none';
+      openMenu();
+      return;
+    }
     _settingsPage = 'cats';
     _catsPanel.classList.add('gd-open');
     _setCatFocus(_catFocus);
@@ -2324,15 +3858,21 @@ function exitPlayer() {
   function _closeAllSettings(resume = true) {
     _settingsPage = 'none';
     _settingsCat = '';
+    _subFromPause = false;
     _catsPanel.classList.remove('gd-open');
     _subPanel.classList.remove('gd-open');
     if (resume) try { window.EJS_emulator?.play(); } catch {}
+    // The Amiga is stopped and started through the frame, not EmulatorJS, and
+    // it was paused when the menu opened - so it has to be told to go on.
+    if (resume && IS_AMIGA) amigaPost({ gdSnap: 'pause', on: false });
   }
 
-  // Mouse/touch for pause menu
-  _items.forEach((el, i) => {
-    el.addEventListener('click', () => _act(ACTIONS[i]));
-    el.addEventListener('mouseenter', () => _setFocus(i));
+  // Mouse/touch for pause menu. Bound to what the entry is rather than where it
+  // sat when the page loaded: one entry is hidden for most titles, so the
+  // positions shift under it.
+  _allItems.forEach((el) => {
+    el.addEventListener('click', () => _act(el.dataset.gd));
+    el.addEventListener('mouseenter', () => _setFocus(_items.indexOf(el)));
   });
 
   // ── Keyboard handler ───────────────────────────────────────────────────

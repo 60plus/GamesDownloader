@@ -25,6 +25,7 @@ from hashlib import sha256
 from pathlib import Path, PurePosixPath
 
 from config import AUTH_SECRET_KEY, RESOURCES_PATH, SAVES_PATH
+from utils.volume_check import is_ephemeral
 
 logger = logging.getLogger(__name__)
 
@@ -33,35 +34,6 @@ _SIG_LEN = 24
 # Where saves lived before they were moved off the public mount. Still the
 # fallback for an install whose compose does not mount the new directory.
 LEGACY_ROOT = Path(RESOURCES_PATH) / "roms"
-
-
-def _is_ephemeral(path: Path) -> bool:
-    """True when `path` would vanish on the next container recreate.
-
-    Only meaningful inside a container. The shipped compose bind-mounts each
-    data directory separately rather than /data as a whole, so a NEW directory
-    under /data is not persisted until its own mount is added - and an operator
-    running their own compose file from an older release has no such line.
-    Writing saves there would lose every one of them on the next `up -d`, so we
-    check instead of assuming.
-    """
-    if not Path("/.dockerenv").exists():
-        return False   # not a container: this is the host's own filesystem
-    try:
-        mounts = set()
-        for line in Path("/proc/self/mountinfo").read_text().splitlines():
-            parts = line.split(" ")
-            if len(parts) > 4:
-                mounts.add(parts[4])
-    except OSError:
-        return False   # cannot tell; do not block the app over it
-    p = path.resolve()
-    for cand in (p, *p.parents):
-        if str(cand) == "/":
-            break
-        if str(cand) in mounts:
-            return False
-    return True
 
 
 _root_cache: Path | None = None
@@ -79,7 +51,7 @@ def saves_root() -> Path:
     if _root_cache is not None:
         return _root_cache
     target = Path(SAVES_PATH)
-    if _is_ephemeral(target):
+    if is_ephemeral(target):
         logger.error(
             "GD_SAVES_PATH (%s) is not on a mounted volume - saves written there "
             "would be lost the next time the container is recreated. Falling back "

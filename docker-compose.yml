@@ -42,6 +42,11 @@ services:
       # public static files and saves are private - without this line the app
       # keeps them in the old place and says so at every boot.
       - ${GD_BASE_DIR:-.}/data/saves:/data/saves
+      # Emulator firmware (BIOS images, Kickstarts). Supplied by the operator
+      # under their own licence and not re-fetchable, so it needs a volume of
+      # its own - without this line the app parks it under /data/config and
+      # says so at every boot.
+      - ${GD_BASE_DIR:-.}/data/firmware:/data/firmware
       - ${GD_BASE_DIR:-.}/data/config:/data/config
       - ${GD_BASE_DIR:-.}/data/plugins:/data/plugins
       - ${GD_BASE_DIR:-.}/data/clamav:/data/clamav
