@@ -78,9 +78,12 @@ const popStyle = ref<CSSProperties>({})
 
 const active = computed(() => SUPPORTED.find(l => l.code === locale.value))
 
-function select(code: string) {
-  setLocale(code)
+async function select(code: string) {
+  // Every language but English is fetched on demand, so this settles a moment
+  // after the click. The menu closes first; the interface changes when the
+  // strings are in, or stays as it was if they could not be fetched.
   open.value = false
+  await setLocale(code)
 }
 
 // Compute the teleported popover's viewport position from the trigger's

@@ -6,7 +6,7 @@ import App from "./App.vue";
 // failed to render on Windows Chrome / Edge - the package ships
 // `.fi.fi-<iso2>` classes plus the SVG masks they reference.
 import "flag-icons/css/flag-icons.min.css";
-import { createAppRouter, addPluginRoutes } from "./plugins/router";
+import { createAppRouter, addPluginRoutes, takeMissedPluginPath } from "./plugins/router";
 import { createAppPinia } from "./plugins/pinia";
 import { vuetify } from "./plugins/vuetify";
 import { registerTheme, registerPluginLayout, registerPluginCouchMode, registerMetadataTab, registerDetailRow, resolveDetailRows, registerHomeSections, getHomeSections, registerManagedSettings, isSettingManaged, registerPluginRoute, pluginNavRoutes, setPluginNavRoutes } from "./themes/index";
@@ -42,6 +42,10 @@ import "@mdi/font/css/materialdesignicons.css";
 import "./styles/base.css";
 import "./styles/glass.css";
 import "./styles/skins.css";
+// Chrome shared by the game and collection metadata panels. Global rather than
+// scoped because two components draw it; gated behind .mep-std so it cannot
+// reach the emulation ROM panel, which reuses the class names for its own design.
+import "./styles/metadata-panel.css";
 
 const app = createApp(App);
 
@@ -103,6 +107,7 @@ const PLUGIN_SOCKET_EVENTS = new Set([
   "romsource:download_progress",
   "romsource:download_complete",
   "romsource:download_error",
+  "romsource:download_state",
 ]);
 
 function createPluginEventBridge() {
@@ -365,7 +370,21 @@ function createSafeSocketStore() {
   },
 };
 
-app.mount("#app");
+// The active language has to be in place before the first paint. `t()` tracks
+// the locale ref, not the message store, so a language that arrived after the
+// mount would leave the interface in English until something else happened to
+// re-render it. English is bundled, so this resolves immediately for English.
+//
+// Raced against a timer: a fetch that hangs must cost a moment of English, not
+// a blank page. Wrapped in a function rather than written as a top-level await,
+// which would require raising the build target for the whole bundle.
+void (async () => {
+  await Promise.race([
+    i18n.ensureLocale(i18n.locale.value),
+    new Promise((resolve) => setTimeout(resolve, 2000)),
+  ]);
+  app.mount("#app");
+})();
 
 // Load the data-driven library registry (no-op if not authenticated yet;
 // re-fetched after login in the auth store).
@@ -385,6 +404,11 @@ client.get("/plugins/frontend/routes").then((res: any) => {
   if (Array.isArray(res.data) && res.data.length) {
     addPluginRoutes(router, res.data);
     setPluginNavRoutes(res.data);
+    // These routes arrive after the first navigation has already resolved, so
+    // a deep link or a refresh on a plugin page reached the catch-all through
+    // no fault of its own. Now that the route exists, go where it was headed.
+    const missed = takeMissedPluginPath();
+    if (missed && router.resolve(missed).matched.length) router.replace(missed);
   }
 }).catch(() => { /* no plugin pages or not authenticated yet */ });
 

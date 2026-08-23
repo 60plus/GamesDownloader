@@ -3,6 +3,12 @@ import { defineConfig } from "vite";
 import { fileURLToPath, URL } from "node:url";
 
 export default defineConfig({
+  // Cache key for the translation files, which are served from public/ rather
+  // than bundled. Changes every build, so a release cannot be read with a
+  // previous release's strings, and stays put in between.
+  define: {
+    __I18N_BUILD__: JSON.stringify(Date.now().toString(36)),
+  },
   plugins: [vue()],
   resolve: {
     alias: {
