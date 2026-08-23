@@ -674,6 +674,7 @@ async def _download(urls: tuple[str, ...]) -> bytes:
     """Fetch the first of *urls* that answers, through the outbound guard."""
     import httpx
 
+    from utils.http import read_capped
     from utils.net_guard import assert_fetch_allowed, make_request_guard
 
     last: Exception | None = None
@@ -688,11 +689,14 @@ async def _download(urls: tuple[str, ...]) -> bytes:
                 headers={"User-Agent": _USER_AGENT},
                 event_hooks={"request": [make_request_guard()]},
             ) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                if len(resp.content) > MAX_UNPACKED_BYTES:
-                    raise ValueError("download is implausibly large")
-                return resp.content
+                # The ceiling was here before, but measured against an already
+                # buffered body - the memory was spent by the time it looked.
+                # read_capped counts as the bytes arrive.
+                async with client.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    return await read_capped(
+                        resp, MAX_UNPACKED_BYTES, what="WHDLoad archive",
+                    )
         except Exception as exc:
             logger.warning("%s unreachable (%s)", url, type(exc).__name__)
             last = exc

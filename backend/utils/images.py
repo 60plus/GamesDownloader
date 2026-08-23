@@ -15,10 +15,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-try:
-    from config import GD_BASE_PATH
-except ImportError:
-    GD_BASE_PATH = "/data"
+from config import BASE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +30,7 @@ def resource_url_to_fs_path(url: str | None) -> Path | None:
     if not url or not url.startswith("/resources/"):
         return None
     rel = url.split("?", 1)[0][len("/resources/"):]
-    return Path(GD_BASE_PATH) / "resources" / rel
+    return Path(BASE_PATH) / "resources" / rel
 
 
 def is_animated_image(fs_path: Path | str | None) -> bool:

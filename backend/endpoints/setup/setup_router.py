@@ -5,17 +5,12 @@ Secured by SetupGuardMiddleware (enforced in main.py).
 
 from __future__ import annotations
 
-import re
-import smtplib
-import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
-import httpx
+from handler.config.connection_tests import run_scraper_test, run_smtp_test
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
-from handler.auth.passwords import hash_password
+from handler.auth.passwords import hash_password, password_problem
 from handler.config.config_handler import config_handler
 from handler.database.users_handler import UsersHandler
 from handler.gog.gog_auth_handler import gog_auth_handler
@@ -23,49 +18,6 @@ from models.user import Role, User
 
 setup_router = APIRouter(prefix="/api/setup", tags=["setup"])
 
-_TEST_EMAIL_HTML = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<style>
-  body{margin:0;padding:0;background:#0d0d1a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
-  .wrap{max-width:520px;margin:0 auto;padding:40px 16px}
-  .card{background:#1a1a2e;border:1px solid rgba(255,255,255,.1);border-radius:14px;overflow:hidden}
-  .header{background:linear-gradient(135deg,#16213e 0%,#1a1040 100%);padding:32px 36px;text-align:center;border-bottom:1px solid rgba(167,139,250,.2)}
-  .logo{font-size:22px;font-weight:800;color:#a78bfa;letter-spacing:-.5px}
-  .logo-sub{font-size:10px;color:rgba(167,139,250,.5);text-transform:uppercase;letter-spacing:2px;margin-top:5px}
-  .body{padding:32px 36px}
-  .icon{width:56px;height:56px;border-radius:50%;background:rgba(34,197,94,.12);border:2px solid rgba(34,197,94,.3);margin:0 auto 20px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:24px;line-height:56px}
-  .title{font-size:20px;font-weight:700;color:#f1f1f1;margin:0 0 10px;text-align:center}
-  .text{font-size:14px;color:#8888a8;line-height:1.7;margin:0 0 24px;text-align:center}
-  .badge{display:block;width:fit-content;margin:0 auto;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);color:#86efac;padding:10px 24px;border-radius:24px;font-size:13px;font-weight:600}
-  .footer{padding:16px 36px 24px;text-align:center;font-size:11px;color:rgba(255,255,255,.2)}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <div class="header">
-      <div class="logo">GamesDownloader</div>
-      <div class="logo-sub">Email Notification System</div>
-    </div>
-    <div class="body">
-      <div class="icon">&#10003;</div>
-      <div class="title">Test Email</div>
-      <p class="text">
-        Your GamesDownloader instance sent this test email successfully.<br>
-        Email notifications are configured and working correctly.
-      </p>
-      <span class="badge">&#10003;&nbsp; Email sent successfully</span>
-    </div>
-    <div class="footer">GamesDownloader &mdash; Self-hosted game library</div>
-  </div>
-</div>
-</body>
-</html>
-"""
 users_handler = UsersHandler()
 
 
@@ -77,12 +29,13 @@ class AdminCreateRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def password_strength(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters")
-        if not re.search(r"[A-Za-z]", v):
-            raise ValueError("Password must contain at least one letter")
-        if not re.search(r"\d", v):
-            raise ValueError("Password must contain at least one digit")
+        # Same rule as every other route, stated in handler.auth.passwords.
+        # Kept as a validator rather than a handler call because this wizard
+        # runs before there is anyone to show a 400 to, and its own form
+        # already blocks a weak password client-side.
+        problem = password_problem(v)
+        if problem:
+            raise ValueError(problem)
         return v
 
 
@@ -191,7 +144,7 @@ async def set_gog_avatar(req: GogAvatarRequest) -> dict:
         raise HTTPException(status_code=404, detail="Not found")
     from pathlib import Path as _Path
 
-    from config import GD_BASE_PATH, RESOURCES_PATH
+    from config import BASE_PATH, RESOURCES_PATH
 
     raw = (req.avatar_url or "").strip()
     # Reject any external URL or non-resource path - upload-only policy
@@ -199,7 +152,7 @@ async def set_gog_avatar(req: GogAvatarRequest) -> dict:
         raise HTTPException(status_code=400, detail="Invalid avatar path - must be a server-downloaded resource")
 
     avatars_dir = _Path(RESOURCES_PATH) / "avatars"
-    candidate = (_Path(GD_BASE_PATH) / raw.lstrip("/")).resolve()
+    candidate = (_Path(BASE_PATH) / raw.lstrip("/")).resolve()
     try:
         # Path traversal guard: candidate MUST live under avatars_dir
         candidate.relative_to(avatars_dir.resolve())
@@ -236,63 +189,7 @@ async def save_api_keys(req: ApiKeysRequest) -> dict:
 async def test_scraper(req: ScraperTestRequest) -> dict:
     if await config_handler.is_setup_complete():
         raise HTTPException(status_code=404, detail="Not found")
-    try:
-        async with httpx.AsyncClient(timeout=10) as c:
-            if req.scraper == "igdb":
-                if not req.igdb_client_id or not req.igdb_client_secret:
-                    raise HTTPException(status_code=400, detail="Client ID and Secret required")
-                r = await c.post("https://id.twitch.tv/oauth2/token", params={
-                    "client_id": req.igdb_client_id, "client_secret": req.igdb_client_secret,
-                    "grant_type": "client_credentials",
-                })
-                if r.status_code != 200 or "access_token" not in r.json():
-                    raise HTTPException(status_code=400, detail="Invalid IGDB credentials")
-
-            elif req.scraper == "steamgriddb":
-                if not req.steamgriddb_api_key:
-                    raise HTTPException(status_code=400, detail="API key required")
-                r = await c.get("https://www.steamgriddb.com/api/v2/grids/game/1",
-                                headers={"Authorization": f"Bearer {req.steamgriddb_api_key}"})
-                if r.status_code == 401:
-                    raise HTTPException(status_code=400, detail="Invalid SteamGridDB API key")
-
-            elif req.scraper == "rawg":
-                if not req.rawg_api_key:
-                    raise HTTPException(status_code=400, detail="API key required")
-                r = await c.get("https://api.rawg.io/api/genres", params={"key": req.rawg_api_key})
-                if r.status_code == 401 or r.status_code == 403:
-                    raise HTTPException(status_code=400, detail="Invalid RAWG API key")
-
-            elif req.scraper == "screenscraper":
-                if not req.screenscraper_username or not req.screenscraper_password:
-                    raise HTTPException(status_code=400, detail="Username and password required")
-                r = await c.get("https://www.screenscraper.fr/api2/ssuserInfos.php", params={
-                    "devid": "GamesDownloader", "devpassword": "dev", "softname": "GamesDownloader",
-                    "output": "json", "ssid": req.screenscraper_username,
-                    "sspassword": req.screenscraper_password,
-                })
-                if r.status_code == 401 or "wrongpass" in r.text.lower():
-                    raise HTTPException(status_code=400, detail="Invalid ScreenScraper credentials")
-
-            elif req.scraper == "ra":
-                if not req.ra_api_key:
-                    raise HTTPException(status_code=400, detail="API key required")
-                r = await c.get("https://retroachievements.org/API/API_GetTopTenUsers.php",
-                                params={"y": req.ra_api_key})
-                if r.status_code == 401 or (r.status_code == 200 and r.json() is None):
-                    raise HTTPException(status_code=400, detail="Invalid RetroAchievements API key")
-            else:
-                raise HTTPException(status_code=400, detail=f"Unknown scraper: {req.scraper}")
-
-        return {"ok": True}
-    except HTTPException:
-        raise
-    except httpx.ConnectError as e:
-        raise HTTPException(status_code=400, detail=f"Network error: could not connect to the service. Check that the server has internet access. ({e})")
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=400, detail="Connection timed out. The service may be unreachable from this server.")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return await run_scraper_test(req)
 
 
 @setup_router.post("/smtp")
@@ -315,41 +212,7 @@ async def save_smtp(req: SmtpRequest) -> dict:
 async def test_smtp(req: SmtpRequest) -> dict:
     if await config_handler.is_setup_complete():
         raise HTTPException(status_code=404, detail="Not found")
-    try:
-        from_addr = req.from_address or req.username or ""
-        to_addr   = req.test_to or req.from_address or req.username or ""
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = "GamesDownloader - Test Email"
-        msg["From"]    = from_addr
-        msg["To"]      = to_addr
-        msg.attach(MIMEText(
-            "GamesDownloader - Test Email\n\n"
-            "Your GamesDownloader instance sent this test email successfully.\n"
-            "Email notifications are configured and working correctly.",
-            "plain",
-        ))
-        msg.attach(MIMEText(_TEST_EMAIL_HTML, "html"))
-        host = req.host or ""
-        port = req.port
-        use_tls = req.use_tls
-        username = req.username
-        password = req.password
-
-        def _send_blocking() -> None:
-            ctx = ssl.create_default_context() if use_tls else None
-            with smtplib.SMTP(host, port, timeout=10) as server:
-                if use_tls:
-                    server.starttls(context=ctx)
-                if username and password:
-                    server.login(username, password)
-                server.send_message(msg)
-
-        import asyncio
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _send_blocking)
-        return {"ok": True}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return await run_smtp_test(req)
 
 
 @setup_router.post("/app-settings")

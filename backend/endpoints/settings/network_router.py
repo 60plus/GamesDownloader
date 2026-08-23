@@ -83,14 +83,7 @@ async def save_network_config(request: Request, body: NetworkConfig):
 
 @protected_route(network_router.get, "/registration", scopes=[Scope.SETTINGS_READ])
 async def get_registration(request: Request):
-    # Legacy: enable_registrations (bool) → maps to open/disabled
-    mode = await config_handler.get("registration_mode")
-    if not mode:
-        # Closed by default when nothing was ever configured (matches the gate
-        # in endpoints/auth.py register()).
-        legacy = await config_handler.get_bool("enable_registrations", default=False)
-        mode = "open" if legacy else "disabled"
-    return {"mode": mode}
+    return {"mode": await config_handler.get_registration_mode()}
 
 
 @protected_route(network_router.post, "/registration", scopes=[Scope.SETTINGS_WRITE])
@@ -124,7 +117,12 @@ async def list_invites(request: Request):
 
 @protected_route(network_router.post, "/invites", scopes=[Scope.SETTINGS_WRITE])
 async def create_invite(request: Request, body: InviteCreateRequest):
-    user = getattr(request.state, "user", "admin")
+    # created_by is a String column, and request.state.user is the User row, so
+    # take the name off it the way every other endpoint does. The old default of
+    # "admin" never applied either: the middleware sets state.user to None when
+    # nobody is signed in, so getattr found the attribute and returned that None.
+    actor = getattr(request.state, "user", None)
+    user = actor.username if actor else None
     expires_at = None
     if body.expires_in_hours:
         from datetime import timedelta

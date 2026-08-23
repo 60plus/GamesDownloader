@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from config import AUTH_ALGORITHM, AUTH_SECRET_KEY
 from exceptions.auth import InvalidCredentialsException, UserDisabledException
-from handler.auth.passwords import hash_password, verify_password
+from handler.auth.passwords import ensure_password_ok, hash_password, verify_password
 from handler.auth.scopes import scopes_for_role
 from handler.auth.tokens import create_access_token, create_refresh_token, decode_token
 from handler.auth import brute_force
@@ -236,6 +236,41 @@ async def login_totp(req: LoginTotpRequest, request: Request) -> TokenResponse:
     return await _issue_session_tokens(user, request)
 
 
+@router.get("/registration-mode")
+async def registration_mode() -> dict:
+    """Whether an account can be created here, and how.
+
+    Public on purpose, and it returns the mode and nothing else. The login
+    screen needs it to decide whether to offer a Register button at all, and
+    the registration page needs it to decide whether a form makes sense without
+    an invite code. A visitor learns no more than they would by looking for a
+    sign-up link on any site that has one.
+    """
+    from handler.config.config_handler import config_handler
+    return {"mode": await config_handler.get_registration_mode()}
+
+
+class InviteCheckRequest(BaseModel):
+    code: str
+
+
+@router.post("/invite/check")
+async def check_invite(req: InviteCheckRequest, request: Request) -> dict:
+    """Whether an invite code is worth showing a registration form for.
+
+    POST rather than a code in the path, so the code stays out of access logs
+    and Referer headers. It answers yes or no and never why, and it does not
+    spend a use: opening an invite link must not burn the invite.
+
+    Rate limited because it is reachable without a session. That is a bound on
+    noise rather than the real defence, which is the code itself: 16 random
+    bytes from secrets.token_urlsafe leave nothing to guess at.
+    """
+    await brute_force.rate_limit(request, limit=20, window=300, key_prefix="invite_check")
+    from handler.database.invite_handler import invite_handler
+    return {"valid": await invite_handler.check(req.code.strip())}
+
+
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(req: UserCreate, request: Request) -> UserResponse:
     # Rate limit: max 5 registrations per IP per 5 minutes
@@ -243,11 +278,7 @@ async def register(req: UserCreate, request: Request) -> UserResponse:
     count = await _users_db.count()
     if count > 0:
         from handler.config.config_handler import config_handler
-        mode = await config_handler.get("registration_mode") or (
-            # Closed by default: an unconfigured instance must NOT accept public
-            # signups. The admin opens registration explicitly via Settings.
-            "open" if await config_handler.get_bool("enable_registrations", default=False) else "disabled"
-        )
+        mode = await config_handler.get_registration_mode()
         if mode == "disabled":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Registrations are disabled")
         if mode == "invite_only":
@@ -257,6 +288,8 @@ async def register(req: UserCreate, request: Request) -> UserResponse:
             from handler.database.invite_handler import invite_handler
             if not await invite_handler.validate_and_use(invite_code):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid, expired, or exhausted invite code")
+
+    ensure_password_ok(req.password)
 
     role = Role.ADMIN if count == 0 else Role.USER
     existing = await _users_db.get_by_username(req.username)
@@ -508,8 +541,7 @@ async def reset_password(req: ResetPasswordRequest, request: Request) -> dict:
     if not user:
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
-    if len(req.password) < 8 or not any(c.isalpha() for c in req.password) or not any(c.isdigit() for c in req.password):
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters with at least one letter and one digit")
+    ensure_password_ok(req.password)
 
     await _users_db.update(user, {"hashed_password": hash_password(req.password)})
     await session_handler.revoke_all_for_user(user.username)

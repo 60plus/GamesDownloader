@@ -10,6 +10,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from handler.gog_web import GOG_JSON_HEADERS, gog_image_url
 from handler.auth.scopes import Scope
 from handler.gog.gog_auth_handler import gog_auth_handler
 
@@ -68,10 +69,8 @@ def _require_scope(request: Request, *scopes: Scope) -> None:
 
 
 
-def _sanitize_search(term: str) -> str:
-    """Strip characters that could inject into IGDB Apicalypse query strings."""
-    # Remove quotes and semicolons which terminate/inject Apicalypse fields/queries
-    return term.replace('"', '').replace("'", '').replace(';', '').strip()[:128]
+from utils.apicalypse import sanitize_search as _sanitize_search
+from handler.metadata.igdb_auth import igdb_headers
 
 
 def _game_dict(g, owner_username: str | None = None) -> dict:
@@ -358,8 +357,18 @@ async def sync_library(
             result = await gog_sync_handler.sync_library(progress_cb=progress)
             _sync_status["synced"] = result.get("synced", 0)
             if not result.get("ok"):
+                # A sync that stopped partway now says so instead of reporting
+                # success and sending "Library Synced - N games" over a library
+                # it only got a third of the way through.
+                detail = result.get("error") or "sync did not finish"
+                done, total = result.get("pages_done"), result.get("pages_total")
+                if total:
+                    detail = (
+                        f"{detail} (stopped after page {done} of {total}, "
+                        f"{result.get('synced', 0)} games)"
+                    )
                 _sync_status["running"] = False
-                _sync_status["error"] = result.get("error")
+                _sync_status["error"] = detail
                 return
 
             count = result.get("synced", 0)
@@ -493,9 +502,7 @@ async def get_cover_options(
         # Always fetch from GOG API v2 by gog_id (works even after Clear Metadata)
         if game.gog_id:
             try:
-                from handler.library.library_scrape_handler import _abs_url
-                _HDRS = {"User-Agent": "Mozilla/5.0 GOGGalaxy/2.0", "Accept": "application/json"}
-                async with httpx.AsyncClient(timeout=10, headers=_HDRS) as c:
+                async with httpx.AsyncClient(timeout=10, headers=GOG_JSON_HEADERS) as c:
                     r = await c.get(f"https://api.gog.com/v2/games/{game.gog_id}?locale=en-US")
                     if r.status_code == 200:
                         links = r.json().get("_links") or {}
@@ -504,11 +511,11 @@ async def get_cover_options(
                               or (links.get("backgroundImage") or {}).get("href"))
                         logo_href = (links.get("logo") or {}).get("href")
                         if box_art:
-                            results.append({"url": _abs_url(box_art), "thumb": _abs_url(box_art), "type": "static", "label": "GOG Cover"})
+                            results.append({"url": gog_image_url(box_art), "thumb": gog_image_url(box_art), "type": "static", "label": "GOG Cover"})
                         if bg:
-                            results.append({"url": _abs_url(bg), "thumb": _abs_url(bg), "type": "static", "label": "GOG Background"})
+                            results.append({"url": gog_image_url(bg), "thumb": gog_image_url(bg), "type": "static", "label": "GOG Background"})
                         if logo_href:
-                            results.append({"url": _abs_url(logo_href), "thumb": _abs_url(logo_href), "type": "static", "label": "GOG Logo", "asset_type": "logos"})
+                            results.append({"url": gog_image_url(logo_href), "thumb": gog_image_url(logo_href), "type": "static", "label": "GOG Logo", "asset_type": "logos"})
             except Exception as exc:
                 logger.warning("GOG API v2 fetch failed: %s", exc)
 
@@ -516,14 +523,12 @@ async def get_cover_options(
         # Fetch logo from GOG API v2
         if game.gog_id:
             try:
-                from handler.library.library_scrape_handler import _abs_url
-                _HDRS = {"User-Agent": "Mozilla/5.0 GOGGalaxy/2.0", "Accept": "application/json"}
-                async with httpx.AsyncClient(timeout=10, headers=_HDRS) as c:
+                async with httpx.AsyncClient(timeout=10, headers=GOG_JSON_HEADERS) as c:
                     r = await c.get(f"https://api.gog.com/v2/games/{game.gog_id}?locale=en-US")
                     if r.status_code == 200:
                         logo_href = (r.json().get("_links") or {}).get("logo", {}).get("href")
                         if logo_href:
-                            results = [{"url": _abs_url(logo_href), "thumb": _abs_url(logo_href),
+                            results = [{"url": gog_image_url(logo_href), "thumb": gog_image_url(logo_href),
                                         "type": "static", "label": "GOG Logo", "asset_type": "logos"}]
             except Exception:
                 pass
@@ -554,17 +559,9 @@ async def get_cover_options(
                 return []
             async with httpx.AsyncClient(timeout=15) as c:
                 # Get Twitch OAuth token
-                tr = await c.post("https://id.twitch.tv/oauth2/token", params={
-                    "client_id":     client_id,
-                    "client_secret": client_secret,
-                    "grant_type":    "client_credentials",
-                })
-                if tr.status_code != 200:
+                headers = await igdb_headers(client_id, client_secret)
+                if headers is None:
                     return []
-                token = tr.json().get("access_token", "")
-                if not token:
-                    return []
-                headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
                 # Search IGDB
                 gr = await c.post(
                     "https://api.igdb.com/v4/games",
@@ -637,6 +634,11 @@ async def get_cover_options(
                     for item in r2.json().get("data", []):
                         mime = item.get("mime", "")
                         is_anim = mime in _SGDB_ANIMATED_MIMES
+                        # webm is a video container: <img> cannot play it and the
+                        # media downloader would save it with an image extension,
+                        # leaving a broken cover - only offer webp/gif animations.
+                        if mime == "video/webm":
+                            continue
                         # Respect animated filter
                         if animated == "only" and not is_anim:
                             continue
@@ -784,15 +786,13 @@ async def get_screenshot_options(
         if not ss_list and game.gog_id:
             # Fallback: fetch from GOG API v1
             try:
-                from handler.library.library_scrape_handler import _abs_url
-                _HDRS = {"User-Agent": "Mozilla/5.0 GOGGalaxy/2.0", "Accept": "application/json"}
-                async with httpx.AsyncClient(timeout=15, headers=_HDRS) as c:
+                async with httpx.AsyncClient(timeout=15, headers=GOG_JSON_HEADERS) as c:
                     r = await c.get(f"https://api.gog.com/products/{game.gog_id}?expand=screenshots&locale=en-US")
                     if r.status_code == 200:
                         for ss in (r.json().get("screenshots") or []):
                             img_id = ss.get("image_id", "")
                             if img_id:
-                                url = _abs_url(f"https://images-1.gog-statics.com/{img_id}.jpg" if not img_id.startswith("http") else img_id)
+                                url = gog_image_url(f"https://images-1.gog-statics.com/{img_id}.jpg" if not img_id.startswith("http") else img_id)
                                 ss_list.append(url)
             except Exception:
                 pass
@@ -814,16 +814,9 @@ async def get_screenshot_options(
             if not client_id or not client_secret:
                 return []
             async with httpx.AsyncClient(timeout=15) as c:
-                tr = await c.post("https://id.twitch.tv/oauth2/token", params={
-                    "client_id": client_id, "client_secret": client_secret,
-                    "grant_type": "client_credentials",
-                })
-                if tr.status_code != 200:
+                headers = await igdb_headers(client_id, client_secret)
+                if headers is None:
                     return []
-                token = tr.json().get("access_token", "")
-                if not token:
-                    return []
-                headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
                 gr = await c.post(
                     "https://api.igdb.com/v4/games",
                     headers=headers,
@@ -993,8 +986,7 @@ async def get_video_options(
             # Fallback: fetch from GOG API v1
             try:
                 import re as _re
-                _HDRS = {"User-Agent": "Mozilla/5.0 GOGGalaxy/2.0", "Accept": "application/json"}
-                async with httpx.AsyncClient(timeout=15, headers=_HDRS) as c:
+                async with httpx.AsyncClient(timeout=15, headers=GOG_JSON_HEADERS) as c:
                     r = await c.get(f"https://api.gog.com/products/{game.gog_id}?expand=videos&locale=en-US")
                     if r.status_code == 200:
                         for v in (r.json().get("videos") or []):
@@ -1024,16 +1016,9 @@ async def get_video_options(
             if not client_id or not client_secret:
                 return []
             async with httpx.AsyncClient(timeout=15) as c:
-                tr = await c.post("https://id.twitch.tv/oauth2/token", params={
-                    "client_id": client_id, "client_secret": client_secret,
-                    "grant_type": "client_credentials",
-                })
-                if tr.status_code != 200:
+                headers = await igdb_headers(client_id, client_secret)
+                if headers is None:
                     return []
-                token = tr.json().get("access_token", "")
-                if not token:
-                    return []
-                headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
                 gr = await c.post(
                     "https://api.igdb.com/v4/games",
                     headers=headers,
@@ -1104,8 +1089,8 @@ async def upload_media(
     if ext not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
-    from config import GD_BASE_PATH
-    game_dir = os.path.join(GD_BASE_PATH, "resources", "games", str(game_id))
+    from config import BASE_PATH
+    game_dir = os.path.join(BASE_PATH, "resources", "games", str(game_id))
     os.makedirs(game_dir, exist_ok=True)
 
     if media_type == "screenshot":
@@ -1219,23 +1204,40 @@ async def srl_search(request: Request, q: str = Query(..., description="Game tit
 async def srl_fetch(request: Request, url: str = Query(..., description="SRL requirements page URL")) -> dict:
     """Fetch and parse requirements from a given SRL URL."""
     _require_scope(request, Scope.GOG_READ)
+    from urllib.parse import urlparse
+
     from handler.gog.srl_handler import fetch_requirements, _BASE
 
-    # Validate URL is from SRL
-    if not url.startswith(_BASE):
+    # Compare the parsed host, not a string prefix. `startswith(_BASE)` was true
+    # for https://www.systemrequirementslab.com.attacker.example/x and for the
+    # userinfo form https://www.systemrequirementslab.com@attacker.example/,
+    # both of which resolve to somewhere else entirely.
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != urlparse(_BASE).hostname:
         raise HTTPException(status_code=400, detail="URL must be from systemrequirementslab.com")
 
     # Use a dummy title (we already have the URL, skip search step)
     import httpx as _httpx
     from bs4 import BeautifulSoup
-    from handler.gog.srl_handler import _find_container, _extract_section, _HDRS
+    # SRL is not GOG: these headers are a plain browser identity for
+    # systemrequirementslab.com, so they stayed in srl_handler when the GOG
+    # ones were collected into handler.gog_web.
+    from handler.gog.srl_handler import _find_container, _extract_section, _HDRS as SRL_HEADERS
+
+    from utils.http import loggable_error
+    from utils.net_guard import make_request_guard
 
     try:
-        async with _httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=20) as client:
+        async with _httpx.AsyncClient(
+            headers=SRL_HEADERS, follow_redirects=True, timeout=20,
+            # The client follows redirects, so the host check above only covers
+            # the first hop. This re-validates every one of them.
+            event_hooks={"request": [make_request_guard()]},
+        ) as client:
             pr = await client.get(url)
             pr.raise_for_status()
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"SRL fetch failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"SRL fetch failed: {loggable_error(exc)}")
 
     page = BeautifulSoup(pr.text, "html.parser")
     min_cont = _find_container(page, ["minimum", "min-req", "minreq"])

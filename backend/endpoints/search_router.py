@@ -56,15 +56,14 @@ async def search_global(
 
     term = f"%{query}%"
 
-    # Per-game deny overrides apply to search too - a hidden game must not be
-    # discoverable through the navbar (admins bypass, same as the list views).
-    denied: set[int] = set()
-    if not is_admin and user is not None:
-        from handler.database.library_handler import LibraryHandler
-        denied = await LibraryHandler().get_denied_game_ids_for_user(user.id)
+    # Everything hidden from the list views is hidden here too, or the navbar
+    # becomes the way to enumerate a restricted library: the per-game deny list
+    # was already honoured, library membership was not.
+    from handler.library.visibility import visibility_for
+    vis = await visibility_for(user) if user is not None else None
 
     emulation = await _search_emulation(term, limit)
-    library   = await _search_library(term, limit, denied)
+    library   = await _search_library(term, limit, vis)
     # GOG library is admin-only on the Home view, mirror that here so a
     # non-admin token cannot use the global search to enumerate the admin's
     # private GOG list.
@@ -124,8 +123,8 @@ async def _search_emulation(term: str, limit: int, *, session=None) -> list[dict
 
 
 @begin_session
-async def _search_library(term: str, limit: int, denied: set[int] | None = None,
-                          *, session=None) -> list[dict]:
+async def _search_library(term: str, limit: int, vis=None, *, session=None) -> list[dict]:
+    restricted = vis is not None and not vis.unrestricted
     stmt = (
         select(LibraryGame)
         # The result dict never touches g.files, but the relationship is
@@ -137,12 +136,19 @@ async def _search_library(term: str, limit: int, denied: set[int] | None = None,
         .where(LibraryGame.is_active == True,  # noqa: E712
                LibraryGame.title.ilike(term))
         .order_by(LibraryGame.title.asc())
-        .limit(limit)
+        # Library membership is decided per row rather than in SQL, so ask for
+        # headroom and trim after filtering. Otherwise a restricted user's
+        # search returns short whenever a hidden title sorts early.
+        .limit(limit * 4 if restricted else limit)
     )
-    if denied:
-        stmt = stmt.where(LibraryGame.id.not_in(denied))
+    if restricted and vis.denied_game_ids:
+        stmt = stmt.where(LibraryGame.id.not_in(vis.denied_game_ids))
     result = await session.execute(stmt)
     rows = result.scalars().all()
+
+    if restricted:
+        from handler.library.visibility import membership_map
+        rows = vis.filter(rows, await membership_map([g.id for g in rows]))[:limit]
     # GOG-published games keep most columns NULL on the library row and
     # inherit from the GOG entry (same fallback the list views apply) -
     # without it their covers and ratings come back empty here.

@@ -14,9 +14,9 @@ Source: https://gamesdb.launchbox-app.com/Metadata.zip
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import logging
+import os
 import re
 import shutil
 import sqlite3
@@ -97,22 +97,62 @@ def _open_connection(path: Path) -> sqlite3.Connection:
 
 # ── download ─────────────────────────────────────────────────────────────────
 
-async def _download_zip() -> bytes:
+# The archive is about 150 MB. The ceiling is for a server that answers with
+# something else entirely - an error page, a captcha, a redirect loop.
+_MAX_ZIP_BYTES = 512 * 1024 * 1024
+
+
+async def _download_zip(dest: Path) -> None:
+    """Fetch the metadata archive straight to *dest*.
+
+    It used to come back as `r.content` and be held in memory for the whole
+    parse - 150 MB alongside the complete ElementTree of the uncompressed XML,
+    which is the difference between a finished rebuild and an OOM kill on a
+    2 GB container. A kill is quiet and expensive: nothing awaits this task, and
+    the database is left unwritten, so every ROM lookup answers None until the
+    next cycle seven days later.
+
+    Written to a .part first and only moved into place once it is really a ZIP.
+    A body that is not one - an error page with a fresh timestamp - would
+    otherwise sit in the cache and suppress the next attempt for a week.
+    """
+    part = dest.with_name(dest.name + ".part")
     logger.info("Downloading LaunchBox metadata ZIP (~150 MB)…")
-    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
-        r = await c.get(_METADATA_URL)
-        r.raise_for_status()
-        return r.content
+    try:
+        free = shutil.disk_usage(dest.parent).free
+        if free < _MAX_ZIP_BYTES // 2:
+            raise RuntimeError(
+                f"only {free // (1024 ** 2)} MB free where the LaunchBox cache lives"
+            )
+        written = 0
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            async with c.stream("GET", _METADATA_URL) as r:
+                r.raise_for_status()
+                with part.open("wb") as fh:
+                    async for chunk in r.aiter_bytes(1 << 20):
+                        written += len(chunk)
+                        if written > _MAX_ZIP_BYTES:
+                            raise RuntimeError("LaunchBox archive is implausibly large")
+                        fh.write(chunk)
+        if not zipfile.is_zipfile(part):
+            raise RuntimeError("what came back is not a ZIP archive")
+        os.replace(part, dest)
+    finally:
+        part.unlink(missing_ok=True)
 
 
 # ── DB build (runs in thread pool) ───────────────────────────────────────────
 
-def _build_db(data: bytes, target: Path) -> None:
-    """Parse Metadata.zip bytes → SQLite DB at *target*.
+def _build_db(zip_path: Path, target: Path) -> None:
+    """Parse the Metadata.zip at *zip_path* → SQLite DB at *target*.
 
     Builds into a .tmp file and atomically renames to avoid a partially-built
-    DB being opened on a crash.  All memory (raw bytes, ElementTree) is
-    explicitly deleted after use so CPython can reclaim it promptly.
+    DB being opened on a crash. The ElementTree is deleted after use so CPython
+    can reclaim it promptly.
+
+    Takes a path rather than bytes: the archive used to be passed in as 150 MB
+    of memory that stayed resident for the whole parse, alongside the tree
+    itself. zipfile reads what it needs from the file.
     """
     tmp_p = Path(f"{target}.tmp")
     # A build that was interrupted - a container restart, a power cut - leaves
@@ -154,7 +194,7 @@ def _build_db(data: bytes, target: Path) -> None:
         """)
 
         # ── open ZIP and parse XML ───────────────────────────────────────────
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        with zipfile.ZipFile(str(zip_path)) as zf:
             names = zf.namelist()
             games_xml = next(
                 (n for n in names if n.endswith("Metadata.xml") or n == "Games.xml"), None
@@ -169,8 +209,6 @@ def _build_db(data: bytes, target: Path) -> None:
             logger.info("Parsing LaunchBox XML (%s)…", games_xml)
             with zf.open(games_xml) as f:
                 tree = ET.parse(f)
-        # Release the 150 MB raw bytes now - tree is all we need
-        del data
 
         root = tree.getroot()
 
@@ -292,17 +330,13 @@ async def _ensure_index() -> None:
         if need_rebuild:
             if need_download:
                 try:
-                    data = await _download_zip()
-                    zip_p.write_bytes(data)
+                    await _download_zip(zip_p)
                 except Exception as exc:
                     logger.error("Failed to download LaunchBox metadata: %s", exc)
                     if zip_p.exists():
                         logger.info("Using stale cached LaunchBox ZIP.")
-                        data = zip_p.read_bytes()
                     else:
                         return
-            else:
-                data = zip_p.read_bytes()
 
             # Close existing connection before rebuild
             with _query_lock:
@@ -312,8 +346,7 @@ async def _ensure_index() -> None:
                 _db_ready = False
 
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, _build_db, data, db)
-            del data   # help GC
+            await loop.run_in_executor(None, _build_db, zip_p, db)
 
         # Open connection (or re-open after rebuild)
         with _query_lock:

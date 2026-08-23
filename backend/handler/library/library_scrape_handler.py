@@ -4,7 +4,9 @@ Scrapes metadata for LibraryGame records from multiple public sources.
 Sources are applied in priority order; each one fills only fields still missing.
 
 Priority:
-  1. GOG public API  - description, cover, screenshots, videos, genres, features, requirements
+  1. GOG public API  - description, cover, screenshots, videos, genres, features
+                       (NOT requirements: v1 stopped carrying them, and asking
+                       for that expand makes GOG refuse the whole call)
   2. Steam Store API - fallback description, requirements, OS flags, Metacritic rating
   3. RAWG            - rating, requirements fallback
   4. IGDB            - rating
@@ -20,19 +22,26 @@ from typing import Any
 
 import httpx
 
+from utils.apicalypse import sanitize_search
+from handler.gog_web import GOG_GALAXY_HEADERS, gog_image_url
+from handler.metadata.igdb_auth import igdb_headers
+
 logger = logging.getLogger(__name__)
 
 # ── GOG public endpoints (no auth required) ────────────────────────────────────
 _GOG_CATALOG   = "https://catalog.gog.com/v1/catalog"
-_GOG_V1        = "https://api.gog.com/products/{gog_id}?expand=description,screenshots,videos,system_requirements&locale=en-US"
+# No system_requirements in the expand list. GOG went from ignoring an unknown
+# expand to rejecting the whole request with a 400, and this call is where the
+# description, the screenshots and the videos come from - so asking for the one
+# field it will not give cost us the three it would have. The GOG scraper was
+# fixed when that happened; this copy was not, and had been returning nothing
+# ever since, quietly, because the failure is caught and logged at debug.
+# Requirements are not in v1 any more at all; v2 carries them, under
+# _embedded.supportedOperatingSystems[].systemRequirements.
+_GOG_V1        = "https://api.gog.com/products/{gog_id}?expand=description,screenshots,videos&locale=en-US"
 _GOG_V2        = "https://api.gog.com/v2/games/{gog_id}?locale=en-US"
 _GOG_REVIEWS   = "https://reviews.gog.com/v1/products/{gog_id}/reviews?language=in:en-US&limit=1"
 
-_HDRS = {
-    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GOGGalaxy/2.0",
-    "Accept":          "application/json",
-    "Accept-Language": "en-US,en;q=0.9",
-}
 
 
 # ── Image helpers ──────────────────────────────────────────────────────────────
@@ -57,16 +66,6 @@ def _titles_similar(query: str, result: str, threshold: float = 0.55) -> bool:
     overlap  = len(q_words & r_words)
     shorter  = min(len(q_words), len(r_words))
     return (overlap / shorter) >= threshold if shorter else False
-
-
-def _abs_url(url: str) -> str:
-    if not url:
-        return ""
-    if url.startswith("//"):
-        return "https:" + url
-    if url.startswith("/"):
-        return "https://images.gog.com" + url
-    return url
 
 
 def _yt_id(url: str) -> str:
@@ -118,10 +117,15 @@ async def _search_gog_catalog(title: str, client: httpx.AsyncClient) -> int | No
 async def _fetch_gog_v1(gog_id: int, client: httpx.AsyncClient) -> dict:
     try:
         r = await client.get(_GOG_V1.format(gog_id=gog_id), timeout=15)
-        r.raise_for_status()
+        # Loud when GOG refuses. A silent debug line is how a malformed expand
+        # went unnoticed here: every scrape lost its description, screenshots
+        # and videos, and the only trace was a log level nobody runs at.
+        if r.status_code >= 400:
+            logger.warning("GOG v1 refused id=%s with HTTP %d", gog_id, r.status_code)
+            return {}
         return r.json()
     except Exception as exc:
-        logger.debug("GOG v1 failed for id=%s: %s", gog_id, exc)
+        logger.warning("GOG v1 failed for id=%s: %s", gog_id, type(exc).__name__)
         return {}
 
 
@@ -211,7 +215,7 @@ def _apply_gog_v1v2(game: Any, v1: dict, v2: dict, rating: float | None) -> list
             bg = ((links.get("galaxyBackgroundImage") or {}).get("href")
                   or (links.get("backgroundImage") or {}).get("href"))
         if bg:
-            game.background_path = _abs_url(str(bg))
+            game.background_path = gog_image_url(str(bg))
             applied.append("background")
 
     if not game.cover_path:
@@ -221,7 +225,7 @@ def _apply_gog_v1v2(game: Any, v1: dict, v2: dict, rating: float | None) -> list
             cover = (images.get("coverLarge") or images.get("cover")
                      or images.get("logo2x") or images.get("logo") or "")
         if cover:
-            game.cover_path = _abs_url(str(cover))
+            game.cover_path = gog_image_url(str(cover))
             applied.append("cover")
 
     # Screenshots
@@ -233,7 +237,7 @@ def _apply_gog_v1v2(game: Any, v1: dict, v2: dict, rating: float | None) -> list
             if not image_id:
                 return ""
             if image_id.startswith("http") or image_id.startswith("//"):
-                return _abs_url(image_id)
+                return gog_image_url(image_id)
             return f"{img_base}{image_id}.jpg"
 
         urls = [_img_url(s.get("image_id", "")) for s in ss_raw if s.get("image_id")]
@@ -305,43 +309,6 @@ def _apply_gog_v1v2(game: Any, v1: dict, v2: dict, rating: float | None) -> list
             applied.append("os_linux")
 
     # System requirements
-    raw_reqs = v1.get("system_requirements")
-    if raw_reqs and not game.requirements:
-        if isinstance(raw_reqs, dict):
-            reqs: dict = {}
-            min_req = raw_reqs.get("minimum_system_requirements")
-            rec_req = raw_reqs.get("recommended_system_requirements")
-            if isinstance(min_req, dict) and min_req:
-                reqs["minimum"] = min_req
-            if isinstance(rec_req, dict) and rec_req:
-                reqs["recommended"] = rec_req
-            if "requirement_groups" in raw_reqs:
-                reqs["per_os"] = raw_reqs["requirement_groups"]
-            elif isinstance(raw_reqs.get("systems"), list):
-                reqs["per_os"] = raw_reqs["systems"]
-            if reqs:
-                game.requirements = reqs
-                applied.append("requirements(gog)")
-        elif isinstance(raw_reqs, list) and raw_reqs:
-            first = raw_reqs[0]
-            first_type = first.get("type", "").lower()
-            if first_type in ("minimum", "recommended"):
-                game.requirements = {"per_os": [{"type": "windows", "requirement_groups": raw_reqs}]}
-            elif isinstance(first.get("requirements"), list):
-                reqs_flat: dict = {}
-                for item in raw_reqs:
-                    for r in (item.get("requirements") or []):
-                        key = r.get("id") or (r.get("name") or "").lower().rstrip(": ").replace(" ", "_")
-                        val = r.get("description") or ""
-                        if key and val:
-                            reqs_flat[key] = val
-                if reqs_flat:
-                    game.requirements = {"minimum": reqs_flat}
-            else:
-                game.requirements = {"per_os": raw_reqs}
-            if game.requirements:
-                applied.append("requirements(gog)")
-
     # Genres / tags / developer / publisher (v2 is richer)
     embedded = v2.get("_embedded") or {}
     all_tags = embedded.get("tags") or []
@@ -484,7 +451,7 @@ async def _fetch_external_ratings(game: Any) -> list[str]:
     igdb_rating: float | None = None
     applied: list[str] = []
 
-    async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=10) as c:
+    async with httpx.AsyncClient(headers=GOG_GALAXY_HEADERS, follow_redirects=True, timeout=10) as c:
         # ── RAWG ──────────────────────────────────────────────────────────────
         if rawg_key:
             try:
@@ -528,97 +495,85 @@ async def _fetch_external_ratings(game: Any) -> list[str]:
         # ── IGDB ──────────────────────────────────────────────────────────────
         if igdb_client_id and igdb_client_sec:
             try:
-                tr = await c.post(
-                    "https://id.twitch.tv/oauth2/token",
-                    params={
-                        "client_id":     igdb_client_id,
-                        "client_secret": igdb_client_sec,
-                        "grant_type":    "client_credentials",
-                    },
-                )
-                if tr.status_code == 200:
-                    token = tr.json().get("access_token", "")
-                    if token:
-                        safe_title = title.replace('"', '').replace("'", '').replace(';', '').strip()[:128]
-                        gr = await c.post(
-                            "https://api.igdb.com/v4/games",
-                            headers={
-                                "Client-ID":     igdb_client_id,
-                                "Authorization": f"Bearer {token}",
-                            },
-                            content=(
-                                f'fields total_rating,aggregated_rating,summary,first_release_date,'
-                                f'genres.name,involved_companies.company.name,involved_companies.developer,'
-                                f'involved_companies.publisher,screenshots.url;'
-                                f' search "{safe_title}"; limit 3;'
-                            ),
+                hdrs = await igdb_headers(igdb_client_id, igdb_client_sec)
+                if hdrs:
+                    safe_title = sanitize_search(title)
+                    gr = await c.post(
+                        "https://api.igdb.com/v4/games",
+                        headers=hdrs,
+                        content=(
+                            f'fields total_rating,aggregated_rating,summary,first_release_date,'
+                            f'genres.name,involved_companies.company.name,involved_companies.developer,'
+                            f'involved_companies.publisher,screenshots.url;'
+                            f' search "{safe_title}"; limit 3;'
+                        ),
+                    )
+                    if gr.status_code == 200 and gr.json():
+                        # Pick the best-matching IGDB result; skip unrelated titles
+                        ig_results = gr.json()
+                        ig = next(
+                            (x for x in ig_results
+                             if _titles_similar(title, x.get("name") or "")),
+                            None,
                         )
-                        if gr.status_code == 200 and gr.json():
-                            # Pick the best-matching IGDB result; skip unrelated titles
-                            ig_results = gr.json()
-                            ig = next(
-                                (x for x in ig_results
-                                 if _titles_similar(title, x.get("name") or "")),
-                                None,
+                        if ig is None:
+                            logger.debug(
+                                "IGDB: no similar match for '%s' (best: '%s')",
+                                title, ig_results[0].get("name", ""),
                             )
-                            if ig is None:
-                                logger.debug(
-                                    "IGDB: no similar match for '%s' (best: '%s')",
-                                    title, ig_results[0].get("name", ""),
-                                )
-                            if ig:
-                                r_val = ig.get("total_rating") or ig.get("aggregated_rating")
-                                if r_val:
-                                    igdb_rating = float(r_val)
-                                # Fill description from IGDB summary if missing
-                                if not game.description and ig.get("summary"):
-                                    game.description = ig["summary"]
-                                    applied.append("description(igdb)")
-                                # Fill genres from IGDB if missing
-                                if not game.genres:
-                                    ig_genres = ig.get("genres") or []
-                                    gnames = [g["name"] for g in ig_genres if isinstance(g, dict) and g.get("name")]
-                                    if gnames:
-                                        game.genres = gnames
-                                        applied.append("genres(igdb)")
-                                # Fill release date if missing
-                                if not game.release_date and ig.get("first_release_date"):
-                                    from datetime import datetime, timezone
-                                    try:
-                                        dt = datetime.fromtimestamp(ig["first_release_date"], tz=timezone.utc)
-                                        game.release_date = dt.strftime("%Y-%m-%d")
-                                        applied.append("release_date(igdb)")
-                                    except Exception:
-                                        pass
-                                # Fill developer / publisher from IGDB if missing
-                                if not game.developer:
-                                    devs = [
-                                        ic.get("company", {}).get("name")
-                                        for ic in (ig.get("involved_companies") or [])
-                                        if ic.get("developer") and isinstance(ic.get("company"), dict)
-                                    ]
-                                    if devs:
-                                        game.developer = ", ".join(filter(None, devs))
-                                        applied.append("developer(igdb)")
-                                if not game.publisher:
-                                    pubs = [
-                                        ic.get("company", {}).get("name")
-                                        for ic in (ig.get("involved_companies") or [])
-                                        if ic.get("publisher") and isinstance(ic.get("company"), dict)
-                                    ]
-                                    if pubs:
-                                        game.publisher = ", ".join(filter(None, pubs))
-                                        applied.append("publisher(igdb)")
-                                # Screenshots from IGDB if missing
-                                if not game.screenshots:
-                                    ss = [
-                                        "https:" + s["url"].replace("t_thumb", "t_screenshot_huge")
-                                        for s in (ig.get("screenshots") or [])
-                                        if isinstance(s, dict) and s.get("url")
-                                    ]
-                                    if ss:
-                                        game.screenshots = ss[:12]
-                                        applied.append("screenshots(igdb)")
+                        if ig:
+                            r_val = ig.get("total_rating") or ig.get("aggregated_rating")
+                            if r_val:
+                                igdb_rating = float(r_val)
+                            # Fill description from IGDB summary if missing
+                            if not game.description and ig.get("summary"):
+                                game.description = ig["summary"]
+                                applied.append("description(igdb)")
+                            # Fill genres from IGDB if missing
+                            if not game.genres:
+                                ig_genres = ig.get("genres") or []
+                                gnames = [g["name"] for g in ig_genres if isinstance(g, dict) and g.get("name")]
+                                if gnames:
+                                    game.genres = gnames
+                                    applied.append("genres(igdb)")
+                            # Fill release date if missing
+                            if not game.release_date and ig.get("first_release_date"):
+                                from datetime import datetime, timezone
+                                try:
+                                    dt = datetime.fromtimestamp(ig["first_release_date"], tz=timezone.utc)
+                                    game.release_date = dt.strftime("%Y-%m-%d")
+                                    applied.append("release_date(igdb)")
+                                except Exception:
+                                    pass
+                            # Fill developer / publisher from IGDB if missing
+                            if not game.developer:
+                                devs = [
+                                    ic.get("company", {}).get("name")
+                                    for ic in (ig.get("involved_companies") or [])
+                                    if ic.get("developer") and isinstance(ic.get("company"), dict)
+                                ]
+                                if devs:
+                                    game.developer = ", ".join(filter(None, devs))
+                                    applied.append("developer(igdb)")
+                            if not game.publisher:
+                                pubs = [
+                                    ic.get("company", {}).get("name")
+                                    for ic in (ig.get("involved_companies") or [])
+                                    if ic.get("publisher") and isinstance(ic.get("company"), dict)
+                                ]
+                                if pubs:
+                                    game.publisher = ", ".join(filter(None, pubs))
+                                    applied.append("publisher(igdb)")
+                            # Screenshots from IGDB if missing
+                            if not game.screenshots:
+                                ss = [
+                                    "https:" + s["url"].replace("t_thumb", "t_screenshot_huge")
+                                    for s in (ig.get("screenshots") or [])
+                                    if isinstance(s, dict) and s.get("url")
+                                ]
+                                if ss:
+                                    game.screenshots = ss[:12]
+                                    applied.append("screenshots(igdb)")
             except Exception as exc:
                 logger.debug("IGDB fetch skipped for '%s': %s", title, exc)
 
@@ -666,7 +621,7 @@ async def scrape_library_game(game: Any) -> dict:
     gog_id_found: int | None = None
 
     # ── 1. GOG public API ──────────────────────────────────────────────────────
-    async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=20) as client:
+    async with httpx.AsyncClient(headers=GOG_GALAXY_HEADERS, follow_redirects=True, timeout=20) as client:
         gog_id = await _search_gog_catalog(game.title or "", client)
         if gog_id:
             gog_id_found = gog_id

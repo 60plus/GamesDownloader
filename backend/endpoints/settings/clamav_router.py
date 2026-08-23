@@ -18,6 +18,7 @@ from handler.config.config_handler import config_handler
 from handler.database.scan_handler import scan_handler
 from handler.database.quarantine_handler import quarantine_handler
 from handler.clamav import clamav_handler
+from utils.async_utils import fire_task
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,7 @@ async def save_config(request: Request, body: ClamavConfig):
 @protected_route(clamav_router.post, "/update-definitions", scopes=[Scope.SETTINGS_WRITE])
 async def update_definitions(request: Request):
     """Trigger freshclam in the background. Progress via Socket.IO: clamav:update_progress"""
-    asyncio.create_task(clamav_handler.update_definitions())
+    fire_task(clamav_handler.update_definitions())
     return {"ok": True, "message": "Definition update started"}
 
 

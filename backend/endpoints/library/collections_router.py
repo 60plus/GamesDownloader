@@ -135,6 +135,17 @@ async def _admin_username() -> str:
     return name or "Admin"
 
 
+async def _visible_members(user, games: list[LibraryGame]) -> list[LibraryGame]:
+    """Drop members this user may not see, before anything is serialised."""
+    if not games:
+        return []
+    from handler.library.visibility import membership_map, visibility_for
+    vis = await visibility_for(user)
+    if vis.unrestricted:
+        return games
+    return vis.filter(games, await membership_map([g.id for g in games]))
+
+
 async def _serialize_member_games(games: list[LibraryGame]) -> list[dict]:
     """Reuse the library game serialiser (with GOG metadata fallback) for the
     detail view's member list; resolve owner names like the Games library."""
@@ -200,7 +211,7 @@ def _agg_meta(coll, *, covers: list[str], ratings: list[float], years: list[int]
 # ── List (grid) ───────────────────────────────────────────────────────────────
 
 
-@protected_route(router.get, "")
+@protected_route(router.get, "", scopes=[Scopes.LIBRARY_READ])
 async def list_collections(request: Request, library: str | None = None) -> list[dict]:
     """Collections with member count, newest member covers (for the auto stack),
     average rating and year range. Scoped to one container library when `library`
@@ -310,7 +321,7 @@ async def set_game_collections(request: Request, game_id: int, body: CollectionM
 # ── Detail ────────────────────────────────────────────────────────────────────
 
 
-@protected_route(router.get, "/{slug}")
+@protected_route(router.get, "/{slug}", scopes=[Scopes.LIBRARY_READ])
 async def get_collection(request: Request, slug: str) -> dict:
     """A collection's metadata plus its member games (newest first)."""
     coll = await collection_handler.get_by_slug(slug)
@@ -318,6 +329,11 @@ async def get_collection(request: Request, slug: str) -> dict:
         raise HTTPException(status_code=404, detail="Collection not found")
 
     members = await collection_handler.get_members(coll.id)
+    # A collection is a view onto the library, so it obeys the library's
+    # visibility rules. This route used to answer with every member and its
+    # full file list, which made it the way around both the per-game deny list
+    # and a restricted library.
+    members = await _visible_members(request.state.user, members)
     games = await _serialize_member_games(members)
     games.sort(key=lambda g: (g.get("release_date") is not None, g.get("release_date") or ""), reverse=True)
 

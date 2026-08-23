@@ -13,6 +13,11 @@ import logging
 
 import httpx
 
+from handler.gog_web import gog_image_url
+
+from utils.apicalypse import sanitize_search
+from handler.metadata.igdb_auth import igdb_headers
+
 logger = logging.getLogger(__name__)
 
 _SGDB_ANIMATED_MIMES = ("video/webm", "image/gif", "image/webp")
@@ -40,7 +45,6 @@ async def search_cover_options(
 
     if source == "gog":
         try:
-            from handler.library.library_scrape_handler import _abs_url
             _GOG_CATALOG = "https://catalog.gog.com/v1/catalog"
             _GOG_V2 = "https://api.gog.com/v2/games/{gog_id}?locale=en-US"
             _HDRS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GOGGalaxy/2.0", "Accept": "application/json"}
@@ -67,13 +71,13 @@ async def search_cover_options(
                         logo = (links.get("logo") or {}).get("href")
                         t = data.get("_embedded", {}).get("product", {}).get("title", search_term)
                         if box_art:
-                            results.append({"url": _abs_url(box_art), "thumb": _abs_url(box_art),
+                            results.append({"url": gog_image_url(box_art), "thumb": gog_image_url(box_art),
                                             "type": "static", "label": f"{t} - Box Art"})
                         if bg:
-                            results.append({"url": _abs_url(bg), "thumb": _abs_url(bg),
+                            results.append({"url": gog_image_url(bg), "thumb": gog_image_url(bg),
                                             "type": "static", "label": f"{t} - Background"})
                         if logo:
-                            results.append({"url": _abs_url(logo), "thumb": _abs_url(logo),
+                            results.append({"url": gog_image_url(logo), "thumb": gog_image_url(logo),
                                             "type": "static", "label": f"{t} - Logo"})
 
                 # Also search the catalog by title for additional results.
@@ -86,7 +90,7 @@ async def search_cover_options(
                         cover_v = p.get("coverVertical")
                         title = p.get("title", "")
                         if cover_v:
-                            url = _abs_url(cover_v)
+                            url = gog_image_url(cover_v)
                             if not any(r["url"] == url for r in results):
                                 results.append({"url": url, "thumb": url,
                                                 "type": "static", "label": f"{title} - Cover"})
@@ -101,20 +105,13 @@ async def search_cover_options(
             if not client_id or not client_secret:
                 return []
             async with httpx.AsyncClient(timeout=15) as c:
-                tr = await c.post("https://id.twitch.tv/oauth2/token", params={
-                    "client_id": client_id, "client_secret": client_secret,
-                    "grant_type": "client_credentials",
-                })
-                if tr.status_code != 200:
+                headers = await igdb_headers(client_id, client_secret)
+                if headers is None:
                     return []
-                token = tr.json().get("access_token", "")
-                if not token:
-                    return []
-                headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
                 gr = await c.post(
                     "https://api.igdb.com/v4/games",
                     headers=headers,
-                    content=f'search "{search_term}"; fields cover.image_id; limit 20;',
+                    content=f'search "{sanitize_search(search_term)}"; fields cover.image_id; limit 20;',
                 )
                 if gr.status_code != 200:
                     return []

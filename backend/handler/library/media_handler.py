@@ -20,16 +20,13 @@ from pathlib import Path
 
 from utils.http import fetch_media_bytes
 
-try:
-    from config import GD_BASE_PATH
-except ImportError:
-    GD_BASE_PATH = "/data"
+from config import BASE_PATH
 
 logger = logging.getLogger(__name__)
 
-RESOURCES_PATH = Path(GD_BASE_PATH) / "resources" / "library"
-COLLECTION_COVERS_PATH = Path(GD_BASE_PATH) / "resources" / "collection-covers"
-REQUEST_COVERS_PATH = Path(GD_BASE_PATH) / "resources" / "request-covers"
+RESOURCES_PATH = Path(BASE_PATH) / "resources" / "library"
+COLLECTION_COVERS_PATH = Path(BASE_PATH) / "resources" / "collection-covers"
+REQUEST_COVERS_PATH = Path(BASE_PATH) / "resources" / "request-covers"
 
 _HDRS = {
     "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -284,10 +281,70 @@ def _video_format(quality: str) -> str:
     return "/".join(parts)
 
 
-async def download_youtube_video(game_id: int, video_id: str, quality: str = "1080") -> str | None:
+# yt-dlp needs a JavaScript engine to read YouTube's player, and as of the 2026
+# releases it only reaches for deno unless told otherwise. Deno is not in our
+# image; node is. Without naming it, every fetch logs "No supported JavaScript
+# runtime could be found" and a deprecation notice. Both are listed so the
+# entry keeps working if the image ever gains deno.
+#
+# Measured before changing it: a 1080p trailer came down to the same byte count
+# either way, so this is future proofing, not a fix for anything failing today.
+#
+# yt-dlp will additionally ask for its "challenge solver script", which it wants
+# to DOWNLOAD FROM GITHUB AT RUNTIME (--remote-components ejs:github). That is
+# fetching and executing third party code on every deploy, and nothing needs it
+# yet, so it stays off deliberately. Revisit only if trailers actually start
+# failing or arriving at a throttled speed.
+_JS_RUNTIMES = {"node": {}, "deno": {}}
+
+# What went wrong, in words the person who pressed the button can act on. The
+# raw yt-dlp text is three lines of wiki links about exporting cookies, which is
+# not an answer for someone looking at a game page.
+_TRAILER_ERRORS = (
+    ("sign in to confirm your age", "age_restricted"),
+    ("confirm your age",            "age_restricted"),
+    ("age-restricted",              "age_restricted"),
+    ("private video",               "private"),
+    ("members-only",                "private"),
+    ("video unavailable",           "unavailable"),
+    ("this video is unavailable",   "unavailable"),
+    ("has been removed",            "unavailable"),
+    ("account associated",          "unavailable"),
+    ("not available in your country", "geo_blocked"),
+    ("blocked it in your country",  "geo_blocked"),
+    ("requested format is not available", "no_format"),
+    ("sign in to confirm you",      "bot_check"),
+    ("unable to download",          "network"),
+    ("timed out",                   "network"),
+    ("connection",                  "network"),
+)
+
+
+def _classify_trailer_error(message: str) -> str:
+    """Map a yt-dlp failure onto a stable code the frontend can translate.
+
+    Codes are matched in order because YouTube's age message also contains the
+    word "sign in", which would otherwise be read as the bot check.
+    """
+    low = (message or "").lower()
+    for needle, code in _TRAILER_ERRORS:
+        if needle in low:
+            return code
+    return "failed"
+
+
+async def download_youtube_video(
+    game_id: int, video_id: str, quality: str = "1080",
+) -> tuple[str | None, str | None]:
     """Download a trailer to resources/library/{id}/video/video.{ext} via
     yt-dlp so players serve it locally (same rule as covers: never hotlink).
-    Runs the blocking yt-dlp call in a thread; returns the local URL."""
+    Runs the blocking yt-dlp call in a thread.
+
+    Returns (local_url, None) on success and (None, error_code) on failure.
+    It used to return None either way, which meant a trailer YouTube refuses to
+    hand over was indistinguishable from one still downloading: the editor
+    polled for five minutes and then gave up without telling anyone anything.
+    """
     import asyncio
 
     def _dl() -> str | None:
@@ -300,6 +357,7 @@ async def download_youtube_video(game_id: int, video_id: str, quality: str = "10
             "quiet": True,
             "noprogress": True,
             "noplaylist": True,
+            "js_runtimes": _JS_RUNTIMES,
         }
         with YoutubeDL(opts) as ydl:
             ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
@@ -310,10 +368,24 @@ async def download_youtube_video(game_id: int, video_id: str, quality: str = "10
         return None
 
     try:
-        return await asyncio.to_thread(_dl)
+        url = await asyncio.to_thread(_dl)
     except Exception as exc:
-        logger.warning("Trailer download failed game_id=%s video=%s: %s", game_id, video_id, exc)
-        return None
+        code = _classify_trailer_error(str(exc))
+        logger.warning(
+            "Trailer download failed game_id=%s video=%s (%s): %s",
+            game_id, video_id, code, exc,
+        )
+        return None, code
+
+    if url:
+        return url, None
+
+    # yt-dlp reported success but left nothing behind. Rare, and worth its own
+    # code rather than being folded into the generic failure.
+    logger.warning(
+        "Trailer download produced no file game_id=%s video=%s", game_id, video_id,
+    )
+    return None, "no_file"
 
 
 async def save_uploaded_video(game_id: int, upload, ext: str, max_bytes: int) -> str | None:

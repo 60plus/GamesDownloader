@@ -52,3 +52,18 @@ async def gather_bounded(coros: list, *, parallel: bool, limit: int = DEFAULT_ME
             return await c
 
     return await asyncio.gather(*[_guard(c) for c in coros])
+
+def note_unscanned(scan_result: dict, what: str, where: str) -> None:
+    """Say so when scanning was asked for and no verdict came back.
+
+    ClamAV fails open by design - a daemon that is down must not block every
+    upload - but "skipped" and "error" were silent on three of the four paths
+    that scan. The admin had turned scanning on, the file was stored without a
+    verdict, and nothing anywhere said so. Only the GOG download path logged it.
+    """
+    status = (scan_result or {}).get("status")
+    if status in ("skipped", "error"):
+        logger.warning(
+            "ClamAV did not scan %s '%s' (status=%s): %s - stored UNSCANNED",
+            what, where, status, (scan_result or {}).get("message") or "no detail",
+        )

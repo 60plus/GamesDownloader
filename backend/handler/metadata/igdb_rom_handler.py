@@ -7,40 +7,25 @@ are stored via config_handler (same keys used by the regular library scraper).
 from __future__ import annotations
 
 import logging
-import time
-from typing import Any
 
 import httpx
 
+from handler.metadata.igdb_auth import get_token
+
 logger = logging.getLogger(__name__)
 
-_TOKEN_URL  = "https://id.twitch.tv/oauth2/token"
 _IGDB_URL   = "https://api.igdb.com/v4"
-
-_token_cache: dict[str, Any] = {}   # { access_token, expires_at }
-
-
-async def _get_access_token(client_id: str, client_secret: str) -> str:
-    now = time.time()
-    if _token_cache.get("access_token") and _token_cache.get("expires_at", 0) > now + 60:
-        return _token_cache["access_token"]
-
-    async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.post(_TOKEN_URL, params={
-            "client_id":     client_id,
-            "client_secret": client_secret,
-            "grant_type":    "client_credentials",
-        })
-        r.raise_for_status()
-        data = r.json()
-
-    _token_cache["access_token"] = data["access_token"]
-    _token_cache["expires_at"]   = now + data.get("expires_in", 3600)
-    return _token_cache["access_token"]
 
 
 async def _igdb_post(endpoint: str, body: str, client_id: str, client_secret: str) -> list[dict]:
-    token = await _get_access_token(client_id, client_secret)
+    # This module used to keep its own token cache, the only one in the project
+    # that did. It now shares the cache with every other IGDB caller, so a token
+    # fetched for a ROM lookup is reused by a library scrape and the other way
+    # round. An unusable token means no results rather than an exception, which
+    # is what the rest of the callers already expected.
+    token = await get_token(client_id, client_secret)
+    if not token:
+        return []
     headers = {
         "Client-ID":     client_id,
         "Authorization": f"Bearer {token}",

@@ -573,6 +573,16 @@ async def _queue_entry_downloads_locked(
                 # download shows there - a catalogue download otherwise queued
                 # silently and only appeared after a manual refresh.
                 tray=True,
+                # A pasted link refuses to land on a name that already exists,
+                # because a typo should not be able to replace a finished game.
+                # Here the destination comes from an asset the user picked in
+                # the store, and re-downloading a build is a normal thing to do
+                # when one arrives damaged, so it is allowed to replace.
+                #
+                # Safe now in a way it was not: the download goes to a .part and
+                # only takes the real name once it is complete and scanned, so
+                # the existing file survives a failure at any point.
+                overwrite=True,
             )
             started.append({"name": asset.get("name"), **job})
         except ValueError as exc:

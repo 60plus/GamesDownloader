@@ -140,3 +140,63 @@ async def download_roms(request: Request, source_id: str, body: DownloadBody) ->
         raise HTTPException(status_code=404, detail="ROM source not found")
     except PermissionError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+
+@protected_route(router.post, "/{source_id}/refresh", scopes=[Scopes.LIBRARY_ADMIN])
+async def refresh_source(request: Request, source_id: str) -> dict:
+    """Drop this source's cached listings so the next one is fetched again.
+
+    A listing that failed, or that came back empty while the archive was down,
+    is otherwise served from the source's own cache until it expires - which
+    reads, from the platform screen, as a source that has nothing in it.
+    """
+    try:
+        return await rsh.refresh_source(source_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="ROM source not found")
+
+
+# ── Controlling a download in flight ───────────────────────────────────────────
+#
+# A ROM download used to be a task nobody kept a handle on: it could be started
+# and then only watched. These four give the panel the same controls the GOG
+# downloads next to it already had. The queue is held in memory, so a restart
+# still forgets it - what a restart leaves behind is the .part file, which a
+# retry picks up rather than fetching those bytes a second time.
+
+@protected_route(router.get, "/downloads", scopes=[Scopes.LIBRARY_ADMIN])
+async def list_downloads(request: Request) -> dict:
+    """Jobs this process still knows about, so a reloaded page finds them again."""
+    return {"jobs": rsh.list_jobs()}
+
+
+@protected_route(router.post, "/downloads/{job_id}/pause", scopes=[Scopes.LIBRARY_ADMIN])
+async def pause_download(request: Request, job_id: int) -> dict:
+    if not await rsh.pause_job(job_id):
+        raise HTTPException(status_code=400, detail="This download cannot be paused")
+    return {"ok": True}
+
+
+@protected_route(router.post, "/downloads/{job_id}/resume", scopes=[Scopes.LIBRARY_ADMIN])
+async def resume_download(request: Request, job_id: int) -> dict:
+    if not await rsh.resume_job(job_id):
+        raise HTTPException(status_code=400, detail="This download is not paused")
+    return {"ok": True}
+
+
+@protected_route(router.post, "/downloads/{job_id}/retry", scopes=[Scopes.LIBRARY_ADMIN])
+async def retry_download(request: Request, job_id: int) -> dict:
+    if not await rsh.retry_job(job_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This download cannot be retried - it is not finished, or the "
+                   "same file is being downloaded already")
+    return {"ok": True}
+
+
+@protected_route(router.delete, "/downloads/{job_id}", scopes=[Scopes.LIBRARY_ADMIN])
+async def cancel_download(request: Request, job_id: int) -> dict:
+    """Stop and delete a running one, or drop a finished one from the list."""
+    if not await rsh.cancel_or_forget_job(job_id):
+        raise HTTPException(status_code=404, detail="Download not found")
+    return {"ok": True}

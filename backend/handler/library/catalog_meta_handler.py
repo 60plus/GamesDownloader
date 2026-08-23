@@ -29,6 +29,8 @@ from sqlalchemy import select
 
 from handler.library.catalog_sync_handler import store_catalog_media
 from models.catalog_entry import CatalogEntry
+from utils.apicalypse import sanitize_search
+from handler.metadata.igdb_auth import get_token
 
 logger = logging.getLogger(__name__)
 
@@ -395,16 +397,14 @@ def _igdb_shot_urls(raw: dict) -> list[str]:
 
 
 async def _igdb_token(client, cid: str, secret: str) -> str:
-    r = await client.post(
-        "https://id.twitch.tv/oauth2/token",
-        params={"client_id": cid, "client_secret": secret,
-                "grant_type": "client_credentials"},
-    )
-    return r.json().get("access_token", "") if r.status_code == 200 else ""
+    # `client` is accepted for the call sites that already have one open; the
+    # shared helper keeps its own, because the token it hands back is cached
+    # and most calls make no request at all.
+    return await get_token(cid, secret)
 
 
 async def _igdb_candidates(client, cid: str, token: str, term: str) -> list[dict]:
-    safe = term.replace('"', "").replace("'", "").replace(";", "").strip()[:128]
+    safe = sanitize_search(term)
     if not safe:
         return []
     r = await client.post(

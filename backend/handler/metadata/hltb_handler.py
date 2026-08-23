@@ -82,15 +82,44 @@ async def _fetch_security_data() -> None:
         logger.debug("HLTB: could not fetch security token: %s", e)
 
 
+# How long to wait before trying again after a failed handshake. Long enough
+# that a site which is down does not get hammered, short enough that a rescrape
+# started ten minutes later is not still poisoned by it.
+_RETRY_AFTER_S = 300.0
+_init_failed_at: float = 0.0
+
+
 async def _ensure_init() -> None:
-    global _init_done
+    """Fetch the token HowLongToBeat requires, once, and keep it.
+
+    `_init_done` used to be set whether or not the handshake worked, and
+    `_fetch_security_data` swallows everything it catches at debug level. So one
+    failure - a blip, a moment when the site was down - meant `search_game`
+    returned None for the rest of the process: a rescrape of six hundred games
+    reported "not found: 600" and looked like a clean run against a site that
+    simply has no entry for anything.
+
+    Now the latch only closes on success, and a failure is retried after a
+    while rather than never.
+    """
+    global _init_done, _init_failed_at
     if _init_done:
         return
     async with _init_lock:
         if _init_done:
             return
+        if _init_failed_at and (time.monotonic() - _init_failed_at) < _RETRY_AFTER_S:
+            return
         await _fetch_security_data()
-        _init_done = True
+        if _security_token:
+            _init_done = True
+            _init_failed_at = 0.0
+        else:
+            _init_failed_at = time.monotonic()
+            logger.warning(
+                "HLTB: could not get a security token - times will be missing "
+                "until the next attempt in %ds", int(_RETRY_AFTER_S),
+            )
 
 
 async def search_game(

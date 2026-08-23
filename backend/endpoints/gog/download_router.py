@@ -29,6 +29,7 @@ from handler.gog.gog_download_handler import (
     get_max_parallel,
     set_max_parallel,
 )
+from utils.async_utils import fire_task
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ async def package_game_files(request: Request, gog_id: int):
         except Exception:
             logger.exception("Manual packaging failed for gog_id=%s", gog_id)
 
-    asyncio.create_task(_run())
+    fire_task(_run())
     return {"started": True, "platforms": platforms}
 
 

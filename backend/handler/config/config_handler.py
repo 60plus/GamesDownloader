@@ -98,5 +98,19 @@ class ConfigHandler(DBBaseHandler):
     async def mark_setup_complete(self, *, session: AsyncSession = None) -> None:
         await self.set("setup_complete", "true", session=session)
 
+    @begin_session
+    async def get_registration_mode(self, *, session: AsyncSession = None) -> str:
+        """How new accounts may be created: open, invite_only or disabled.
+
+        Closed by default: an instance nobody configured must not accept public
+        signups. The older enable_registrations boolean is still honoured for
+        instances that predate the three-way setting.
+        """
+        mode = await self.get("registration_mode", session=session)
+        if mode in ("open", "invite_only", "disabled"):
+            return mode
+        legacy = await self.get_bool("enable_registrations", default=False, session=session)
+        return "open" if legacy else "disabled"
+
 
 config_handler = ConfigHandler()

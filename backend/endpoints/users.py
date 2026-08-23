@@ -9,8 +9,9 @@ from fastapi.responses import FileResponse
 
 from config import RESOURCES_PATH
 from decorators.auth import protected_route
-from handler.auth.passwords import hash_password, verify_password
+from handler.auth.passwords import ensure_password_ok, hash_password, verify_password
 from handler.auth.scopes import Scope
+from handler.database.session_handler import session_handler
 from handler.database.users_handler import UsersHandler
 from models.user import User
 from schemas.user import PasswordChange, UserCreate, UserResponse, UserUpdate
@@ -92,10 +93,15 @@ async def change_password(request: Request, data: PasswordChange) -> dict:
     user = request.state.user
     if not verify_password(data.current_password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
-    if len(data.new_password) < 8:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be at least 8 characters")
+    ensure_password_ok(data.new_password)
     await _users_db.update(user, {"hashed_password": hash_password(data.new_password)})
-    return {"ok": True}
+    # A password change that leaves the old sessions alive is not a password
+    # change: whoever was signed in with the old one still is. Everything but
+    # this browser goes, so the person doing it stays where they are.
+    revoked = await session_handler.revoke_all_for_user(
+        user.username, keep_access_jti=getattr(request.state, "token_jti", None),
+    )
+    return {"ok": True, "sessions_revoked": revoked}
 
 
 @router.post("/me/avatar")
@@ -161,8 +167,7 @@ async def create_user(request: Request, data: UserCreate) -> UserResponse:
     existing = await _users_db.get_by_username(data.username)
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already taken")
-    if len(data.password) < 8:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 8 characters")
+    ensure_password_ok(data.password)
     user = await _users_db.create(User(
         username=data.username,
         email=data.email,
@@ -200,14 +205,18 @@ async def admin_reset_password(request: Request, user_id: int, data: dict) -> di
     """Admin: forcefully reset a user's password without requiring the old one."""
     from pydantic import BaseModel
     new_pwd = data.get("new_password", "")
-    if len(new_pwd) < 8:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 8 characters")
+    ensure_password_ok(new_pwd)
     user = await _users_db.get_by_id(user_id)
     if not user:
         from exceptions.common import NotFoundException
         raise NotFoundException("User", user_id)
     await _users_db.update(user, {"hashed_password": hash_password(new_pwd)})
-    return {"ok": True}
+    # This is the containment action: an admin resets a password because the
+    # account is believed compromised. Leaving the intruder's refresh token
+    # minting fresh access tokens made it a no-op. No exception here, because
+    # the target is somebody else and all of their sessions are suspect.
+    revoked = await session_handler.revoke_all_for_user(user.username)
+    return {"ok": True, "sessions_revoked": revoked}
 
 
 @protected_route(router.delete, "/{user_id}", [Scope.USERS_WRITE])

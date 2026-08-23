@@ -339,6 +339,25 @@ class RomSourceSpec:
         """
 
     @hookspec
+    def rom_source_refresh(self, scope: str = "listings") -> bool:
+        """Forget what has been cached for this source, so the next call refetches.
+
+        Optional. A source that answers from a remote catalogue will cache its
+        listings, and a listing that failed - or came back empty because the
+        archive was having a bad afternoon - is then served from that cache
+        until it expires, with no way for the person looking at an empty screen
+        to say "try again, properly".
+
+        scope is "listings" today: drop cached listings and any remembered
+        failures, keep anything expensive (a large file index, a login). More
+        scopes can be added; a plugin that does not recognise one should treat
+        it as "listings" rather than raise.
+
+        Returns True when something was actually dropped. Core calls this in a
+        worker thread and treats a plugin without the hook as "nothing to do".
+        """
+
+    @hookspec
     def rom_source_resolve_download(self, entry_id: str) -> dict[str, Any]:
         """Resolve one entry to a concrete, authenticated single-file download:
 

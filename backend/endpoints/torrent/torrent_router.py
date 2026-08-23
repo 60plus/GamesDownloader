@@ -229,6 +229,300 @@ async def cancel_download(request: Request, dl_id: int) -> dict:
     return {"ok": True}
 
 
+# ── Controlling a download in flight ─────────────────────────────────────────
+# Transmission has always been able to do these - the client wrapper had the
+# calls - but nothing exposed them, so pausing a 60 GB torrent meant either
+# cancelling it outright and starting again, or opening Transmission's own web
+# interface on a port that is now deliberately shut.
+
+async def _download_or_404(dl_id: int):
+    from handler.database.session import async_session_factory
+    from models.torrent_download import TorrentDownload
+    async with async_session_factory() as db:
+        td = await db.get(TorrentDownload, dl_id)
+    if not td:
+        raise HTTPException(404, "Download not found")
+    if not td.transmission_id:
+        raise HTTPException(409, "This download has not reached Transmission yet")
+    return td
+
+
+async def _set_download_status(dl_id: int, status: str) -> None:
+    from handler.database.session import async_session_factory
+    from models.torrent_download import TorrentDownload
+    from sqlalchemy import update
+    async with async_session_factory() as db:
+        await db.execute(
+            update(TorrentDownload).where(TorrentDownload.id == dl_id).values(status=status)
+        )
+        await db.commit()
+
+
+@protected_route(torrent_router.post, "/downloads/{dl_id}/pause", scopes=[Scope.LIBRARY_ADMIN])
+async def pause_download(request: Request, dl_id: int) -> dict:
+    """Stop fetching. What has arrived stays on disk and resume carries on."""
+    td = await _download_or_404(dl_id)
+    ok = await transmission_handler.pause_torrent(td.transmission_id)
+    if not ok:
+        raise HTTPException(502, "Transmission refused to pause this torrent")
+    await _set_download_status(dl_id, "paused")
+    return {"ok": True, "status": "paused"}
+
+
+@protected_route(torrent_router.post, "/downloads/{dl_id}/resume", scopes=[Scope.LIBRARY_ADMIN])
+async def resume_download(request: Request, dl_id: int) -> dict:
+    td = await _download_or_404(dl_id)
+    ok = await transmission_handler.resume_torrent(td.transmission_id)
+    if not ok:
+        raise HTTPException(502, "Transmission refused to resume this torrent")
+    await _set_download_status(dl_id, "downloading")
+    return {"ok": True, "status": "downloading"}
+
+
+@protected_route(torrent_router.post, "/downloads/{dl_id}/verify", scopes=[Scope.LIBRARY_ADMIN])
+async def verify_download(request: Request, dl_id: int) -> dict:
+    """Re-check what is on disk against the torrent, piece by piece.
+
+    The answer to a transfer that stalled or came back looking wrong: it finds
+    the bad pieces and fetches those again instead of the whole thing.
+    Transmission stops the torrent while it reads, so a large one goes quiet
+    for a while and then carries on.
+
+    Only while the download is still in progress. Once it completes, its files
+    are MOVED out of the download directory and into the library, so
+    Transmission would find nothing there, decide every piece was missing, and
+    start the entire torrent again. A finished game that will not install is a
+    job for the library, not for this button.
+    """
+    td = await _download_or_404(dl_id)
+    if td.status not in ("downloading", "paused"):
+        raise HTTPException(
+            409,
+            "This download has already finished and its files have moved into "
+            "the library, so there is nothing here left to check.",
+        )
+    ok = await transmission_handler.verify_torrent(td.transmission_id)
+    if not ok:
+        raise HTTPException(502, "Transmission refused to verify this torrent")
+    return {"ok": True, "status": "verifying"}
+
+
+class TorrentFilesBody(BaseModel):
+    wanted:   list[int] = []
+    unwanted: list[int] = []
+
+
+@protected_route(torrent_router.get, "/downloads/{dl_id}/files", scopes=[Scope.LIBRARY_ADMIN])
+async def list_download_files(request: Request, dl_id: int) -> list:
+    """What is inside the torrent, and which parts are being fetched."""
+    td = await _download_or_404(dl_id)
+    return await transmission_handler.get_files(td.transmission_id)
+
+
+@protected_route(torrent_router.put, "/downloads/{dl_id}/files", scopes=[Scope.LIBRARY_ADMIN])
+async def choose_download_files(request: Request, dl_id: int, body: TorrentFilesBody) -> dict:
+    """Pick which files to fetch from a torrent that holds more than one game.
+
+    Deselecting everything is refused rather than obeyed: Transmission would
+    accept it and sit at zero per cent for ever, which looks exactly like a
+    torrent with no seeds.
+    """
+    td = await _download_or_404(dl_id)
+    files = await transmission_handler.get_files(td.transmission_id)
+    if not files:
+        raise HTTPException(409, "Transmission does not know this torrent's contents yet")
+
+    valid = {f["index"] for f in files}
+    wanted   = [i for i in body.wanted if i in valid]
+    unwanted = [i for i in body.unwanted if i in valid]
+    if len(unwanted) >= len(valid) and not wanted:
+        raise HTTPException(400, "At least one file has to be selected")
+
+    ok = await transmission_handler.set_files_wanted(td.transmission_id, wanted, unwanted)
+    if not ok:
+        raise HTTPException(502, "Transmission refused the file selection")
+    return {"ok": True, "files": await transmission_handler.get_files(td.transmission_id)}
+
+
+# ── Everything the daemon holds ──────────────────────────────────────────────
+# The two views above only know what this application put there. Transmission
+# also holds the seeds, and anything added by hand before the control port was
+# shut. Without this the daemon's own interface is still the only way to see it.
+
+@protected_route(torrent_router.get, "/all", scopes=[Scope.LIBRARY_ADMIN])
+async def list_all_torrents(request: Request) -> list:
+    """Every torrent Transmission is holding, ours or not."""
+    from handler.torrent.transmission_handler import STATUS
+    torrents = await transmission_handler.get_all_torrents(label="")
+    out = []
+    for t in torrents:
+        total = t.get("totalSize") or 0
+        out.append({
+            "id":          t.get("id"),
+            "name":        t.get("name") or "",
+            "status":      STATUS.get(t.get("status", 0), "unknown"),
+            "percent":     round(float(t.get("percentDone") or 0) * 1000) / 10,
+            "total_size":  total,
+            "downloaded":  t.get("downloadedEver") or 0,
+            "uploaded":    t.get("uploadedEver") or 0,
+            "ratio":       round(float(t.get("uploadRatio") or 0), 2),
+            "rate_down":   t.get("rateDownload") or 0,
+            "rate_up":     t.get("rateUpload") or 0,
+            "peers":       t.get("peersConnected") or 0,
+            "peers_from":  t.get("peersSendingToUs") or 0,
+            "peers_to":    t.get("peersGettingFromUs") or 0,
+            "eta":         t.get("eta", -1),
+            "queue":       t.get("queuePosition", 0),
+            "stalled":     bool(t.get("isStalled")),
+            "error":       t.get("errorString") or "",
+            # Ours carry the application's label; anything else was added by
+            # hand and is worth saying so, because removing it is not something
+            # this application can undo.
+            "ours":        bool(t.get("labels")),
+            "added_at":    t.get("addedDate") or 0,
+            "download_dir": t.get("downloadDir") or "",
+        })
+    out.sort(key=lambda r: (r["queue"], r["name"].lower()))
+    return out
+
+
+@protected_route(torrent_router.get, "/stats", scopes=[Scope.LIBRARY_ADMIN])
+async def torrent_stats(request: Request) -> dict:
+    """Session and lifetime totals, straight from the daemon."""
+    raw = await transmission_handler.get_stats()
+    if not raw:
+        raise HTTPException(502, "Transmission did not answer")
+
+    def _blok(d: dict) -> dict:
+        return {
+            "downloaded": d.get("downloadedBytes", 0),
+            "uploaded":   d.get("uploadedBytes", 0),
+            "files_added": d.get("filesAdded", 0),
+            "seconds":    d.get("secondsActive", 0),
+            "sessions":   d.get("sessionCount", 0),
+        }
+
+    return {
+        "torrents":        raw.get("torrentCount", 0),
+        "active":          raw.get("activeTorrentCount", 0),
+        "paused":          raw.get("pausedTorrentCount", 0),
+        "rate_down":       raw.get("downloadSpeed", 0),
+        "rate_up":         raw.get("uploadSpeed", 0),
+        "current":         _blok(raw.get("current-stats") or {}),
+        "cumulative":      _blok(raw.get("cumulative-stats") or {}),
+    }
+
+
+class TorrentActionBody(BaseModel):
+    # Per-torrent overrides, all optional. Transmission's own names and units.
+    download_limit:    int | None = None      # KB/s, needs the flag below
+    download_limited:  bool | None = None
+    upload_limit:      int | None = None
+    upload_limited:    bool | None = None
+    seed_ratio_limit:  float | None = None
+    seed_ratio_mode:   int | None = None      # 0 global, 1 own, 2 unlimited
+    peer_limit:        int | None = None
+
+
+@protected_route(torrent_router.post, "/all/{tid}/{action}", scopes=[Scope.LIBRARY_ADMIN])
+async def act_on_torrent(request: Request, tid: int, action: str) -> dict:
+    """pause | resume | verify | top | up | down | bottom
+
+    By Transmission's own id rather than by a row of ours, because the point of
+    this view is the torrents we have no row for.
+    """
+    if action in ("pause", "resume", "verify"):
+        fn = {
+            "pause":  transmission_handler.pause_torrent,
+            "resume": transmission_handler.resume_torrent,
+            "verify": transmission_handler.verify_torrent,
+        }[action]
+        if not await fn(tid):
+            raise HTTPException(502, f"Transmission refused to {action} this torrent")
+        return {"ok": True}
+
+    if action in ("top", "up", "down", "bottom"):
+        if not await transmission_handler.move_in_queue(tid, action):
+            raise HTTPException(502, "Transmission refused to reorder this torrent")
+        return {"ok": True}
+
+    raise HTTPException(400, f"Unknown action: {action}")
+
+
+@protected_route(torrent_router.put, "/all/{tid}/limits", scopes=[Scope.LIBRARY_ADMIN])
+async def set_torrent_limits(request: Request, tid: int, body: TorrentActionBody) -> dict:
+    """Caps for one torrent, overriding the session-wide ones."""
+    mapa = {
+        "download_limit":   "downloadLimit",
+        "download_limited": "downloadLimited",
+        "upload_limit":     "uploadLimit",
+        "upload_limited":   "uploadLimited",
+        "seed_ratio_limit": "seedRatioLimit",
+        "seed_ratio_mode":  "seedRatioMode",
+        "peer_limit":       "peer-limit",
+    }
+    values = {mapa[k]: v for k, v in body.model_dump().items() if v is not None}
+    if not values:
+        raise HTTPException(400, "Nothing to set")
+    if not await transmission_handler.set_torrent_limits(tid, values):
+        raise HTTPException(502, "Transmission refused those limits")
+    return {"ok": True}
+
+
+@protected_route(torrent_router.delete, "/all/{tid}", scopes=[Scope.LIBRARY_ADMIN])
+async def remove_torrent(request: Request, tid: int, delete_data: bool = False) -> dict:
+    """Drop a torrent from Transmission.
+
+    `delete_data` also removes what it downloaded, which for a seed means the
+    library file it was sharing. Off unless asked for, and the interface asks
+    twice.
+    """
+    if not await transmission_handler.remove_torrent(tid, delete_data=delete_data):
+        raise HTTPException(502, "Transmission refused to remove this torrent")
+    return {"ok": True, "deleted_data": delete_data}
+
+
+@protected_route(torrent_router.get, "/seeds", scopes=[Scope.LIBRARY_ADMIN])
+async def list_seeds(request: Request) -> list:
+    """What this server is sharing, with live figures from the daemon."""
+    from handler.database.session import async_session_factory
+    from models.library_torrent import LibraryTorrent
+    from models.library_file import LibraryFile
+    from sqlalchemy import select
+
+    async with async_session_factory() as db:
+        rows = (await db.execute(
+            select(LibraryTorrent).order_by(LibraryTorrent.id.desc())
+        )).scalars().all()
+        nazwy: dict[int, str] = {}
+        ids = [r.file_id for r in rows if r.file_id]
+        if ids:
+            for f in (await db.execute(
+                select(LibraryFile).where(LibraryFile.id.in_(ids))
+            )).scalars().all():
+                nazwy[f.id] = f.display_name or f.filename
+
+    live = {t.get("id"): t for t in await transmission_handler.get_all_torrents(label="")}
+    out = []
+    for r in rows:
+        t = live.get(r.transmission_id) or {}
+        out.append({
+            "id":              r.id,
+            "transmission_id": r.transmission_id,
+            "filename":        nazwy.get(r.file_id, "") or (r.torrent_path or "").split("/")[-1],
+            "status":          r.status,
+            "file_size":       r.file_size or 0,
+            "created_by":      r.created_by,
+            "uploaded":        t.get("uploadedEver") or 0,
+            "ratio":           round(float(t.get("uploadRatio") or 0), 2),
+            "rate_up":         t.get("rateUpload") or 0,
+            "peers_to":        t.get("peersGettingFromUs") or 0,
+            # A row whose torrent is gone from the daemon can still say seeding.
+            "live":            r.transmission_id in live,
+        })
+    return out
+
+
 # ── User: generate seed .torrent for an entire game (all files) ───────────────
 
 class SeedGameBody(BaseModel):

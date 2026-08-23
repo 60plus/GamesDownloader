@@ -10,9 +10,14 @@ from pydantic import BaseModel, Field
 from models.user import Role
 
 
+# Password strength is NOT a Field constraint here. A schema rejection is a 422
+# whose `detail` is a list of validation objects, while every handler rejection
+# is a 400 whose `detail` is a sentence - and the frontend renders `detail`
+# straight into the error line. The rule lives in handler.auth.passwords and
+# every route that takes a password calls ensure_password_ok().
 class UserCreate(BaseModel):
     username:    str       = Field(..., min_length=3, max_length=64)
-    password:    str       = Field(..., min_length=8)
+    password:    str
     email:       str       = Field(..., min_length=3, max_length=255)
     role:        Role      = Role.USER
     invite_code: str | None = None   # required when registration_mode = "invite_only"
@@ -42,7 +47,7 @@ class UserResponse(BaseModel):
 
 class PasswordChange(BaseModel):
     current_password: str
-    new_password: str = Field(..., min_length=8)
+    new_password: str            # strength checked by ensure_password_ok, see above
 
 
 class TokenResponse(BaseModel):

@@ -15,10 +15,12 @@ gog_id: a known GOG id to skip the catalogue search (a published GOG game has on
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 import httpx
+
+from utils.apicalypse import sanitize_search
+from handler.metadata.igdb_auth import igdb_headers
 
 
 async def fetch_meta_source(
@@ -29,13 +31,13 @@ async def fetch_meta_source(
 
     # ── GOG public catalog (no auth) ──────────────────────────────────────────
     if source == "gog":
+        from handler.gog_web import GOG_GALAXY_HEADERS, gog_image_url
         from handler.library.library_scrape_handler import (
-            _HDRS, _abs_url,
             _search_gog_catalog, _fetch_gog_v1, _fetch_gog_v2, _fetch_gog_rating,
         )
         import asyncio as _aio
         try:
-            async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=20) as c:
+            async with httpx.AsyncClient(headers=GOG_GALAXY_HEADERS, follow_redirects=True, timeout=20) as c:
                 if not gog_id:
                     gog_id = await _search_gog_catalog(search_term, c)
                 if not gog_id:
@@ -73,7 +75,7 @@ async def fetch_meta_source(
                 images = v1.get("images")  or {}
                 cover  = ((links.get("boxArtImage") or {}).get("href")
                           or images.get("coverLarge") or images.get("cover") or "")
-                cover  = _abs_url(str(cover)) if cover else ""
+                cover  = gog_image_url(str(cover)) if cover else ""
 
                 release = ""
                 rd = v1.get("release_date")
@@ -184,20 +186,14 @@ async def fetch_meta_source(
             client_secret = await config_handler.get("igdb_client_secret")
             if not client_id or not client_secret:
                 return {"source": "igdb", "found": False, "error": "IGDB keys not configured"}
-            safe_q = re.sub(r'["\';]', '', search_term)[:128]
+            safe_q = sanitize_search(search_term)
             async with httpx.AsyncClient(timeout=20) as c:
-                tr = await c.post("https://id.twitch.tv/oauth2/token", params={
-                    "client_id": client_id, "client_secret": client_secret,
-                    "grant_type": "client_credentials",
-                })
-                if tr.status_code != 200:
+                headers = await igdb_headers(client_id, client_secret)
+                if headers is None:
                     return {"source": "igdb", "found": False, "error": "Twitch auth failed"}
-                token = tr.json().get("access_token", "")
-                if not token:
-                    return {"source": "igdb", "found": False, "error": "No token"}
                 gr = await c.post(
                     "https://api.igdb.com/v4/games",
-                    headers={"Client-ID": client_id, "Authorization": f"Bearer {token}"},
+                    headers=headers,
                     content=(
                         f'fields id,name,summary,storyline,cover.image_id,'
                         f'involved_companies.company.name,involved_companies.developer,involved_companies.publisher,'
@@ -229,6 +225,9 @@ async def fetch_meta_source(
                         "id":                ig.get("id"),
                         "name":              ig.get("name", ""),
                         "summary":           ig.get("summary", ""),
+                        # The collection editor shows the storyline on its own,
+                        # separately from the description it is folded into here.
+                        "storyline":         ig.get("storyline", ""),
                         "description":       ig.get("storyline") or ig.get("summary") or "",
                         "description_short": ig.get("summary") or "",
                         "cover_url":         cov_url,

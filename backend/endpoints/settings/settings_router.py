@@ -4,12 +4,8 @@ Requires SETTINGS_READ (GET) or SETTINGS_WRITE (POST/PUT) scope.
 """
 from __future__ import annotations
 
-import smtplib
-import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
-import httpx
+from handler.config.connection_tests import run_scraper_test, run_smtp_test
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -63,13 +59,15 @@ class SmtpRequest(BaseModel):
     email_notify_download: bool = True
     email_notify_sync: bool = True
     email_notify_request: bool = True
-    email_notify_added: bool = False
-    # Recently-added email delivery: off | immediate | daily | weekly
+    # Recently-added email delivery: off | immediate | daily | weekly. This mode
+    # is the whole of the "recently added" email switch - there is deliberately
+    # no subject/body pair beside it, because that mail is a rendered card
+    # (cover, stars, genre, link) built in handler.notifications.digest, not a
+    # template. A pair used to sit here, and in the settings screen, and was
+    # read by nothing at all.
     recently_added_mode: str = "off"
     recently_added_time: str = "09:00"     # HH:MM, server local time (daily/weekly)
     recently_added_weekday: int = 0        # 0=Mon .. 6=Sun (weekly)
-    email_tpl_added_subject: str | None = None
-    email_tpl_added_body: str | None = None
     email_tpl_download_subject: str | None = None
     email_tpl_download_body: str | None = None
     email_tpl_sync_subject: str | None = None
@@ -152,132 +150,21 @@ async def save_scraper_keys(request: Request, req: ScraperKeysRequest) -> dict:
     if req.metadata_parallel_media is not None:  data["metadata_parallel_media"]   = ("true" if req.metadata_parallel_media else "false", False)
     if data:
         await config_handler.set_many(data)
+    # A Twitch token is cached for its full hour, so a corrected IGDB key would
+    # otherwise sit unused until the old one expired.
+    if req.igdb_client_id is not None or req.igdb_client_secret is not None:
+        from handler.metadata.igdb_auth import forget_token
+        forget_token()
     return {"ok": True}
 
 
 @protected_route(settings_router.post, "/scrapers/test", scopes=[Scope.SETTINGS_WRITE])
 async def test_scraper(request: Request, req: ScraperTestRequest) -> dict:
-    try:
-        async with httpx.AsyncClient(timeout=10) as c:
-            if req.scraper == "igdb":
-                if not req.igdb_client_id or not req.igdb_client_secret:
-                    raise HTTPException(status_code=400, detail="Client ID and Secret required")
-                r = await c.post("https://id.twitch.tv/oauth2/token", params={
-                    "client_id": req.igdb_client_id, "client_secret": req.igdb_client_secret,
-                    "grant_type": "client_credentials",
-                })
-                if r.status_code != 200 or "access_token" not in r.json():
-                    raise HTTPException(status_code=400, detail="Invalid IGDB credentials")
-
-            elif req.scraper == "steamgriddb":
-                if not req.steamgriddb_api_key:
-                    raise HTTPException(status_code=400, detail="API key required")
-                r = await c.get("https://www.steamgriddb.com/api/v2/grids/game/1",
-                                headers={"Authorization": f"Bearer {req.steamgriddb_api_key}"})
-                if r.status_code == 401:
-                    raise HTTPException(status_code=400, detail="Invalid SteamGridDB API key")
-
-            elif req.scraper == "rawg":
-                if not req.rawg_api_key:
-                    raise HTTPException(status_code=400, detail="API key required")
-                r = await c.get("https://api.rawg.io/api/genres", params={"key": req.rawg_api_key})
-                if r.status_code in (401, 403):
-                    raise HTTPException(status_code=400, detail="Invalid RAWG API key")
-
-            elif req.scraper == "screenscraper":
-                if not req.screenscraper_username or not req.screenscraper_password:
-                    raise HTTPException(status_code=400, detail="Username and password required")
-                # devid/devpassword: user-configured → env var → built-in default
-                import os as _os
-                from handler.metadata.screenscraper_handler import _SS_DEFAULT_DEVID, _SS_DEFAULT_DEVPW
-                devid = (req.screenscraper_devid or "").strip() or _os.environ.get("SCREENSCRAPER_DEVID") or _SS_DEFAULT_DEVID
-                devpw = (req.screenscraper_devpassword or "").strip() or _os.environ.get("SCREENSCRAPER_DEVPASSWORD") or _SS_DEFAULT_DEVPW
-                import logging as _log
-                _log.getLogger("settings.scraper_test").info(
-                    "SS test: devid=%s ssid=%s", devid, req.screenscraper_username
-                )
-                # ssuserInfos.php is the lightest credential-check endpoint
-                r = await c.get("https://api.screenscraper.fr/api2/ssuserInfos.php", params={
-                    "devid": devid, "devpassword": devpw,
-                    "softname": "GamesDownloader", "output": "json",
-                    "ssid": req.screenscraper_username, "sspassword": req.screenscraper_password,
-                })
-                _log.getLogger("settings.scraper_test").info(
-                    "SS test response: status=%d body=%s", r.status_code, r.text[:400]
-                )
-                if r.status_code == 403:
-                    body = r.text[:400]
-                    raise HTTPException(status_code=400, detail=f"ScreenScraper 403: {body}")
-                elif r.status_code not in (200, 404):
-                    raise HTTPException(status_code=400, detail=f"ScreenScraper returned HTTP {r.status_code}: {r.text[:200]}")
-
-            elif req.scraper == "ra":
-                if not req.ra_api_key or not req.ra_api_username:
-                    raise HTTPException(status_code=400, detail="RA Username and API Key are both required")
-                params: dict = {"y": req.ra_api_key, "z": req.ra_api_username}
-                r = await c.get("https://retroachievements.org/API/API_GetTopTenUsers.php", params=params)
-                if r.status_code == 401 or (r.status_code == 200 and r.json() is None):
-                    raise HTTPException(status_code=400, detail="Invalid RetroAchievements credentials")
-
-            else:
-                raise HTTPException(status_code=400, detail=f"Unknown scraper: {req.scraper}")
-
-        return {"ok": True}
-    except HTTPException:
-        raise
-    except httpx.ConnectError as e:
-        raise HTTPException(status_code=400, detail=f"Network error: could not connect to the service. Check that the server has internet access. ({e})")
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=400, detail="Connection timed out. The service may be unreachable from this server.")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return await run_scraper_test(req)
 
 
 # ── SMTP ───────────────────────────────────────────────────────────────────────
 
-_TEST_EMAIL_HTML = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<style>
-  body{margin:0;padding:0;background:#0d0d1a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
-  .wrap{max-width:520px;margin:0 auto;padding:40px 16px}
-  .card{background:#1a1a2e;border:1px solid rgba(255,255,255,.1);border-radius:14px;overflow:hidden}
-  .header{background:linear-gradient(135deg,#16213e 0%,#1a1040 100%);padding:32px 36px;text-align:center;border-bottom:1px solid rgba(167,139,250,.2)}
-  .logo{font-size:22px;font-weight:800;color:#a78bfa;letter-spacing:-.5px}
-  .logo-sub{font-size:10px;color:rgba(167,139,250,.5);text-transform:uppercase;letter-spacing:2px;margin-top:5px}
-  .body{padding:32px 36px}
-  .icon{width:56px;height:56px;border-radius:50%;background:rgba(34,197,94,.12);border:2px solid rgba(34,197,94,.3);margin:0 auto 20px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:24px;line-height:56px}
-  .title{font-size:20px;font-weight:700;color:#f1f1f1;margin:0 0 10px;text-align:center}
-  .text{font-size:14px;color:#8888a8;line-height:1.7;margin:0 0 24px;text-align:center}
-  .badge{display:block;width:fit-content;margin:0 auto;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);color:#86efac;padding:10px 24px;border-radius:24px;font-size:13px;font-weight:600}
-  .footer{padding:16px 36px 24px;text-align:center;font-size:11px;color:rgba(255,255,255,.2)}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <div class="header">
-      <div class="logo">GamesDownloader</div>
-      <div class="logo-sub">Email Notification System</div>
-    </div>
-    <div class="body">
-      <div class="icon">&#10003;</div>
-      <div class="title">Test Email</div>
-      <p class="text">
-        Your GamesDownloader instance sent this test email successfully.<br>
-        Email notifications are configured and working correctly.
-      </p>
-      <span class="badge">&#10003;&nbsp; Email sent successfully</span>
-    </div>
-    <div class="footer">GamesDownloader &mdash; Self-hosted game library</div>
-  </div>
-</div>
-</body>
-</html>
-"""
 
 
 def _valid_ra_mode(mode: str | None) -> str:
@@ -307,12 +194,9 @@ async def get_smtp(request: Request) -> dict:
         "email_notify_download": await config_handler.get_bool("email_notify_download", default=True),
         "email_notify_sync":     await config_handler.get_bool("email_notify_sync", default=True),
         "email_notify_request":  await config_handler.get_bool("email_notify_request", default=True),
-        "email_notify_added":    await config_handler.get_bool("email_notify_added", default=False),
         "recently_added_mode":    await config_handler.get("smtp_recently_added_mode") or "off",
         "recently_added_time":    await config_handler.get("smtp_recently_added_time") or "09:00",
         "recently_added_weekday": int(await config_handler.get("smtp_recently_added_weekday") or "0"),
-        "email_tpl_added_subject":          await config_handler.get("email_tpl_added_subject") or "",
-        "email_tpl_added_body":             await config_handler.get("email_tpl_added_body") or "",
         "email_tpl_download_subject":       await config_handler.get("email_tpl_download_subject") or "",
         "email_tpl_download_body":          await config_handler.get("email_tpl_download_body") or "",
         "email_tpl_sync_subject":           await config_handler.get("email_tpl_sync_subject") or "",
@@ -344,12 +228,9 @@ async def save_smtp(request: Request, req: SmtpRequest) -> dict:
         "email_notify_download": (str(req.email_notify_download).lower(), False),
         "email_notify_sync":     (str(req.email_notify_sync).lower(), False),
         "email_notify_request":  (str(req.email_notify_request).lower(), False),
-        "email_notify_added":    (str(req.email_notify_added).lower(), False),
         "smtp_recently_added_mode":    (_valid_ra_mode(req.recently_added_mode), False),
         "smtp_recently_added_time":    (_valid_hhmm(req.recently_added_time), False),
         "smtp_recently_added_weekday": (str(max(0, min(6, req.recently_added_weekday))), False),
-        "email_tpl_added_subject":          (req.email_tpl_added_subject or "", False),
-        "email_tpl_added_body":             (req.email_tpl_added_body or "", False),
         "email_tpl_download_subject":       (req.email_tpl_download_subject or "", False),
         "email_tpl_download_body":          (req.email_tpl_download_body or "", False),
         "email_tpl_sync_subject":           (req.email_tpl_sync_subject or "", False),
@@ -399,41 +280,7 @@ async def send_recently_added_digest_now(request: Request) -> dict:
 
 @protected_route(settings_router.post, "/smtp/test", scopes=[Scope.SETTINGS_WRITE])
 async def test_smtp(request: Request, req: SmtpRequest) -> dict:
-    try:
-        from_addr = req.from_address or req.username or ""
-        to_addr   = req.test_to or req.from_address or req.username or ""
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = "GamesDownloader - Test Email"
-        msg["From"]    = from_addr
-        msg["To"]      = to_addr
-        msg.attach(MIMEText(
-            "GamesDownloader - Test Email\n\n"
-            "Your GamesDownloader instance sent this test email successfully.\n"
-            "Email notifications are configured and working correctly.",
-            "plain",
-        ))
-        msg.attach(MIMEText(_TEST_EMAIL_HTML, "html"))
-        host = req.host or ''
-        port = req.port
-        use_tls = req.use_tls
-        username = req.username
-        password = req.password
-
-        def _send_blocking() -> None:
-            ctx = ssl.create_default_context() if use_tls else None
-            with smtplib.SMTP(host, port, timeout=10) as server:
-                if use_tls:
-                    server.starttls(context=ctx)
-                if username and password:
-                    server.login(username, password)
-                server.send_message(msg)
-
-        import asyncio
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _send_blocking)
-        return {"ok": True}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return await run_smtp_test(req)
 
 
 # ── Webhooks ───────────────────────────────────────────────────────────────────
