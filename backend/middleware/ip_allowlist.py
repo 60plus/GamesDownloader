@@ -18,8 +18,16 @@ logger = logging.getLogger(__name__)
 
 _BYPASS_PREFIXES = (
     "/api/health", "/api/setup", "/assets", "/resources",
-    "/_vite", "/favicon", "/",
+    "/_vite", "/favicon",
 )
+
+# The SPA shell, so a blocked visitor sees the app say no rather than a bare
+# JSON error. Every request it then makes goes through the check normally.
+#
+# This used to be "/" in the tuple above, which made the prefix test true for
+# EVERY path there is, so the allowlist let the whole internet through while
+# Settings reported it as switched on. It has to be an exact match.
+_BYPASS_EXACT = ("/", "/index.html")
 
 
 def _parse_networks(raw: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
@@ -52,7 +60,7 @@ class IpAllowlistMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # Static bypasses - never block these
-        if any(path.startswith(p) for p in _BYPASS_PREFIXES):
+        if path in _BYPASS_EXACT or any(path.startswith(p) for p in _BYPASS_PREFIXES):
             return await call_next(request)
 
         from handler.config.config_handler import config_handler

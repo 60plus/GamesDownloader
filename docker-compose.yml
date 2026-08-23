@@ -31,7 +31,16 @@ services:
       # NOT via environment variables.
     ports:
       - "${GD_PORT:-8080}:8080"
-      - "${TR_WEBUI_PORT:-9091}:9091"
+      # Transmission's own control port. Not published: this application talks
+      # to Transmission from inside the container, and an unauthenticated RPC
+      # socket accepts a torrent with a download directory of the caller's
+      # choosing, which writes files anywhere the container can reach. Torrent
+      # downloads are managed from Settings -> Downloads.
+      # To publish it anyway, uncomment the line below AND turn on both
+      # authentication and exposure in that screen - without them the daemon
+      # stays on loopback and the mapping reaches nothing.
+      # - "${TR_WEBUI_PORT:-9091}:9091"
+      # The peer port, on the other hand, has to be reachable or nothing seeds.
       - "${TR_PEER_PORT:-51413}:51413"
       - "${TR_PEER_PORT:-51413}:51413/udp"
     volumes:

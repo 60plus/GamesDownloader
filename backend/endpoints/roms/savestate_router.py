@@ -52,6 +52,7 @@ from utils.save_paths import (
     screenshot_url as _screenshot_url,
     states_dir as _states_dir,
 )
+from utils.async_utils import note_unscanned
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ async def _scan_or_reject(file_path: Path, *, username: str | None) -> None:
         if not await _clam.is_upload_scanning_enabled():
             return
         res = await _clam.scan_file(str(file_path))
+        note_unscanned(res, "savestate", file_path.name)
         if res.get("status") == "FOUND":
             threat = res.get("threat") or "unknown"
             action = await _clam.quarantine_or_delete(
@@ -141,7 +143,8 @@ async def _check_quota(user, extra: int) -> None:
 
 def _rom_info(rom) -> dict:
     """The bits the saves UI needs to draw a game header: name, cover, platform.
-    `platform_slug` is the routable slug, so a tile can link to the ROM.
+    `platform_slug` is the routable slug, so a tile can link to the ROM;
+    `platform_fs_slug` is the one /platforms/{fanart,icons,names} is keyed by.
     `rom_cover_aspect` ships too - SNES boxes are 4/3 and a fixed portrait frame
     would crop them, same trap the dashboard strips hit.
 
@@ -151,7 +154,8 @@ def _rom_info(rom) -> dict:
     """
     if rom is None:
         return {"rom_name": None, "rom_cover": None, "rom_cover_aspect": None,
-                "rom_support": None, "platform_name": None, "platform_slug": None}
+                "rom_support": None, "platform_name": None, "platform_slug": None,
+                "platform_fs_slug": None}
     plat = getattr(rom, "platform", None)
     return {
         "rom_name":         rom.name or rom.fs_name_no_ext,
@@ -162,6 +166,10 @@ def _rom_info(rom) -> dict:
         "rom_support":      rom.support_path,
         "platform_name":    (plat.custom_name or plat.name) if plat else None,
         "platform_slug":    plat.slug if plat else None,
+        # The routable slug and the one the artwork is filed under are not the
+        # same thing ("super-nintendo" against "snes"), and they differ for all
+        # but twenty of the platforms - so the UI needs both to draw a tile.
+        "platform_fs_slug": plat.fs_slug if plat else None,
     }
 
 
@@ -192,6 +200,12 @@ def _save_dict(s: RomSave, rom=None) -> dict:
         "file_size_bytes": s.file_size_bytes,
         "emulator_core":  s.emulator_core,
         "slot":           s.slot,
+        # Which version of the card this is. The column has existed and been
+        # computed on every upload since the beginning; it was just never sent
+        # out, so no browser could tell whether the card it holds is the one the
+        # server holds. Without that, "upload mine" and "overwrite something
+        # newer" were the same request.
+        "content_hash":   s.content_hash,
         "created_at":     s.created_at.isoformat() if s.created_at else None,
         "updated_at":     s.updated_at.isoformat() if s.updated_at else None,
         # See _state_dict: download_url stays raw for the player, export_url is
@@ -200,6 +214,29 @@ def _save_dict(s: RomSave, rom=None) -> dict:
         "export_url":     f"/api/savestates/saves/{s.id}/export",
         **_rom_info(rom),
     }
+
+
+def _is_stale_write(base: str | None, stored: str | None, incoming: str | None) -> bool:
+    """Would this upload write over a card the sender never saw?
+
+    `base` is the version the sender started from, `stored` is what the server
+    holds now, `incoming` is what is being sent.
+
+    There is one row per (user, rom) and it used to be written unconditionally,
+    so whichever browser left the game last won and could undo an evening
+    played somewhere else. Refusing needs all three of:
+
+      * the sender said what it started from - a player that predates this has
+        to keep working, so silence means the old behaviour;
+      * the server has a card, and it is not the one the sender started from;
+      * the bytes actually differ - two machines arriving at an identical card
+        is agreement, not a conflict, and there is nothing to lose by taking it.
+    """
+    if not base or not stored:
+        return False
+    if stored == base:
+        return False
+    return stored != incoming
 
 
 def _drop_stale_files(row, keep: set[str | None]) -> None:
@@ -227,7 +264,7 @@ async def _get_rom_or_404(rom_id: int):
 
 # ── Quota + My (must be before /{rom_id} pattern) ────────────────────────────
 
-@protected_route(router.get, "/quota", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/quota", scopes=[Scopes.ROMS_READ])
 async def get_quota(request: Request) -> dict:
     user_id = request.state.user.id
     used  = await save_state_handler.get_user_total_size(user_id)
@@ -235,7 +272,7 @@ async def get_quota(request: Request) -> dict:
     return {"used_bytes": used, "limit_bytes": limit}
 
 
-@protected_route(router.get, "/my", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/my", scopes=[Scopes.ROMS_READ])
 async def my_data(request: Request) -> dict:
     """All saves and states for the current user, each carrying its ROM's name,
     cover and platform so the saves UI can group them by game without N calls."""
@@ -258,7 +295,7 @@ async def my_data(request: Request) -> dict:
 
 # ── States ────────────────────────────────────────────────────────────────────
 
-@protected_route(router.get, "/states/{state_id}/content", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/states/{state_id}/content", scopes=[Scopes.ROMS_READ])
 async def download_state(request: Request, state_id: int):
     """Download the raw .state file."""
     user_id = request.state.user.id
@@ -293,7 +330,7 @@ async def state_screenshot(state_id: int, sig: str):
     return FileResponse(str(fp), media_type="image/png")
 
 
-@protected_route(router.delete, "/states/{state_id}", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.delete, "/states/{state_id}", scopes=[Scopes.ROMS_READ])
 async def delete_state(request: Request, state_id: int) -> dict:
     user_id = request.state.user.id
     state = await save_state_handler.get_state(state_id, user_id)
@@ -310,7 +347,7 @@ async def delete_state(request: Request, state_id: int) -> dict:
     return {"ok": True}
 
 
-@protected_route(router.post, "/{rom_id}/states", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.post, "/{rom_id}/states", scopes=[Scopes.ROMS_READ])
 async def upload_state(
     request: Request,
     rom_id: int,
@@ -422,7 +459,7 @@ async def upload_state(
     return _state_dict(state, rom)
 
 
-@protected_route(router.get, "/{rom_id}/states", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/{rom_id}/states", scopes=[Scopes.ROMS_READ])
 async def list_states(request: Request, rom_id: int) -> list[dict]:
     user_id = request.state.user.id
     await _get_rom_or_404(rom_id)
@@ -432,7 +469,7 @@ async def list_states(request: Request, rom_id: int) -> list[dict]:
 
 # ── Battery Saves ─────────────────────────────────────────────────────────────
 
-@protected_route(router.get, "/saves/{save_id}/content", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/saves/{save_id}/content", scopes=[Scopes.ROMS_READ])
 async def download_save(request: Request, save_id: int):
     """Download the raw .srm file."""
     user_id = request.state.user.id
@@ -445,7 +482,7 @@ async def download_save(request: Request, save_id: int):
     return FileResponse(str(fp), filename=save.file_name, media_type="application/octet-stream")
 
 
-@protected_route(router.delete, "/saves/{save_id}", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.delete, "/saves/{save_id}", scopes=[Scopes.ROMS_READ])
 async def delete_save(request: Request, save_id: int) -> dict:
     user_id = request.state.user.id
     save = await save_state_handler.get_save(save_id, user_id)
@@ -458,18 +495,30 @@ async def delete_save(request: Request, save_id: int) -> dict:
     return {"ok": True}
 
 
-@protected_route(router.post, "/{rom_id}/saves", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.post, "/{rom_id}/saves", scopes=[Scopes.ROMS_READ])
 async def upload_save(
     request: Request,
     rom_id: int,
     emulator_core: str | None = Form(None),
     slot: str | None = Form(None),
+    base_hash: str | None = Form(None),
     saveFile: UploadFile = File(...),
 ) -> dict:
     """Store the cartridge SRAM. One row per ROM+core, overwritten in place: the
     .srm is the whole chip, so the game's own save slots already live inside it -
     keeping a row per change would only hoard copies of the same file (the
-    in-player auto-sync uploads on every SRAM change)."""
+    in-player auto-sync uploads on every SRAM change).
+
+    `base_hash` is the version of the card the sender started from. There is one
+    row per (user, rom) and this used to write over it without comparing
+    anything, so whichever browser left the game last won, and a browser holding
+    an older card would quietly undo an evening's progress made in another one.
+    Observed, not theorised: a card on the test server had a file time of 21:10
+    and contents from 19:38.
+
+    Sending it is optional, because a player that predates this still has to be
+    able to save. Sending it and being wrong is a 409, which is the point.
+    """
     user_id = request.state.user.id
     rom = await _get_rom_or_404(rom_id)
 
@@ -483,6 +532,26 @@ async def upload_save(
     platform_slug = rom.platform.fs_slug if rom.platform else "unknown"
 
     existing = await save_state_handler.get_save_for_rom(user_id, rom_id)
+
+    # Somebody else wrote since this browser last synced. Refuse rather than
+    # overwrite, and hand back what the server holds so the caller can say
+    # something useful about it.
+    base = (base_hash or "").strip()
+    if _is_stale_write(base, getattr(existing, "content_hash", None), content_hash):
+        logger.warning(
+            "Save upload refused rom=%s user=%s: sender based on %s, server holds %s",
+            rom_id, user_id, base[:8], existing.content_hash[:8],
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error":       "stale_save",
+                "message":     "The card on the server has changed since this browser last synced.",
+                "server_hash": existing.content_hash,
+                "base_hash":   base,
+                "server_save": _save_dict(existing, rom),
+            },
+        )
 
     # Unchanged SRAM → nothing to rewrite, just record that it is still current.
     if existing and existing.content_hash == content_hash:
@@ -525,7 +594,7 @@ async def upload_save(
     return _save_dict(save, rom)
 
 
-@protected_route(router.get, "/{rom_id}/saves", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/{rom_id}/saves", scopes=[Scopes.ROMS_READ])
 async def list_saves(request: Request, rom_id: int) -> list[dict]:
     user_id = request.state.user.id
     await _get_rom_or_404(rom_id)
@@ -558,7 +627,7 @@ def _zip_response(path: Path, filename: str) -> FileResponse:
     )
 
 
-@protected_route(router.get, "/states/{state_id}/export", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/states/{state_id}/export", scopes=[Scopes.ROMS_READ])
 async def export_state(request: Request, state_id: int):
     """One savestate, its screenshot and where it belongs, as a zip."""
     user_id = request.state.user.id
@@ -573,7 +642,7 @@ async def export_state(request: Request, state_id: int):
     return _zip_response(path, f"{stem}{slot}.zip")
 
 
-@protected_route(router.get, "/saves/{save_id}/export", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/saves/{save_id}/export", scopes=[Scopes.ROMS_READ])
 async def export_save(request: Request, save_id: int):
     """One battery save and where it belongs, as a zip."""
     user_id = request.state.user.id
@@ -587,7 +656,7 @@ async def export_save(request: Request, save_id: int):
     return _zip_response(path, f"{stem} battery.zip")
 
 
-@protected_route(router.get, "/export", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/export", scopes=[Scopes.ROMS_READ])
 async def export_saves(request: Request, rom_id: int | None = None):
     """Every save this user holds, or just one game's (?rom_id=). The backup."""
     user_id = request.state.user.id
@@ -801,7 +870,7 @@ async def _import_archive(request: Request, raw: bytes) -> list[dict]:
     return out
 
 
-@protected_route(router.post, "/import", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.post, "/import", scopes=[Scopes.ROMS_READ])
 async def import_saves(
     request: Request,
     files: list[UploadFile] = File(...),

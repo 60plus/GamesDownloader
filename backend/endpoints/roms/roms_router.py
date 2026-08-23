@@ -34,6 +34,7 @@ from handler.metadata.rom_scrape_handler import scrape_roms_batch
 from handler.metadata.rom_platform_map import PLATFORM_MAP, get_cover_aspect as _get_cover_aspect
 from utils import download_tickets
 from utils.ratings import rom_rating_agg_of
+from utils.async_utils import note_unscanned
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +91,13 @@ class RomMetadataUpdate(BaseModel):
 
 # ── Platforms ─────────────────────────────────────────────────────────────────
 
-@protected_route(router.get, "/platforms", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/platforms", scopes=[Scopes.PLATFORMS_READ])
 async def list_platforms(request: Request) -> list[dict]:
     """List all detected ROM platforms with ROM counts."""
     return await rom_platform_handler.get_all_with_counts()
 
 
-@protected_route(router.get, "/platforms/known", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/platforms/known", scopes=[Scopes.PLATFORMS_READ])
 async def list_known_platforms(request: Request) -> list[dict]:
     """Return all platforms defined in PLATFORM_MAP (known slugs, not necessarily in DB).
 
@@ -115,14 +116,14 @@ async def list_known_platforms(request: Request) -> list[dict]:
     return result
 
 
-@protected_route(router.get, "/platforms/metadata", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/platforms/metadata", scopes=[Scopes.PLATFORMS_READ])
 async def get_platforms_metadata(request: Request) -> dict:
     """Return EmulationStation metadata (colour, descriptions, etc.) for all platforms."""
     from handler.metadata.platform_metadata_handler import get_all as _pm_get_all
     return _pm_get_all()
 
 
-@protected_route(router.get, "/platforms/{slug}", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/platforms/{slug}", scopes=[Scopes.PLATFORMS_READ])
 async def get_platform(request: Request, slug: str) -> dict:
     platform = await rom_platform_handler.get_by_slug(slug)
     if platform is None:
@@ -152,7 +153,7 @@ async def get_platform(request: Request, slug: str) -> dict:
     }
 
 
-@protected_route(router.get, "/platforms/{slug}/stored-info", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/platforms/{slug}/stored-info", scopes=[Scopes.PLATFORMS_READ])
 async def get_platform_stored_info(request: Request, slug: str) -> dict:
     """Return the config-stored platform info (photo, description, etc.) for any fs_slug.
 
@@ -173,7 +174,7 @@ async def get_platform_stored_info(request: Request, slug: str) -> dict:
     }
 
 
-@protected_route(router.patch, "/platforms/{slug}", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.patch, "/platforms/{slug}", scopes=[Scopes.PLATFORMS_WRITE])
 async def update_platform(request: Request, slug: str, body: PlatformUpdateBody) -> dict:
     platform = await rom_platform_handler.get_by_slug(slug)
     if platform is None:
@@ -193,7 +194,7 @@ async def update_platform(request: Request, slug: str, body: PlatformUpdateBody)
 
 # ── ROM list ──────────────────────────────────────────────────────────────────
 
-@protected_route(router.get, "", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "", scopes=[Scopes.ROMS_READ])
 async def list_roms(
     request: Request,
     platform_slug: str | None = None,
@@ -258,7 +259,7 @@ async def list_roms(
 
 # ── ROM streaming for in-browser emulator (literal, before /{rom_id}) ───────────
 
-@protected_route(router.get, "/stream/{rom_id}", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/stream/{rom_id}", scopes=[Scopes.ROMS_READ])
 async def stream_rom(request: Request, rom_id: int):
     """Stream ROM binary for EmulatorJS. Auth required (Bearer token in header)."""
     rom = await rom_handler.get_by_id(rom_id)
@@ -267,9 +268,12 @@ async def stream_rom(request: Request, rom_id: int):
     abs_path = Path(rom.fs_path) / rom.fs_name
     if not abs_path.exists():
         raise HTTPException(status_code=404, detail="ROM file not found on disk")
-    # Path traversal guard
+    # Path traversal guard. startswith alone compares text, so a sibling whose
+    # name merely begins with the base ("/data/games/roms_backup") would pass.
+    # Require the base exactly, or the base followed by a separator.
     roms_base = os.path.realpath(await _get_roms_path())
-    if not os.path.realpath(str(abs_path)).startswith(roms_base):
+    _resolved = os.path.realpath(str(abs_path))
+    if not (_resolved == roms_base or _resolved.startswith(roms_base + os.sep)):
         raise HTTPException(status_code=403, detail="Access denied")
     import mimetypes
     mime, _ = mimetypes.guess_type(rom.fs_name)
@@ -305,7 +309,7 @@ def _rom_has_gaps(rom) -> bool:
     return False
 
 
-@protected_route(router.get, "/recent", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/recent", scopes=[Scopes.ROMS_READ])
 async def get_recent_roms(request: Request, limit: int = 24) -> list[dict]:
     """Return the most recently added ROMs across all platforms (for home page row)."""
     roms = await rom_handler.get_recent(limit=min(limit, 48))
@@ -335,7 +339,7 @@ def _rom_tile_dict(rom) -> dict:
     }
 
 
-@protected_route(router.get, "/top-rated", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/top-rated", scopes=[Scopes.ROMS_READ])
 async def get_top_rated_roms(request: Request, limit: int = 24) -> list[dict]:
     """Best-rated ROMs across ALL platforms, ranked by the aggregate score."""
     roms = await rom_handler.get_rated()
@@ -349,7 +353,7 @@ async def get_top_rated_roms(request: Request, limit: int = 24) -> list[dict]:
     return out
 
 
-@protected_route(router.get, "/summary", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/summary", scopes=[Scopes.ROMS_READ])
 async def get_summary(request: Request) -> dict:
     """Return stats for the home page Emulation Library card."""
     total_roms, platforms, sample = await asyncio.gather(
@@ -367,7 +371,7 @@ async def get_summary(request: Request) -> dict:
 
 # ── ROM metadata search ───────────────────────────────────────────────────────
 
-@protected_route(router.get, "/search", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/search", scopes=[Scopes.ROMS_READ])
 async def search_roms_metadata(
     request: Request,
     query: str = "",
@@ -516,7 +520,7 @@ async def search_roms_metadata(
 
 # ── ROM detail ────────────────────────────────────────────────────────────────
 
-@protected_route(router.get, "/{rom_id}", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/{rom_id}", scopes=[Scopes.ROMS_READ])
 async def get_rom(request: Request, rom_id: int) -> dict:
     rom = await rom_handler.get_with_platform(rom_id)
     if rom is None:
@@ -627,7 +631,7 @@ def _clear_media(media_dir, stem: str) -> None:
             old.unlink(missing_ok=True)
 
 
-@protected_route(router.patch, "/{rom_id}", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.patch, "/{rom_id}", scopes=[Scopes.LIBRARY_WRITE, Scopes.ROMS_READ])
 async def update_rom_metadata(
     request: Request,
     rom_id: int,
@@ -798,7 +802,7 @@ _UPLOAD_KINDS = {
 _UPLOAD_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "mp4", "webm"}
 
 
-@protected_route(router.post, "/{rom_id}/media/{kind}/upload", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.post, "/{rom_id}/media/{kind}/upload", scopes=[Scopes.LIBRARY_WRITE, Scopes.ROMS_READ])
 async def upload_rom_media(
     request: Request,
     rom_id: int,
@@ -976,7 +980,7 @@ def _extract_igdb_details(game: dict) -> dict:
     }
 
 
-@protected_route(router.get, "/{rom_id}/all-media", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/{rom_id}/all-media", scopes=[Scopes.ROMS_READ])
 async def get_rom_all_media(
     request: Request,
     rom_id: int,
@@ -1356,7 +1360,7 @@ async def get_rom_all_media(
 
 
 # Backward-compat alias
-@protected_route(router.get, "/{rom_id}/ss-media", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/{rom_id}/ss-media", scopes=[Scopes.ROMS_READ])
 async def get_rom_ss_media(
     request: Request,
     rom_id: int,
@@ -1379,9 +1383,10 @@ async def _rom_file_response(rom_id: int) -> FileResponse:
     file_path = Path(rom.fs_path) / rom.fs_name
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="ROM file not found on disk")
-    # Path traversal guard
+    # Path traversal guard - see the note on the other guard in this file.
     roms_base = os.path.realpath(await _get_roms_path())
-    if not os.path.realpath(str(file_path)).startswith(roms_base):
+    _resolved = os.path.realpath(str(file_path))
+    if not (_resolved == roms_base or _resolved.startswith(roms_base + os.sep)):
         raise HTTPException(status_code=403, detail="Access denied")
     return FileResponse(
         path=str(file_path),
@@ -1390,7 +1395,7 @@ async def _rom_file_response(rom_id: int) -> FileResponse:
     )
 
 
-@protected_route(router.get, "/{rom_id}/download", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/{rom_id}/download", scopes=[Scopes.ROMS_READ])
 async def download_rom(request: Request, rom_id: int) -> FileResponse:
     """Download a ROM with an Authorization header - for API clients.
 
@@ -1400,7 +1405,7 @@ async def download_rom(request: Request, rom_id: int) -> FileResponse:
     return await _rom_file_response(rom_id)
 
 
-@protected_route(router.post, "/{rom_id}/download-ticket", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.post, "/{rom_id}/download-ticket", scopes=[Scopes.ROMS_READ])
 async def issue_download_ticket(request: Request, rom_id: int, whole_set: bool = False) -> dict:
     """A short-lived link the browser can be pointed at.
 
@@ -1483,7 +1488,7 @@ def _safe_download_name(name: str) -> str:
 
 # ── Clear metadata ────────────────────────────────────────────────────────────
 
-@protected_route(router.post, "/{rom_id}/clear-metadata", scopes=[Scopes.LIBRARY_ADMIN])
+@protected_route(router.post, "/{rom_id}/clear-metadata", scopes=[Scopes.ROMS_WRITE])
 async def clear_rom_metadata(request: Request, rom_id: int) -> dict:
     """Clear all scraped metadata for a single ROM (keeps file info + hashes)."""
     result = await rom_handler.clear_metadata(rom_id)
@@ -1492,28 +1497,24 @@ async def clear_rom_metadata(request: Request, rom_id: int) -> dict:
     return {"ok": True}
 
 
-@protected_route(router.post, "/platforms/{slug}/clear-metadata", scopes=[Scopes.LIBRARY_ADMIN])
+@protected_route(router.post, "/platforms/{slug}/clear-metadata", scopes=[Scopes.ROMS_WRITE])
 async def clear_platform_metadata(request: Request, slug: str) -> dict:
     """Clear scraped metadata for ALL ROMs on a platform."""
     platform = await rom_platform_handler.get_by_slug(slug)
     if platform is None:
         raise HTTPException(status_code=404, detail="Platform not found")
-    items, _ = await rom_handler.list_for_platform(platform.id, limit=9999)
-    count = 0
-    for rom_obj in items:
-        await rom_handler.clear_metadata(rom_obj.id)
-        count += 1
+    count = await rom_handler.clear_metadata_for_platform(platform.id)
     return {"ok": True, "cleared": count}
 
 
-@protected_route(router.delete, "/metadata", scopes=[Scopes.LIBRARY_ADMIN])
+@protected_route(router.delete, "/metadata", scopes=[Scopes.ROMS_WRITE])
 async def clear_all_roms_metadata(request: Request) -> dict:
     """Clear scraped metadata for ALL ROMs across all platforms."""
     count = await rom_handler.clear_all_metadata()
     return {"ok": True, "cleared": count}
 
 
-@protected_route(router.get, "/{rom_id}/removal", scopes=[Scopes.LIBRARY_ADMIN])
+@protected_route(router.get, "/{rom_id}/removal", scopes=[Scopes.ROMS_WRITE])
 async def rom_removal_preview(request: Request, rom_id: int) -> dict:
     """What deleting this ROM would take with it.
 
@@ -1536,7 +1537,7 @@ async def rom_removal_preview(request: Request, rom_id: int) -> dict:
     }
 
 
-@protected_route(router.delete, "/{rom_id}", scopes=[Scopes.LIBRARY_ADMIN])
+@protected_route(router.delete, "/{rom_id}", scopes=[Scopes.ROMS_WRITE])
 async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) -> dict:
     """Take a ROM out of the library, and its whole set when it has one.
 
@@ -1579,7 +1580,7 @@ async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) 
 
 # ── ROM Upload ────────────────────────────────────────────────────────────────
 
-@protected_route(router.post, "/platforms/{slug}/upload", scopes=[Scopes.LIBRARY_UPLOAD])
+@protected_route(router.post, "/platforms/{slug}/upload", scopes=[Scopes.LIBRARY_UPLOAD, Scopes.ROMS_READ])
 async def upload_roms(
     request: Request,
     slug: str,
@@ -1624,6 +1625,7 @@ async def upload_roms(
             if scan_uploads:
                 try:
                     res = await _clam.scan_file(str(dest_path))
+                    note_unscanned(res, "ROM upload", safe_name)
                     if res.get("status") == "FOUND":
                         threat = res.get("threat") or "unknown"
                         action_res = await _clam.quarantine_or_delete(
@@ -1674,7 +1676,7 @@ async def upload_roms(
 
 # ── Scan ──────────────────────────────────────────────────────────────────────
 
-@protected_route(router.post, "/scan", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.post, "/scan", scopes=[Scopes.PLATFORMS_WRITE])
 async def trigger_scan(request: Request, background_tasks: BackgroundTasks) -> dict:
     global _scan_running
     if _scan_lock.locked():
@@ -1695,14 +1697,14 @@ async def trigger_scan(request: Request, background_tasks: BackgroundTasks) -> d
     return {"ok": True, "message": "ROM scan started", "path": roms_path}
 
 
-@protected_route(router.get, "/scan/status", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.get, "/scan/status", scopes=[Scopes.ROMS_READ])
 async def scan_status(request: Request) -> dict:
     return {"running": _scan_lock.locked()}
 
 
 # ── Scrape metadata ───────────────────────────────────────────────────────────
 
-@protected_route(router.post, "/platforms/{slug}/scrape-platform", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.post, "/platforms/{slug}/scrape-platform", scopes=[Scopes.ROMS_WRITE])
 async def scrape_platform_info(
     request: Request,
     slug: str,
@@ -1743,7 +1745,7 @@ async def scrape_platform_info(
     return {"ok": True, "message": "Platform info scrape started"}
 
 
-@protected_route(router.post, "/platforms/{slug}/scrape", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.post, "/platforms/{slug}/scrape", scopes=[Scopes.ROMS_WRITE])
 async def scrape_platform(
     request: Request,
     slug: str,
@@ -1791,7 +1793,7 @@ class ScrapeRomBody(BaseModel):
     forced_launchbox_id: str | None = None
 
 
-@protected_route(router.post, "/{rom_id}/scrape", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.post, "/{rom_id}/scrape", scopes=[Scopes.LIBRARY_WRITE, Scopes.ROMS_READ])
 async def scrape_rom(
     request: Request,
     rom_id: int,
@@ -1827,7 +1829,7 @@ async def scrape_rom(
     return {"ok": True, "rom_id": rom_id, "forced_ss_id": forced_ss_id, "forced_launchbox_id": forced_launchbox_id}
 
 
-@protected_route(router.post, "/hltb-rescrape", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.post, "/hltb-rescrape", scopes=[Scopes.ROMS_WRITE])
 async def hltb_rescrape_roms(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -1850,7 +1852,7 @@ class _RomPlayEnd(BaseModel):
     seconds: int | None = None
 
 
-@protected_route(router.post, "/{rom_id}/play/start", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.post, "/{rom_id}/play/start", scopes=[Scopes.ROMS_READ])
 async def rom_play_start(request: Request, rom_id: int) -> dict:
     """Record play history + fire lifecycle_on_play_start when the in-browser
     player launches a ROM. Called by player.html once EmulatorJS reports start.
@@ -1872,7 +1874,7 @@ async def rom_play_start(request: Request, rom_id: int) -> dict:
     return {"ok": True}
 
 
-@protected_route(router.post, "/{rom_id}/play/end", scopes=[Scopes.LIBRARY_READ])
+@protected_route(router.post, "/{rom_id}/play/end", scopes=[Scopes.ROMS_READ])
 async def rom_play_end(request: Request, rom_id: int, body: _RomPlayEnd | None = None) -> dict:
     """Record elapsed play time + fire lifecycle_on_play_end when a session ends.
     `seconds` is the elapsed play time reported by player.html. last_played_at is
@@ -1888,7 +1890,7 @@ async def rom_play_end(request: Request, rom_id: int, body: _RomPlayEnd | None =
     return {"ok": True}
 
 
-@protected_route(router.post, "/{rom_id}/announce", scopes=[Scopes.LIBRARY_WRITE])
+@protected_route(router.post, "/{rom_id}/announce", scopes=[Scopes.LIBRARY_WRITE, Scopes.ROMS_READ])
 async def announce_rom_added(request: Request, rom_id: int) -> dict:
     """Manually (re)send the rich "recently added" notification for this ROM -
     the "(Re)send notification" button in the ROM metadata editor. Landscape box

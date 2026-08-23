@@ -33,6 +33,7 @@ from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.database.library_handler import LibraryHandler
 from models.library_file import LibraryFile
+from utils.async_utils import fire_task, note_unscanned
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,36 @@ class _VirusFound(Exception):
         self.action = action
 
 
+def _part_path(dest_path: Path) -> Path:
+    """Where the bytes land while they are still arriving.
+
+    Nothing writes straight to its final name any more. Both upload paths used
+    to open the destination directly, so an upload of a name that already
+    existed truncated a finished game file the moment the first byte arrived,
+    and the blanket error handler then deleted what was left. Failures that had
+    written nothing at all reached that delete too - a 404 on a pasted link, a
+    file bigger than the limit, a blocked redirect - so pasting a dead URL
+    removed a healthy install whose only crime was sharing a filename.
+    """
+    return dest_path.with_name(dest_path.name + ".part")
+
+
+def _refuse_existing(dest_path: Path, overwrite: bool) -> None:
+    """Do not replace a file that is already there unless asked to.
+
+    The duplicate guard further down only looks at the database, and only after
+    the bytes are on disk. This looks at the disk, first. Same rule the ROM
+    downloader applies for the same reason: a stale listing or a double click
+    should not be able to write over something already downloaded.
+    """
+    if overwrite or not dest_path.exists():
+        return
+    raise ValueError(
+        f"'{dest_path.name}' is already in this game's folder. "
+        f"Remove it first, or send overwrite=true to replace it."
+    )
+
+
 async def _finalize_upload(
     game_id: int,
     dest_path: Path,
@@ -151,22 +182,31 @@ async def _finalize_upload(
     language: str | None,
     version: str | None,
     actor: str | None,
+    staged: Path | None = None,
 ) -> dict:
     """Shared tail of every upload path: optional ClamAV check, duplicate
     guard and the LibraryFile record. Raises _VirusFound when ClamAV blocks
     the file (already quarantined/deleted by then).
 
+    `staged` is where the bytes actually are: the scan runs against that, and
+    only a file that survives it is moved onto `dest_path`. Scanning after the
+    move would mean an infected upload had already replaced a good file by the
+    time anything objected, and ClamAV's own quarantine step would then carry
+    off the wrong one.
+
     ClamAV is controlled by the `clamav_auto_scan_upload` admin setting (off
     by default). Only "FOUND" rejects the upload - scan errors fail open so a
     broken daemon does not block legitimate users."""
+    scan_target = staged or dest_path
     try:
         from handler.clamav import clamav_handler as _clam
         if await _clam.is_upload_scanning_enabled():
-            scan_res = await _clam.scan_file(str(dest_path))
+            scan_res = await _clam.scan_file(str(scan_target))
+            note_unscanned(scan_res, "upload", filename)
             if scan_res.get("status") == "FOUND":
                 threat = scan_res.get("threat") or "unknown"
                 action_res = await _clam.quarantine_or_delete(
-                    str(dest_path), threat, triggered_by=actor
+                    str(scan_target), threat, triggered_by=actor
                 )
                 logger.warning(
                     "ClamAV blocked upload '%s' (game=%d, threat=%s, action=%s)",
@@ -177,7 +217,13 @@ async def _finalize_upload(
         raise
     except Exception:
         # Don't fail the upload because the scanner choked - log and continue.
-        logger.exception("ClamAV scan check failed for %s; allowing upload", dest_path)
+        logger.exception("ClamAV scan check failed for %s; allowing upload", scan_target)
+
+    # Clean, so it can take its real name. os.replace is atomic within a
+    # filesystem: either the old file is there or the new one is, never a
+    # half-written thing wearing the name of something that worked.
+    if staged is not None:
+        os.replace(str(staged), str(dest_path))
 
     rel = _rel_from_abs(str(dest_path))
 
@@ -225,6 +271,10 @@ async def upload_game_file(
     file_type:   str  = Form("game"),
     language:    str  = Form(None),
     version:     str  = Form(None),
+    # Replacing a file that is already in the folder has to be asked for. It
+    # used to happen by itself, at the first byte, before anything had checked
+    # the replacement was even downloadable.
+    overwrite:   bool = Form(False),
 ) -> dict:
     game = await _lib.get_by_id(game_id)
     if not game:
@@ -242,23 +292,34 @@ async def upload_game_file(
     if ".." in filename or filename.startswith(("/", "\\")):
         raise HTTPException(status_code=400, detail="Invalid filename")
     dest_path = dest_dir / filename
+    try:
+        _refuse_existing(dest_path, overwrite)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
     max_bytes = await _max_upload_bytes(getattr(request.state, "user", None))
 
-    # Write file with size guard - abort and remove partial file if limit exceeded
+    # Into a .part, never straight onto the destination. Writing to the final
+    # name truncated whatever was already there before a single byte of the
+    # replacement had been checked, and a browser that went away mid-upload
+    # left the wreckage wearing the name of something that used to work.
+    part_path = _part_path(dest_path)
     size = 0
     aborted = False
     try:
-        with open(dest_path, "wb") as fh:
+        with open(part_path, "wb") as fh:
             while chunk := await file.read(_CHUNK_WRITE):
                 fh.write(chunk)
                 size += len(chunk)
                 if size > max_bytes:
                     aborted = True
                     break
+    except Exception:
+        part_path.unlink(missing_ok=True)
+        raise
     finally:
         if aborted:
-            dest_path.unlink(missing_ok=True)
+            part_path.unlink(missing_ok=True)
             raise HTTPException(
                 status_code=413,
                 detail=f"File exceeds maximum allowed upload size "
@@ -271,6 +332,7 @@ async def upload_game_file(
         return await _finalize_upload(
             game_id, dest_path, filename, size,
             os_platform, file_type, language, version, actor,
+            staged=part_path,
         )
     except _VirusFound as v:
         raise HTTPException(
@@ -291,6 +353,7 @@ class UploadUrlBody(BaseModel):
     file_type: str = "game"
     language: str | None = None
     version: str | None = None
+    overwrite: bool = False
 
 
 _url_job_seq = itertools.count(1)
@@ -319,16 +382,19 @@ async def _url_upload_job(
     max_bytes: int,
     game_title: str = "",
     tray: bool = False,
+    overwrite: bool = False,
 ) -> None:
     from handler.socket_handler import sio
     import httpx
     from utils.net_guard import make_request_guard
 
     dest_path = dest_dir / filename
+    part_path = _part_path(dest_path)
     size = 0
     started = time.monotonic()
     last_emit = 0.0
     try:
+        _refuse_existing(dest_path, overwrite)
         timeout = httpx.Timeout(30.0, read=300.0)
         # SSRF guard: block localhost / cloud-metadata / link-local on every hop
         # (initial + redirects), but allow RFC-1918 LAN so a self-hoster can pull
@@ -347,13 +413,17 @@ async def _url_upload_job(
                     if better != filename:
                         filename = better
                         dest_path = dest_dir / filename
+                        part_path = _part_path(dest_path)
+                        # The server named it, so the collision check has to run
+                        # again against the name that will actually be used.
+                        _refuse_existing(dest_path, overwrite)
                 total = int(resp.headers.get("content-length") or 0)
                 if total and total > max_bytes:
                     raise ValueError(
                         f"File exceeds maximum allowed upload size "
                         f"({max_bytes // (1024 ** 3)} GB)."
                     )
-                with open(dest_path, "wb") as fh:
+                with open(part_path, "wb") as fh:
                     async for chunk in resp.aiter_bytes(_CHUNK_WRITE):
                         fh.write(chunk)
                         size += len(chunk)
@@ -381,17 +451,23 @@ async def _url_upload_job(
         result = await _finalize_upload(
             game_id, dest_path, filename, size,
             os_platform, file_type, language, version, actor,
+            staged=part_path,
         )
         await sio.emit("upload:url_complete", {"id": job_id, "game_id": game_id, "game_title": game_title, "tray": tray, **result})
         logger.info("URL upload #%d finished for game %d (%s, %d B)", job_id, game_id, filename, size)
     except _VirusFound as v:
+        part_path.unlink(missing_ok=True)
         await sio.emit("upload:url_error", {
             "id": job_id, "game_id": game_id,
             "game_title": game_title, "tray": tray,
             "error": f"Blocked by antivirus ({v.threat}).",
         })
     except Exception as e:
-        dest_path.unlink(missing_ok=True)
+        # Only ever the .part. This line used to name the destination, and
+        # every failure reached it - including the ones that had not written a
+        # byte, like a 404, a file over the size limit, or a redirect the SSRF
+        # guard turned down. A dead link deleted a finished game.
+        part_path.unlink(missing_ok=True)
         logger.warning("URL upload #%d failed for game %d: %s", job_id, game_id, e)
         await sio.emit("upload:url_error", {
             "id": job_id, "game_id": game_id,
@@ -405,6 +481,7 @@ async def queue_url_download(
     language: str | None = None, version: str | None = None,
     actor: str | None = None, max_bytes: int, storage_folder: str | None = None,
     storage_title: str | None = None, tray: bool = False,
+    overwrite: bool = False,
 ) -> dict:
     """Validate a URL and start a background download into a game's folder.
 
@@ -440,10 +517,10 @@ async def queue_url_download(
     filename = _safe_filename(parsed.path)
     dest_dir = _dest_dir_for(storage_title or game.title, os_platform, file_type, folder)
     job_id = next(_url_job_seq)
-    asyncio.create_task(_url_upload_job(
+    fire_task(_url_upload_job(
         job_id, game.id, url, dest_dir, filename,
         os_platform, file_type, language, version, actor, max_bytes,
-        game_title=game.title, tray=tray,
+        game_title=game.title, tray=tray, overwrite=overwrite,
     ))
     return {"id": job_id, "filename": filename}
 
@@ -462,6 +539,7 @@ async def upload_game_file_from_url(request: Request, game_id: int, body: Upload
             actor=(request.state.user.username
                    if getattr(request.state, "user", None) else None),
             max_bytes=await _max_upload_bytes(getattr(request.state, "user", None)),
+            overwrite=body.overwrite,
         )
     # UnsafeURLError is a ValueError, so the blocked-URL case lands here too.
     except ValueError as exc:

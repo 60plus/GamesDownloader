@@ -75,6 +75,26 @@ class SessionHandler:
             )
             return result.scalar_one_or_none()
 
+    async def is_access_jti_revoked(self, access_jti: str) -> bool:
+        """True only when a session row exists for this token and says inactive.
+
+        The auth middleware asks this on every authenticated request, as the
+        backstop for the Redis revocation list being cleared. It used to call
+        `get_by_access_jti` and hydrate the whole session row - the user agent,
+        the addresses, the timestamps - to read one boolean, on a path an SPA
+        page render crosses fifty times.
+
+        An unknown jti answers False, exactly as before: a token whose session
+        row has been pruned is not treated as revoked here, the expiry in the
+        token itself governs that.
+        """
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(UserSession.is_active).where(UserSession.access_jti == access_jti)
+            )
+            row = result.scalar_one_or_none()
+            return row is False
+
     async def get_by_id(self, session_id: int) -> UserSession | None:
         async with async_session_factory() as db:
             result = await db.execute(
@@ -103,19 +123,25 @@ class SessionHandler:
 
         return result.rowcount > 0
 
-    async def revoke_all_for_user(self, username: str) -> int:
+    async def revoke_all_for_user(self, username: str, *, keep_access_jti: str | None = None) -> int:
+        """Sign a user out everywhere.
+
+        `keep_access_jti` spares one session, for the case where somebody
+        changes their own password: every other device should be signed out,
+        but throwing the person who just did it back to the login screen is
+        punishing the right action.
+        """
         async with async_session_factory() as db:
+            where = [UserSession.username == username, UserSession.is_active == True]
+            if keep_access_jti:
+                where.append(UserSession.access_jti != keep_access_jti)
+
             # Fetch all active access_jtis before revoking
-            rows = await db.execute(
-                select(UserSession.access_jti)
-                .where(UserSession.username == username, UserSession.is_active == True)
-            )
+            rows = await db.execute(select(UserSession.access_jti).where(*where))
             jtis = [r for r in rows.scalars().all() if r]
 
             result = await db.execute(
-                update(UserSession)
-                .where(UserSession.username == username, UserSession.is_active == True)
-                .values(is_active=False)
+                update(UserSession).where(*where).values(is_active=False)
             )
             await db.commit()
 

@@ -6,6 +6,7 @@ and filesystem operations for the plugin system.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -19,6 +20,11 @@ from pathlib import Path
 from config import GD_VERSION, PLUGINS_PATH
 
 logger = logging.getLogger(__name__)
+
+# A plugin archive carries its assets: a theme is hundreds of files of images
+# and fonts. High enough that no real plugin meets it, low enough that a store
+# serving something enormous is refused before it fills the disk.
+MAX_PLUGIN_ZIP_BYTES = 256 * 1024 * 1024
 
 REQUIRED_MANIFEST_FIELDS = ["id", "name", "version", "author", "type", "entry"]
 # "catalog" is a storefront plugin (library_catalog_* hooks): it lists games a
@@ -43,11 +49,25 @@ async def install_plugin_from_url(url: str) -> dict:
         tmp_path = Path(tmp.name)
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=120) as client:
-            r = await client.get(url)
-            if r.status_code == 404:
-                raise ValueError(f"Plugin package not found: {url}")
-            r.raise_for_status()
-            tmp_path.write_bytes(r.content)
+            # Streamed to disk rather than read whole into memory: the archive
+            # is whatever the store serves, and nothing checked its size at all
+            # before. The ceiling is deliberately generous - a theme ships its
+            # assets, and Neon Horizon alone is close to six hundred files - so
+            # it stops a runaway without refusing a real plugin.
+            async with client.stream("GET", url) as r:
+                if r.status_code == 404:
+                    raise ValueError(f"Plugin package not found: {url}")
+                r.raise_for_status()
+                written = 0
+                with tmp_path.open("wb") as fh:
+                    async for chunk in r.aiter_bytes(1 << 20):
+                        written += len(chunk)
+                        if written > MAX_PLUGIN_ZIP_BYTES:
+                            raise ValueError(
+                                "Plugin package is larger than "
+                                f"{MAX_PLUGIN_ZIP_BYTES // (1024 * 1024)} MB"
+                            )
+                        fh.write(chunk)
         return await install_plugin_from_zip(tmp_path)
     except httpx.HTTPStatusError as exc:
         raise ValueError(f"Download failed ({exc.response.status_code}): {url}") from exc
@@ -60,7 +80,23 @@ async def install_plugin_from_zip(zip_path: Path) -> dict:
 
     Returns the parsed manifest dict on success.
     Raises ValueError on validation failure, RuntimeError on install failure.
+
+    The work runs in a thread. It contains no awaits at all - a `pip install`
+    with a two-minute timeout, a per-member copy of the archive and a copytree
+    of the result - and it used to run on the event loop, so installing any
+    store plugin that ships a requirements.txt froze the entire server for the
+    length of the pip run: every request, the health check and Socket.IO.
+
+    Loading the installed plugin is deliberately *not* moved off the loop. That
+    step imports and constructs third-party code, some of which does its
+    startup work in __init__ because lifecycle_on_startup does not fire on a
+    hot load, and a worker thread has no running event loop for it to reach.
+    An import costs milliseconds; pip costs minutes.
     """
+    return await asyncio.to_thread(_install_plugin_from_zip_sync, zip_path)
+
+
+def _install_plugin_from_zip_sync(zip_path: Path) -> dict:
     plugins_dir = Path(PLUGINS_PATH)
     plugins_dir.mkdir(parents=True, exist_ok=True)
 

@@ -46,6 +46,10 @@ def protected_route(
 
             return await func(request, *args, **kwargs)
 
+        # Recorded so the access rules can be asserted against the routes
+        # themselves rather than against the source text. A route that declares
+        # nothing simply has an empty tuple.
+        wrapper.required_scopes = tuple(scopes or ())
         return wrapper
 
     return decorator

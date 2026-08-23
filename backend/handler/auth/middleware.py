@@ -66,11 +66,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if jti and await _is_jti_revoked(jti):
             return  # token revoked in Redis - treat as unauthenticated
 
-        # Secondary check: DB session must be active (guards against Redis being cleared)
-        if jti:
-            sess = await session_handler.get_by_access_jti(jti)
-            if sess is not None and not sess.is_active:
-                return  # session revoked in DB - treat as unauthenticated
+        # Secondary check: DB session must be active (guards against Redis being
+        # cleared). Selects the one column rather than hydrating the whole
+        # session row, which this crosses on every authenticated request.
+        if jti and await session_handler.is_access_jti_revoked(jti):
+            return  # session revoked in DB - treat as unauthenticated
 
         user = await _load_user(username)
         if user and user.enabled:

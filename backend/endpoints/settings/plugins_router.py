@@ -39,7 +39,6 @@ from handler.library.catalog_meta_handler import (
     scrape_catalog,
     set_search_term,
 )
-from handler.config.config_handler import config_handler
 from handler.database.session import async_session_factory
 from handler.plugins.install_handler import (
     install_plugin_from_zip,
@@ -477,6 +476,7 @@ async def get_plugin_asset(plugin_id: str, file_path: str) -> FileResponse:
 # ── Plugin Store ─────────────────────────────────────────────────────────────
 
 from models.plugin_config import PluginStoreSource
+from utils.async_utils import fire_task
 
 
 @protected_route(plugins_router.get, "/store/sources", scopes=[Scope.PLUGINS_READ])
@@ -624,71 +624,91 @@ def _version_gt(a: str, b: str) -> bool:
         return False
 
 
+_ICON_MAX_BYTES = 2 * 1024 * 1024
+
+
+async def store_icon_hosts() -> set[str]:
+    """Hosts whose icons this server will proxy.
+
+    GitHub plus every enabled store source, read from the same table
+    `browse_store` reads. It used to consult a config key named
+    "plugin_store_sources" that nothing anywhere ever writes, so the set was
+    always just GitHub: a self-hosted store installed fine (that path reads the
+    table) while every one of its icons came back 400.
+    """
+    from urllib.parse import urlparse
+
+    hosts = {"github.com", "raw.githubusercontent.com", "objects.githubusercontent.com"}
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(PluginStoreSource).where(PluginStoreSource.enabled == True)  # noqa: E712
+        )
+        for src in result.scalars().all():
+            h = (urlparse(src.url).hostname or "").lower()
+            if h:
+                hosts.add(h)
+    return hosts
+
+
 @plugins_router.get("/store/icon")
 async def proxy_store_icon(url: str = Query(..., description="Remote icon URL")):
     """Proxy a remote plugin icon to avoid CORS issues.
 
-    No auth required (icons are loaded by <img> tags) but restricted to
-    hostnames from registered store sources + github.com.
+    Unauthenticated on purpose, for the same reason the theme CSS/JS routes
+    below are: the store list renders these through <img src=...>, which cannot
+    carry a bearer token. What keeps an open route cheap is that it fetches
+    only an image, only from a host the admin registered as a store source,
+    only without redirects, and only up to two megabytes counted as the body
+    arrives - the size test used to run against an already-buffered response,
+    so a highly compressible file cost the caller almost nothing and the server
+    its full decompressed size in memory.
     """
-    import httpx
-    import ipaddress
-    import socket
+    import asyncio
     from urllib.parse import urlparse
+
+    import httpx
     from starlette.responses import Response
+
+    from utils.http import MediaTooLarge, read_capped
+    from utils.net_guard import UnsafeURLError, assert_fetch_allowed
 
     if not url.startswith("https://") and not url.startswith("http://"):
         raise HTTPException(status_code=400, detail="Invalid URL")
 
-    hostname = urlparse(url).hostname or ""
+    hostname = (urlparse(url).hostname or "").lower()
     if not hostname:
         raise HTTPException(status_code=400, detail="Invalid URL")
 
-    # Allowlist: only fetch from known store hosts or well-known CDNs
-    allowed_hosts = {"github.com", "raw.githubusercontent.com"}
-    try:
-        store_sources = await config_handler.get("plugin_store_sources")
-        if store_sources:
-            import json as _json
-            for src in _json.loads(store_sources):
-                h = urlparse(src.get("url", "")).hostname
-                if h:
-                    allowed_hosts.add(h)
-    except Exception:
-        pass
-
-    if hostname not in allowed_hosts:
+    if hostname not in await store_icon_hosts():
         raise HTTPException(status_code=400, detail="Icon host not in store sources allowlist")
 
-    # SSRF protection: resolve hostname and check against private networks
-    # Skip DNS check for allowlisted hosts (store sources may be on local network)
-    _skip_dns = hostname in allowed_hosts
-    if not _skip_dns:
-        try:
-            addr_infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
-            for af, _st, _proto, _cn, sa in addr_infos:
-                ip = ipaddress.ip_address(sa[0])
-                if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
-                    raise HTTPException(status_code=400, detail="URLs resolving to private networks are blocked")
-        except socket.gaierror:
-            raise HTTPException(status_code=400, detail="Cannot resolve hostname")
-        except HTTPException:
-            raise
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid URL")
+    # A store may legitimately live on the operator's LAN, so RFC-1918 is
+    # allowed here - loopback, link-local and the cloud metadata address are
+    # not. Resolution is a blocking syscall and this route is public, so it
+    # does not run on the event loop.
+    try:
+        await asyncio.to_thread(assert_fetch_allowed, url, allow_private_lan=True)
+    except UnsafeURLError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     try:
         async with httpx.AsyncClient(follow_redirects=False, timeout=10) as c:
-            r = await c.get(url)
-            if r.is_redirect:
-                raise HTTPException(status_code=400, detail="Redirects not allowed")
-            r.raise_for_status()
-            ct = r.headers.get("content-type", "")
-            if not ct.startswith("image/") and not ct.startswith("text/xml"):
-                raise HTTPException(status_code=400, detail="Only image content types allowed")
-            if len(r.content) > 2 * 1024 * 1024:
-                raise HTTPException(status_code=400, detail="Icon too large (max 2 MB)")
-            return Response(content=r.content, media_type=ct, headers={"Cache-Control": "public, max-age=86400"})
+            async with c.stream("GET", url) as r:
+                if r.is_redirect:
+                    raise HTTPException(status_code=400, detail="Redirects not allowed")
+                if r.status_code != 200:
+                    raise HTTPException(status_code=404, detail="Icon not found")
+                ct = r.headers.get("content-type", "").split(";")[0].strip()
+                if not ct.startswith("image/") and not ct.startswith("text/xml"):
+                    raise HTTPException(status_code=400, detail="Only image content types allowed")
+                try:
+                    body = await read_capped(r, _ICON_MAX_BYTES, what="icon")
+                except MediaTooLarge:
+                    raise HTTPException(status_code=400, detail="Icon too large (max 2 MB)")
+            return Response(
+                content=body, media_type=ct,
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
     except HTTPException:
         raise
     except Exception:
@@ -1711,5 +1731,5 @@ async def restart_container(request: Request) -> dict:
         await asyncio.sleep(1)  # give time for HTTP response to flush
         os.kill(os.getpid(), signal.SIGTERM)
 
-    asyncio.create_task(_delayed_exit())
+    fire_task(_delayed_exit())
     return {"ok": True, "message": "Restarting..."}

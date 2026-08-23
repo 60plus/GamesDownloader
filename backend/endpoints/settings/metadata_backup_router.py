@@ -49,7 +49,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import inspect, select
 from starlette.background import BackgroundTask
 
-from config import BASE_PATH
+from config import BASE_PATH, RESOURCES_PATH
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.database.session import async_session_factory
@@ -98,10 +98,28 @@ def _zip_arc_for(abs_path: str) -> str | None:
     return "media/" + rel.replace("\\", "/")
 
 
+# No cover, screenshot or logo is anywhere near this big, and the archive is
+# supplied by whoever is restoring rather than produced here.
+_MAX_MEDIA_FILE_BYTES  = 256 * 1024 * 1024          # 256 MB per file
+_MAX_MEDIA_TOTAL_BYTES = 64 * 1024 * 1024 * 1024    # 64 GB across the restore
+
+
 def _safe_extract_to(target_root: str, member: str) -> str | None:
     """Resolve archive member -> safe absolute destination under target_root.
 
-    Returns None when the member would escape via .. or absolute paths.
+    Returns None when the member would escape via .. or absolute paths, or
+    would land outside the resources tree.
+
+    `target_root` used to be BASE_PATH, and BASE_PATH is everything: emulator
+    saves, installed plugins, firmware, config. So a hand-built archive with a
+    member named `media/saves/psx/9/1/Medievil.srm` wrote over a live memory
+    card, `media/plugins/<id>/__init__.py` replaced code that the server then
+    imports and runs, and `media/config/...` rewrote configuration. Rejecting
+    `..` was never the whole problem: the paths that do the damage do not need
+    to escape anywhere, because the destination already contained everything.
+
+    The exporter only ever writes paths under `resources` - covers, artwork,
+    screenshots - so that is the only place a restore has any business writing.
     """
     if not member.startswith("media/"):
         return None
@@ -112,7 +130,9 @@ def _safe_extract_to(target_root: str, member: str) -> str | None:
     if rel_path.is_absolute() or any(p == ".." for p in rel_path.parts):
         return None
     dest = (Path(target_root) / rel_path).resolve()
-    if not str(dest).startswith(str(Path(target_root).resolve())):
+    try:
+        dest.relative_to(Path(RESOURCES_PATH).resolve())
+    except ValueError:
         return None
     return str(dest)
 
@@ -211,7 +231,14 @@ _TABLES: tuple[BackupTable, ...] = (
     BackupTable("library_games",   ("models.library_game",   "LibraryGame"),   ("igdb_id", "slug")),
     BackupTable("library_files",   ("models.library_file",   "LibraryFile"),   ("library_game_id", "file_path")),
     BackupTable("library_torrents",("models.library_torrent","LibraryTorrent"),("library_game_id", "magnet")),
-    BackupTable("roms",            ("models.rom",            "Rom"),           ("platform_id", "fs_path")),
+    # fs_name, not fs_path. fs_path is the containing DIRECTORY - the scanner
+    # sets it to the file's parent - so keying on it collapsed every ROM of a
+    # platform onto one row: three hundred SNES carts in one folder matched
+    # each other, 299 of them lost their restored metadata, and the survivor
+    # ended up wearing another dump's fs_name, after which deleting it unlinked
+    # the wrong file. (platform_id, fs_name) is what rom_handler.upsert has
+    # always used.
+    BackupTable("roms",            ("models.rom",            "Rom"),           ("platform_id", "fs_name")),
     BackupTable("game_requests",   ("models.game_request",   "GameRequest"),   ("title", "platform")),
     BackupTable("plugin_config",   ("models.plugin_config",  "PluginConfig"),  ("plugin_id", "key")),
 )
@@ -446,23 +473,29 @@ async def _upsert_row(session, tbl: BackupTable, model: type, row: dict) -> str:
 
     payload = {k: _coerce_value(model, k, v) for k, v in row.items() if k != "id"}
 
-    if existing is None:
-        try:
-            obj = model(**payload)
-            session.add(obj)
+    # Every row inside its own savepoint. The whole restore runs in one
+    # transaction, and a failed flush poisons the session: the next row's
+    # SELECT then raised PendingRollbackError outside any try, so one bad row
+    # turned into HTTP 500 with everything rolled back. Catching the insert but
+    # not rolling back was worse - it reported HTTP 200 with four thousand
+    # skips and an empty library, which reads like a successful restore.
+    try:
+        async with session.begin_nested():
+            if existing is None:
+                obj = model(**payload)
+                session.add(obj)
+                await session.flush()
+                return "inserted"
+            for k, v in payload.items():
+                try:
+                    setattr(existing, k, v)
+                except Exception:
+                    pass
             await session.flush()
-            return "inserted"
-        except Exception as exc:
-            logger.warning("Restore: insert into %s failed: %s", tbl.name, exc)
-            return "skipped"
-    else:
-        for k, v in payload.items():
-            try:
-                setattr(existing, k, v)
-            except Exception:
-                pass
-        await session.flush()
-        return "updated"
+            return "updated"
+    except Exception as exc:
+        logger.warning("Restore: %s row failed: %s", tbl.name, exc)
+        return "skipped"
 
 
 @protected_route(router.post, "/restore", scopes=[Scope.SETTINGS_WRITE])
@@ -476,7 +509,10 @@ async def restore_backup(
     """Restore an archive previously produced by `/export`.
 
     `restore_metadata` upserts table rows by their natural key.
-    `restore_media`    extracts files under `media/` to BASE_PATH (overwriting).
+    `restore_media`    extracts files under `media/` into the resources tree,
+                       overwriting. Only there: the archive is supplied by
+                       whoever is restoring, and BASE_PATH also holds emulator
+                       saves, installed plugin code and the configuration.
     `restore_settings` overwrites `app_config` rows by key. Off by default
                        because secrets in the archive only decrypt with the
                        same `AUTH_SECRET_KEY` used at backup time.
@@ -555,6 +591,7 @@ async def restore_backup(
                             }
 
             # ── Media ─────────────────────────────────────────────────────
+            media_bytes = 0
             if do_media:
                 for member in zf.namelist():
                     if not member.startswith("media/"):
@@ -563,15 +600,51 @@ async def restore_backup(
                         continue
                     dest = _safe_extract_to(BASE_PATH, member)
                     if dest is None:
+                        logger.warning("Restore: refused archive member %r", member)
                         stats["media_skipped"] += 1
                         continue
+                    # Declared size first, so a member claiming to be enormous
+                    # is turned down before a byte of it is read.
+                    try:
+                        declared = zf.getinfo(member).file_size
+                    except Exception:
+                        declared = 0
+                    if declared > _MAX_MEDIA_FILE_BYTES:
+                        logger.warning(
+                            "Restore: %r declares %d bytes, over the per-file limit",
+                            member, declared,
+                        )
+                        stats["media_skipped"] += 1
+                        continue
+                    if media_bytes + declared > _MAX_MEDIA_TOTAL_BYTES:
+                        logger.warning("Restore: media total limit reached, stopping extraction")
+                        stats["media_skipped"] += 1
+                        break
                     try:
                         os.makedirs(os.path.dirname(dest), exist_ok=True)
+                        written = 0
                         with zf.open(member, "r") as src, open(dest, "wb") as out:
-                            shutil.copyfileobj(src, out)
+                            # Copied by hand rather than with copyfileobj: a ZIP
+                            # entry can lie about its size, and the number that
+                            # matters is what actually comes out of it.
+                            while True:
+                                chunk = src.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                written += len(chunk)
+                                if written > _MAX_MEDIA_FILE_BYTES:
+                                    raise ValueError("member is larger than it declared")
+                                out.write(chunk)
+                        media_bytes += written
                         stats["media_extracted"] += 1
                     except Exception as exc:
                         logger.warning("Restore: failed media %s: %s", member, exc)
+                        # A half-written file is worse than none: it wears the
+                        # name of a cover the library will try to serve.
+                        try:
+                            os.unlink(dest)
+                        except OSError:
+                            pass
                         stats["media_skipped"] += 1
 
             # ── Settings (app_config) ─────────────────────────────────────
@@ -608,8 +681,33 @@ async def restore_backup(
 
         actor = (request.state.user.username
                  if getattr(request.state, "user", None) else "?")
-        logger.info("Metadata restore by '%s': %s", actor, stats)
-        return {"ok": True, "stats": stats, "manifest": manifest}
+        # "ok" has to mean it went in. It used to be True whatever happened, so
+        # a restore that skipped every row of every table and left the library
+        # empty answered exactly like one that worked, and the screen said so.
+        skipped_rows = sum(
+            (t.get("skipped") or 0) for t in stats["tables"].values() if isinstance(t, dict)
+        )
+        bad_tables = [n for n, t in stats["tables"].items()
+                      if isinstance(t, dict) and t.get("error")]
+        problems = []
+        if skipped_rows:
+            problems.append(f"{skipped_rows} row(s) could not be restored")
+        if bad_tables:
+            problems.append(f"unreadable table(s): {', '.join(sorted(bad_tables))}")
+        if stats["media_skipped"]:
+            problems.append(f"{stats['media_skipped']} media file(s) refused or failed")
+
+        if problems:
+            logger.warning("Metadata restore by '%s' finished with problems: %s", actor, stats)
+        else:
+            logger.info("Metadata restore by '%s': %s", actor, stats)
+
+        return {
+            "ok":       not problems,
+            "problems": problems,
+            "stats":    stats,
+            "manifest": manifest,
+        }
 
     finally:
         try: os.unlink(tmp_path)

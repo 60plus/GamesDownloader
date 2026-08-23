@@ -107,6 +107,36 @@ if [ ! -f "${TR_CFG}" ]; then
 TRCFG
 fi
 
+# Clamp the control port back to loopback unless it was deliberately opened.
+#
+# settings.json is only rewritten when an admin saves the Transmission screen,
+# and that writer used to put "0.0.0.0" in unconditionally. So every install
+# that ever saved those settings has an open control socket baked into a file
+# on disk, which no amount of fixing the writer would undo on its own. The
+# daemon also starts here, before the application is up, so the decision has to
+# be readable without the database: the app drops the marker file below
+# whenever it resolves the bind address to something other than loopback.
+#
+# Unauthenticated Transmission RPC accepts a torrent with a download directory
+# of the caller's choosing, so this is worth being blunt about.
+if [ ! -f "${TR_CFG_DIR}/rpc-exposed" ]; then
+    python3 - "${TR_CFG}" <<'PYCLAMP' || true
+import json, sys
+sciezka = sys.argv[1]
+try:
+    with open(sciezka) as f:
+        cfg = json.load(f)
+except Exception:
+    sys.exit(0)
+if cfg.get("rpc-bind-address") == "127.0.0.1":
+    sys.exit(0)
+cfg["rpc-bind-address"] = "127.0.0.1"
+with open(sciezka, "w") as f:
+    json.dump(cfg, f, indent=2)
+print("[entrypoint] Transmission: control port pulled back to loopback")
+PYCLAMP
+fi
+
 # Transmission writes settings.json on exit - it must own the config dir
 chown -R debian-transmission:debian-transmission "${TR_CFG_DIR}" 2>/dev/null || \
     chown -R nobody:nogroup "${TR_CFG_DIR}" 2>/dev/null || true
