@@ -25,6 +25,30 @@ rights holder wishes for their material to be removed, please open an issue.
 
 ---
 
+### Interface fonts - SIL Open Font License 1.1
+
+**Paths:**
+- `frontend/public/fonts/inter-*.woff2` and `inter.css` (Inter)
+- `frontend/public/fonts/rajdhani-*.woff2` and `rajdhani.css` (Rajdhani)
+- `frontend/public/fonts/orbitron-latin.woff2` and `orbitron.css` (Orbitron)
+
+**Source:** Inter by **Rasmus Andersson**, Rajdhani by **Indian Type Foundry**, Orbitron by
+**Matt McInerney**, all obtained from Google Fonts.
+
+**Licence:** SIL Open Font License, Version 1.1
+
+**Why bundled:** they used to be fetched from Google on every page load, which told a third
+party who was using the instance and left the interface without its fonts on a network with
+no way out. Serving them from here keeps that between the instance and its users, and lets the
+Content-Security-Policy drop two outside hosts.
+
+Orbitron is one variable file covering weights 400 to 900 - that is what Google serves, the
+same file three times over - so it is stored once and the three declarations point at it.
+
+**Attribution required:** yes, as above. The licence permits bundling and redistribution.
+
+---
+
 ## Metadata service icons - trademark / nominative use
 
 **Path:** `frontend/public/icons/*.ico` and `*.svg`
@@ -54,7 +78,7 @@ under nominative fair-use doctrine.
 
 ## Application logo
 
-**Path:** `frontend/public/GDLOGO.png`, `frontend/public/GDLOGO+TEXT.png`
+**Path:** `frontend/public/GDLOGO.png`
 
 Created for this project.  Licensed under the same terms as the source code
 (AGPL-3.0) unless re-licensed explicitly.

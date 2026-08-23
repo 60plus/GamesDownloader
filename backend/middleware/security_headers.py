@@ -89,8 +89,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "Content-Security-Policy",
             "default-src 'self'; "
             "script-src 'self' 'wasm-unsafe-eval' blob:; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com; "
+            # No font hosts. Every family the app and both shipped themes use
+            # is served from /fonts, so a stylesheet or a font file from
+            # anywhere else is now refused rather than fetched. Until 1.0.31
+            # these two lines named fonts.googleapis.com and fonts.gstatic.com,
+            # because the themes still asked Google for Orbitron, Rajdhani and
+            # Inter on every page load - which handed a third party each user's
+            # address, browser and current page.
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self'; "
             "img-src 'self' data: https:; "
             "connect-src 'self'; "
             # https: mirrors img-src - plugin store entries may showcase webm

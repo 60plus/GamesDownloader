@@ -11,10 +11,7 @@
 target-version = "py313"
 line-length = 120
 extend-exclude = [
-    "Pomoc",            # imported third-party trees (RomM source mirror, ...)
     "frontend",         # Vue / TS, lints elsewhere
-    "tools/scrap",      # one-shot scraping scripts
-    ".session_history", # local memory dumps
 ]
 
 [tool.ruff.lint]

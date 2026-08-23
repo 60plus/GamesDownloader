@@ -351,15 +351,12 @@ frontend/src/
 │   │   ├── AmbientBackground.vue  ← ambient orbs in the background
 │   │   ├── HeroBackground.vue     ← shared hero bg for game detail
 │   │   ├── ThemeSwitcher.vue
-│   │   ├── SearchBar.vue
-│   │   ├── UserMenu.vue
 │   │   └── TranslateButton.vue
 │   ├── games/LibraryMetadataPanel.vue  ← Edit Metadata
 │   ├── gog/DownloadDialog.vue
 │   ├── GdDialog.vue      ← generic modal
 │   └── RandomGamePicker.vue
 ├── layouts/
-│   ├── MainLayout.vue     ← root auth guard
 │   ├── LayoutShell.vue    ← skin-switchable wrapper
 │   ├── ModernLayout.vue   ← navbar layout
 │   └── ClassicLayout.vue  ← sidebar layout

@@ -27,7 +27,7 @@ def _env_bool(key: str, default: bool = False) -> bool:
 # Bumped in every release commit, so each Docker image reports the version it
 # was built from. Plugin installs are gated on this against the manifest's
 # min_gd_version field.
-GD_VERSION: Final[str] = "1.0.30"
+GD_VERSION: Final[str] = "1.0.31"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_PATH: Final[str] = _env("GD_BASE_PATH", "/data")
@@ -81,6 +81,3 @@ REFRESH_TOKEN_EXPIRE_DAYS: Final[int] = _env_int("GD_REFRESH_EXPIRE_DAYS", 7)
 DEV_HOST: Final[str] = _env("GD_DEV_HOST", "0.0.0.0")
 DEV_PORT: Final[int] = _env_int("GD_DEV_PORT", 8080)
 DEBUG: Final[bool] = _env_bool("GD_DEBUG", False)
-
-# ── Task queue ────────────────────────────────────────────────────────────────
-TASK_TIMEOUT: Final[int] = _env_int("GD_TASK_TIMEOUT", 3600)  # seconds

@@ -99,7 +99,13 @@ COPY docker/freshclam.conf /etc/clamav/freshclam.conf
 # Python deps (cached layer - changes only when requirements.txt changes)
 WORKDIR /app
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# pip itself is upgraded first. It is not only build tooling here: installing a
+# plugin runs `pip install --target` inside the running container, so the pip
+# that ships in the base image sits in a live code path handling packages an
+# admin points it at. The version python:3.13-slim carries has six advisories
+# against it; the application's own dependencies have none.
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
 # Backend source (changes frequently - keep last)
 COPY backend/ .
@@ -121,8 +127,12 @@ RUN mkdir -p /data/{config,resources,games,downloads,plugins,redis,clamav,firmwa
     && mkdir -p /app/static/plugin-layouts
 
 EXPOSE 8080
-# Transmission RPC (9091) binds to localhost only — NOT exposed by default.
-# If needed, expose manually in docker-compose.yml with proper auth.
+# Transmission RPC (9091) binds to localhost only and is not published.
+# This was true of the first-run settings.json and untrue the moment an admin
+# saved the Transmission settings screen, which rewrote the bind address to
+# 0.0.0.0 while authentication defaulted to off. It is now true on both paths:
+# opening the port takes a deliberate toggle AND authentication, and
+# docker-compose.yml no longer maps it.
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

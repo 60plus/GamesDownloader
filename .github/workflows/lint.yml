@@ -1,9 +1,18 @@
-name: Lint
+name: CI
 
-# Quick code-quality gate. Runs on every push to main and on PRs.
-# Failure here does NOT block deployment - the test server pulls from
-# Gitea, not from GitHub - it just signals to readers of the public repo
-# whether the published commit passes static checks.
+# Runs on every push to main and on PRs.
+#
+# Five gates: the backend test suite, a vulnerability audit of the declared
+# dependencies, ruff, the frontend type-check, and a syntax check of the
+# translation files. It was three until 1.0.31 - the suite itself, the largest
+# safety net in the project, was not among them.
+#
+# Failure here does NOT block deployment: the server that matters pulls from
+# Gitea, not from GitHub. What it does is tell a reader of the public repo
+# whether the published commit stands up on its own, which is the only signal
+# someone deploying this from GitHub has.
+#
+# Concurrency below cancels superseded runs, so these five never pile up.
 
 on:
   push:
@@ -14,13 +23,61 @@ on:
 # Cancel an in-flight run when a newer commit lands on the same ref so
 # we never pile up wasted minutes on outdated trees.
 concurrency:
-  group: lint-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  # ── Backend: the test suite ──────────────────────────────────────────────
+  tests:
+    name: pytest (backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+      - name: Run the suite
+        # No services needed: these are unit tests. conftest.py sets the auth
+        # secret before anything imports config, and nothing here opens a
+        # database or a Redis connection - the handlers that would are driven
+        # through stubs. pytest reads testpaths and pythonpath from the root
+        # pyproject.toml, so it runs from the root.
+        run: python -m pytest -q
+
+  # ── Dependencies: known vulnerabilities ──────────────────────────────────
+  audit:
+    name: pip-audit (dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit the declared dependencies
+        # Audits what a fresh install would resolve to, which is the question
+        # that matters for someone deploying this. Deliberately not an audit of
+        # the whole environment: that also reports on pip and the runner's own
+        # tooling, which says nothing about this application. It was clean when
+        # this gate was added, so a failure here is news.
+        #
+        # If an advisory ever lands with no fix available, add
+        # `--ignore-vuln <ID>` here with a comment saying why, rather than
+        # deleting the job.
+        run: pip-audit --progress-spinner off -r backend/requirements.txt
+
   # ── Backend: Ruff ────────────────────────────────────────────────────────
   ruff:
     name: ruff (backend)
@@ -76,55 +133,10 @@ jobs:
         run: |
           set -e
           fail=0
-          for f in frontend/src/i18n/*.json; do
+          for f in frontend/src/i18n/*.json frontend/public/i18n/*.json; do
             if ! python -c "import json,sys; json.load(open(sys.argv[1], encoding='utf-8'))" "$f"; then
               echo "::error file=$f::invalid JSON"
               fail=1
             fi
           done
           exit "$fail"
-
-  # ── Backend: pytest unit tests ───────────────────────────────────────────
-  pytest:
-    name: pytest (backend units)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt -r backend/requirements-dev.txt
-      - name: Run unit tests
-        # pyproject [tool.pytest.ini_options] sets pythonpath=backend and
-        # testpaths=backend/tests, so a bare `pytest` from the repo root imports
-        # the suite exactly as the application imports its own modules.
-        run: pytest -q
-
-  # ── Backend: dependency CVE scan ─────────────────────────────────────────
-  pip-audit:
-    name: pip-audit (deps CVE)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
-      - name: Install dependencies + pip-audit
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
-          pip install pip-audit
-      - name: Audit installed dependencies
-        # Scans the resolved environment against the PyPI Advisory / OSV
-        # database and flags any dependency with a known CVE. Informational:
-        # the lint workflow does not block deployment (see header).
-        run: pip-audit
