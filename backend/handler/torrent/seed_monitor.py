@@ -198,6 +198,47 @@ async def _resolve_target_library(td):
     return "CUSTOM", None
 
 
+def _collect_files(download_dir: str) -> list[str]:
+    """Every real file the torrent left behind. Blocking; call in a thread."""
+    found = []
+    for root, _, fnames in os.walk(download_dir):
+        for fname in fnames:
+            if not fname.startswith("."):
+                found.append(os.path.join(root, fname))
+    return found
+
+
+def _move_into_library(
+    files: list[str], download_dir: str, dest_root: str,
+) -> list[tuple[str, int]]:
+    """Move a finished torrent into the library and drop its download dir.
+
+    Blocking, and not briefly: docker-compose mounts /data/games and
+    /data/downloads as separate binds, so rename(2) between them returns EXDEV
+    and shutil.move always degrades to a full copy. On a 60 GB torrent that is
+    minutes of solid I/O, which is why this belongs in a thread and not on the
+    event loop where it used to sit - holding a database session open the whole
+    time and stopping every request, the health check and Socket.IO with it.
+    """
+    import shutil
+
+    os.makedirs(dest_root, exist_ok=True)
+    moved = []
+    for fpath in files:
+        dest = os.path.join(dest_root, os.path.relpath(fpath, download_dir))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.move(fpath, dest)
+        # Sized here, in the thread, so the caller does not stat every file
+        # back on the event loop.
+        moved.append((dest, os.path.getsize(dest)))
+        logger.debug("Moved torrent file %s -> %s", fpath, dest)
+    try:
+        shutil.rmtree(download_dir)
+    except Exception:
+        pass  # ignore cleanup errors
+    return moved
+
+
 async def _auto_register_game(td) -> int | None:
     """Scan download_dir, move files to /data/games/{storage_folder}/{slug}/,
     register as LibraryGame. When the download targets a folder-backed custom
@@ -207,19 +248,13 @@ async def _auto_register_game(td) -> int | None:
     from models.library_game import LibraryGame
     from models.library_file import LibraryFile
     from config import BASE_PATH
-    import unicodedata, re, shutil
+    import unicodedata, re
 
     download_dir = td.download_dir
     if not os.path.isdir(download_dir):
         return None
 
-    # Collect files
-    files_found = []
-    for root, _, fnames in os.walk(download_dir):
-        for fname in fnames:
-            if not fname.startswith("."):
-                files_found.append(os.path.join(root, fname))
-
+    files_found = await asyncio.to_thread(_collect_files, download_dir)
     if not files_found:
         return None
 
@@ -233,9 +268,13 @@ async def _auto_register_game(td) -> int | None:
                        unicodedata.normalize("NFKD", title).lower()
                        .encode("ascii", errors="ignore").decode()).strip("-")
 
+    # Claim the slug and the row first, in a session that closes immediately.
+    # The copy below can run for minutes, and it used to run inside this
+    # session, which meant a database connection sat open and idle for all of
+    # it. Owning the row up front also means the slug cannot be taken by a
+    # second torrent finishing while this one is still copying.
     async with async_session_factory() as db:
         from sqlalchemy import select
-        # Ensure unique slug
         slug = slug_base
         n = 1
         while (await db.execute(
@@ -243,25 +282,6 @@ async def _auto_register_game(td) -> int | None:
         )).scalar_one_or_none():
             slug = f"{slug_base}-{n}"
             n += 1
-
-        # Move files from torrent download dir → /data/games/{storage_folder}/{slug}/
-        dest_root = os.path.join(BASE_PATH, "games", storage_folder, slug)
-        os.makedirs(dest_root, exist_ok=True)
-
-        moved_files = []
-        for fpath in files_found:
-            rel_in_dl = os.path.relpath(fpath, download_dir)
-            dest = os.path.join(dest_root, rel_in_dl)
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            shutil.move(fpath, dest)
-            moved_files.append(dest)
-            logger.debug("Moved torrent file %s → %s", fpath, dest)
-
-        # Clean up empty download dir
-        try:
-            shutil.rmtree(download_dir)
-        except Exception:
-            pass  # ignore cleanup errors
 
         game = LibraryGame(
             title=title,
@@ -273,15 +293,33 @@ async def _auto_register_game(td) -> int | None:
             in_default_library=not is_custom_lib,
         )
         db.add(game)
-        await db.flush()
+        await db.commit()
+        game_id = game.id
 
-        for fpath in moved_files:
-            rel = os.path.relpath(fpath, BASE_PATH)
-            size = os.path.getsize(fpath)
+    # Move files from torrent download dir → /data/games/{storage_folder}/{slug}/
+    dest_root = os.path.join(BASE_PATH, "games", storage_folder, slug)
+    try:
+        moved_files = await asyncio.to_thread(
+            _move_into_library, files_found, download_dir, dest_root
+        )
+    except Exception as exc:
+        # Never leave a game row behind with no files under it: it would show on
+        # the shelf as a title that cannot be downloaded and cannot be explained.
+        logger.error("Torrent files could not be moved into %s: %s", dest_root, exc)
+        async with async_session_factory() as db:
+            orphan = await db.get(LibraryGame, game_id)
+            if orphan is not None:
+                await db.delete(orphan)
+                await db.commit()
+        return None
+
+    async with async_session_factory() as db:
+        game = await db.get(LibraryGame, game_id)
+        for fpath, size in moved_files:
             lib_file = LibraryFile(
                 library_game_id=game.id,
                 filename=os.path.basename(fpath),
-                file_path=rel,
+                file_path=os.path.relpath(fpath, BASE_PATH),
                 size_bytes=size,
                 os=td.os,
                 file_type="game",
@@ -291,11 +329,10 @@ async def _auto_register_game(td) -> int | None:
             db.add(lib_file)
 
         await db.commit()
-        game_id = game.id
         from plugins import events as _plugin_events
         _plugin_events.game_added(game)
         _plugin_events.download_complete(
-            game, os.path.dirname(moved_files[0]) if moved_files else dest_root
+            game, os.path.dirname(moved_files[0][0]) if moved_files else dest_root
         )
         # Recently-added card: no-op unless the torrent game already has a cover
         # (usually it does not until an admin scrapes it, which announces then).

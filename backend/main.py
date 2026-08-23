@@ -39,7 +39,6 @@ from handler.socket_handler import sio
 from models.base import Base
 from models.user import Role, User
 from plugins.manager import plugin_manager
-from utils.http import close_client
 from utils.save_paths import is_save_path, saves_root, saves_root_is_legacy, superseded_dir
 
 logging.basicConfig(
@@ -470,6 +469,17 @@ async def _init_db() -> None:
     _INDEX_MIGRATIONS = [
         # roms: most list queries filter by platform AND exclude missing files
         ("ix_roms_platform_missing", "roms",       "CREATE INDEX ix_roms_platform_missing ON roms (platform_id, missing_from_fs)"),
+        # roms: the scan looks a file up by (platform, filename) twice per file,
+        # and the disk-set pass updates by the same pair. A prefix is enough -
+        # fs_name is a 512-char column and no real filename shares 255 with
+        # another in the same platform.
+        ("ix_roms_platform_fs_name", "roms",
+         "CREATE INDEX ix_roms_platform_fs_name ON roms (platform_id, fs_name(255))"),
+        # download_jobs: the dashboard's live panel asks for the unfinished ones
+        # every 1.5 s while a tab is open, and nothing prunes the finished rows,
+        # so this table only grows.
+        ("ix_dl_jobs_status_created", "download_jobs",
+         "CREATE INDEX ix_dl_jobs_status_created ON download_jobs (status, created_at)"),
         # gog_games: title search used by GOG scraper and library search
         ("ix_gog_games_title",       "gog_games",  "CREATE INDEX ix_gog_games_title ON gog_games (title(255))"),
         # audit_logs: logs are queried/trimmed by creation date
@@ -545,6 +555,30 @@ async def _init_db() -> None:
             logger.info("Migration: backfilled announced_at for existing rows")
     except Exception as exc:
         logger.warning("announced_at backfill guard failed: %s", exc)
+
+    # ── Scrub GOG access tokens out of stored download errors ────────────────
+    # The downlink call carries the token in its query string, and httpx puts
+    # the whole URL into the message of an HTTP error. That message was written
+    # to `download_jobs.error_msg`, which the download API serves - so an admin
+    # reading somebody else's failed job could read their GOG token. The code
+    # that did it is fixed; this is for rows written before it was.
+    #
+    # Not guarded by a flag, unlike the backfill above: it costs one indexed-free
+    # UPDATE over a small table at boot, and a flag would mean an install that
+    # upgraded, downgraded and upgraded again kept its leaked rows for ever.
+    try:
+        async with async_engine.begin() as conn:
+            res = await conn.execute(text(
+                "UPDATE `download_jobs` SET `error_msg` = 'Download failed (details redacted)' "
+                "WHERE `error_msg` LIKE '%access_token%'"
+            ))
+            if getattr(res, "rowcount", 0):
+                logger.warning(
+                    "Migration: redacted a GOG access token from %d stored download error(s)",
+                    res.rowcount,
+                )
+    except Exception as exc:
+        logger.warning("download_jobs error_msg scrub failed: %s", exc)
 
     # ── NULL legacy remote request covers ─────────────────────────────────────
     # A request's cover_url used to be stored exactly as the scraper search
@@ -669,6 +703,128 @@ def _init_rom_dirs() -> None:
 _WEAK_KEYS = {"change-me-in-production", "secret", "changeme", "insecure", ""}
 
 
+def _sweep_rom_parts() -> None:
+    """Clear partial ROM downloads that nothing can resume.
+
+    The job registry is in memory, so a container recreate forgets every queued
+    and paused transfer. The `.part` files stay, and nothing ever looks at them
+    again: starting the same download opens the destination with "wb" and
+    truncates whatever was there, and the scanner does not report them because
+    `.part` is not a ROM extension. So a seven gigabyte partial simply occupied
+    the disk, invisibly, until somebody went looking with a shell.
+
+    Deletes rather than tries to resume, because the record that says which URL
+    and which byte range those bytes came from is what the restart threw away.
+    """
+    # Ask where the ROMs actually live rather than assuming. The path is a
+    # setting, and on a machine whose library sits on a second disk a hardcoded
+    # one would have looked in an empty directory and reported nothing wrong.
+    from handler.roms.rom_source_handler import _roms_base
+
+    try:
+        roms_root = Path(_roms_base())
+    except Exception as exc:
+        logger.warning("Could not resolve the ROM directory to sweep: %s", exc)
+        return
+    if not roms_root.is_dir():
+        return
+    removed, bytes_freed = 0, 0
+    try:
+        for part in roms_root.glob("*/*.part"):
+            try:
+                bytes_freed += part.stat().st_size
+                part.unlink()
+                removed += 1
+            except OSError as exc:
+                logger.warning("Could not remove orphaned partial %s: %s", part, exc)
+    except Exception as exc:
+        logger.warning("Sweeping orphaned ROM partials failed: %s", exc)
+    if removed:
+        logger.info(
+            "Startup: removed %d unresumable ROM partial(s), freeing %.1f GB",
+            removed, bytes_freed / (1024 ** 3),
+        )
+
+
+async def _settle_transfers(timeout: float = 8.0) -> None:
+    """Put every download in flight somewhere it can be resumed from.
+
+    Pausing is what these handlers already do when a person asks: the row lands
+    on `paused`, the partial file stays on disk, and resuming picks up from its
+    length with a Range request. Shutdown wants exactly that, so it asks for the
+    same thing rather than inventing a shutdown-shaped state of its own.
+
+    Best-effort and on a clock. A container stop does not wait forever, and a
+    transfer that will not settle must not be the reason the stop looks hung -
+    the startup pass in `_unstick_downloads` catches whatever is left.
+    """
+    async def _gog() -> None:
+        from handler.gog.gog_download_handler import _active_tasks, gog_download_handler
+        for job_id, task in list(_active_tasks.items()):
+            if task.done():
+                continue
+            try:
+                await gog_download_handler.pause_job(job_id)
+            except Exception as exc:
+                logger.warning("Shutdown: could not pause GOG job %s: %s", job_id, exc)
+
+    async def _roms() -> None:
+        """Stop ROM transfers cleanly. Their bytes do not survive the restart.
+
+        Worth being explicit, because this reads like the GOG half above and is
+        not the same: a GOG job is a database row, so a paused one is still
+        there to resume after a restart, while the ROM job registry lives in
+        memory and goes with the process. Nothing on the other side can resume
+        a ROM `.part`, which is why `_sweep_rom_parts` deletes them all at
+        startup - an orphaned partial is invisible to the scanner, because
+        `.part` is not a ROM extension, so it would otherwise sit there
+        forever. Pausing here still stops the writes at a file boundary rather
+        than mid-chunk, and settles the job state for anything watching.
+        """
+        from handler.roms import rom_source_handler as rsh
+        for job_id, job in list(rsh._jobs.items()):
+            if job.status not in ("downloading", "queued"):
+                continue
+            try:
+                await rsh.pause_job(job_id)
+            except Exception as exc:
+                logger.warning("Shutdown: could not pause ROM job %s: %s", job_id, exc)
+
+    try:
+        await asyncio.wait_for(asyncio.gather(_gog(), _roms()), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("Shutdown: transfers did not all settle in %.0fs", timeout)
+    except Exception as exc:
+        logger.warning("Shutdown: settling transfers failed: %s", exc)
+
+
+async def _unstick_downloads() -> None:
+    """Move rows left mid-flight by an unclean stop onto `paused`.
+
+    A row stuck at 'downloading' is not cosmetic. `gog_download_incomplete`
+    answers yes while any job sits in a pending state, so `refresh_downloaded_state`
+    returns early for that game for ever: it never flips to downloaded again
+    even after a successful re-download, and packaging refuses to touch it.
+
+    Paused is the honest description of what those rows are - the bytes are on
+    disk and the job is not running - and it is the one state the UI already
+    offers a Resume button for.
+    """
+    try:
+        async with async_engine.begin() as conn:
+            res = await conn.execute(text(
+                "UPDATE `download_jobs` SET `status` = 'paused', `speed_bps` = 0 "
+                "WHERE `status` IN ('downloading', 'queued')"
+            ))
+            if getattr(res, "rowcount", 0):
+                logger.info(
+                    "Startup: %d download(s) were left mid-flight by the last stop "
+                    "and are now paused", res.rowcount,
+                )
+    except Exception as exc:
+        logger.warning("Startup: could not settle interrupted downloads: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("GamesDownloaderV3 starting up…")
@@ -700,6 +856,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await _init_db()
     _init_rom_dirs()
+    _sweep_rom_parts()
 
     # Seed built-in library registry rows (idempotent)
     from handler.database.library_registry_handler import library_registry_handler
@@ -737,7 +894,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # One-shot: flag animated covers saved before the cover_animated column existed
     from utils.images import backfill_cover_animated as _cover_backfill
-    asyncio.create_task(_cover_backfill())
+    fire_task(_cover_backfill())
 
     # ClamAV scheduled auto-update loop (sleeps 90 s before first check)
     from handler.clamav import clamav_handler as _clamav
@@ -760,6 +917,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from handler.dashboard.queue_broadcaster import queue_broadcaster_loop
     _queue_task    = asyncio.create_task(queue_broadcaster_loop())
 
+    # Downloads the last stop cut off. Runs before reconcile, which reads these
+    # rows to decide whether a game counts as downloaded.
+    await _unstick_downloads()
+
     # One-shot: re-align file availability and the GOG downloaded flag with what
     # is on disk, in case a crash landed between the files and the bookkeeping.
     from handler.library.reconcile import reconcile_loop as _reconcile_loop
@@ -767,16 +928,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
-    # Shutdown
-    _clamav_task.cancel()
-    _report_task.cancel()
-    _digest_task.cancel()
-    _seed_task.cancel()
-    _dl_mon_task.cancel()
-    _queue_task.cancel()
-    _reconcile_task.cancel()
+    # ── Shutdown ─────────────────────────────────────────────────────────────
+    # Transfers first, loops second, and both of them properly.
+    #
+    # This used to be seven bare .cancel() calls and nothing else. Cancelling
+    # without awaiting means no cancelled task ever reaches its own except or
+    # finally, so none of them tidied up - and the downloads actually in flight
+    # were not touched at all. Their rows stayed at status='downloading' for
+    # ever, and because a row in that state makes gog_download_incomplete
+    # answer yes, the game never flipped to downloaded again even after a
+    # successful re-download, and zip_packer refused to pack it.
+    #
+    # None of that needs a crash. Installing a theme restarts the container a
+    # second after the response, which is the documented way to do it.
+    await _settle_transfers()
+
+    _loops = [
+        _clamav_task, _report_task, _digest_task,
+        _seed_task, _dl_mon_task, _queue_task, _reconcile_task,
+    ]
+    for _t in _loops:
+        _t.cancel()
+    # Give them their CancelledError and let their finally blocks run. Bounded,
+    # because a container stop is on a clock and a loop that will not go should
+    # not be what makes the stop look like a hang.
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*_loops, return_exceptions=True), timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Shutdown: background loops did not all settle in time")
+
     plugin_manager.hook.lifecycle_on_shutdown()
-    await close_client()
     logger.info("GamesDownloaderV3 shut down.")
 
 
@@ -980,6 +1163,7 @@ app.include_router(search_router)
 
 # ── Dashboard (role-aware admin/user overview; also exposed as __GD__.dashboard) ─
 from endpoints.dashboard.dashboard_router import router as dashboard_router  # noqa: E402
+from utils.async_utils import fire_task
 
 app.include_router(dashboard_router)
 

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from models.base import Base
 from utils.ratings import normalize_star_5
+from utils.text import clamp_text
 
 
 class GogGame(Base):
@@ -88,6 +89,14 @@ class GogGame(Base):
     # Scrape tracking
     scraped: Mapped[bool] = mapped_column(Boolean, default=False)
     scraped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # The library metadata editor writes its shared fields through to this row
+    # before touching the LibraryGame, so an over-long provider value has to be
+    # clamped on both tables or the edit half-applies. Same reasoning as
+    # LibraryGame._clamp_to_column.
+    @validates("title", "developer", "publisher")
+    def _clamp_to_column(self, key: str, value):
+        return clamp_text(value, getattr(self.__table__.c[key].type, "length", None))
 
     @validates("rating")
     def _normalize_rating(self, _key: str, value):

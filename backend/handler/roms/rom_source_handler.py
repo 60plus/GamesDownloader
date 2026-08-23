@@ -19,6 +19,7 @@ import asyncio
 import inspect
 import itertools
 import logging
+from dataclasses import dataclass
 import os
 import re
 import shutil
@@ -33,6 +34,7 @@ from handler.database.rom_handler import rom_handler, rom_platform_handler
 from handler.filesystem.rom_scanner import _ROM_EXTENSIONS, scan_roms_path
 from handler.metadata.rom_platform_map import PLATFORM_MAP, slug_from_fs_slug
 from plugins.manager import plugin_manager
+from utils.async_utils import fire_task
 from utils.http import loggable_error
 from utils.net_guard import assert_fetch_allowed, make_request_guard
 
@@ -71,6 +73,59 @@ _job_seq = itertools.count(1)
 # (which would corrupt the ROM). Both are released in the download job's finally.
 _in_flight: set[tuple[str, str]] = set()
 _dest_locks: set[tuple[str, str]] = set()
+
+
+@dataclass
+class _RomJob:
+    """One download, and enough about it to stop, resume or repeat it.
+
+    These used to be bare tasks with nothing kept but a number, which is why
+    there was no way to ask one to stop. The queue lives in memory only: a
+    restart forgets it, exactly as it did before. What survives a restart is
+    the .part file, and a retry picks that up rather than starting over.
+    """
+
+    id: int
+    source_id: str
+    entry_id: str
+    url: str
+    filename: str
+    fs_slug: str
+    headers: dict[str, str] | None
+    cookies: dict[str, str] | None
+    actor: str | None
+    entry_key: tuple[str, str] | None
+    dest_key: tuple[str, str]
+    status: str = "queued"     # queued|downloading|paused|completed|failed|cancelled
+    want: str | None = None    # "pause" or "cancel", read by the writing loop
+    received: int = 0
+    total: int = 0
+    error: str | None = None
+    task: asyncio.Task | None = None
+
+    @property
+    def terminal(self) -> bool:
+        return self.status in ("completed", "failed", "cancelled")
+
+    @property
+    def part_path(self) -> Path:
+        return Path(_roms_base()) / self.fs_slug / (self.filename + ".part")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id, "source_id": self.source_id, "entry_id": self.entry_id,
+            "filename": self.filename, "fs_slug": self.fs_slug,
+            "status": self.status, "received": self.received, "total": self.total,
+            "percent": round(self.received / self.total * 100, 1) if self.total else -1,
+            "error": self.error,
+        }
+
+
+# Live and recently finished jobs, keyed by the id the UI already knows from the
+# progress events. A paused job keeps its destination lock: the file is half
+# written and nothing else may claim that name.
+_jobs: dict[int, _RomJob] = {}
+_KEEP_FINISHED = 200   # finished jobs remembered, so the list cannot grow forever
 
 # Post-download scans are coalesced: a burst of downloads shares one full ROM
 # scan instead of each running its own (see _coalesced_scan_after_write).
@@ -219,6 +274,33 @@ async def get_platforms(source_id: str) -> list[dict[str, Any]]:
 
 
 # ── Listing + owned-state ──────────────────────────────────────────────────────
+
+async def refresh_source(source_id: str, scope: str = "listings") -> dict[str, Any]:
+    """Ask a source to forget what it has cached, so the next listing refetches.
+
+    A source that reads a remote catalogue caches its listings, and a listing
+    that failed - or came back empty because the archive was having a bad
+    afternoon - keeps being served from that cache until it expires. This is
+    the way to say "try again, properly" from the screen showing the empty
+    list.
+
+    The hook is optional, so a source that has nothing to forget reports that
+    plainly rather than failing.
+    """
+    inst = _require_source(source_id)
+    fn = getattr(inst, "rom_source_refresh", None)
+    if not callable(fn):
+        return {"refreshed": False, "reason": "This source does not cache anything"}
+    try:
+        # Blocking work (files, locks) belongs off the event loop, like the
+        # listing and resolve hooks next door.
+        done = await asyncio.to_thread(fn, scope)
+    except TypeError:
+        # An older signature that predates the scope argument.
+        done = await asyncio.to_thread(fn)
+    logger.info("ROM source %s refreshed (scope=%s, dropped=%s)", source_id, scope, bool(done))
+    return {"refreshed": bool(done)}
+
 
 def _region_from_name(filename: str) -> str | None:
     """Best-effort region parsed from a No-Intro filename's parenthesised tags."""
@@ -524,6 +606,45 @@ def max_rom_bytes() -> int:
         return _DEFAULT_MAX_ROM_BYTES
 
 
+# How many ROM downloads may be in flight at once. The browser ships a
+# select-all over a sixty-row page, and every selected entry used to get its own
+# task immediately: sixty sockets against one host, sixty .part files growing in
+# parallel, and sixty disk-space checks all asking the same instant whether
+# there was room for one more four-gigabyte file - so all sixty passed and the
+# volume filled. With a cap, each job asks about free space when its turn comes,
+# by which time the ones before it have actually landed, and the question means
+# something again.
+_DEFAULT_MAX_PARALLEL_ROM_DOWNLOADS = 3
+_download_gate: asyncio.Semaphore | None = None
+_download_gate_limit = 0
+
+
+def max_parallel_rom_downloads() -> int:
+    """The concurrency cap in force, honouring the Settings > ROMs override."""
+    try:
+        cfg = config_manager.get_section("roms")
+        val = int(cfg.get("max_parallel_downloads") or 0)
+        return val if val > 0 else _DEFAULT_MAX_PARALLEL_ROM_DOWNLOADS
+    except Exception:
+        return _DEFAULT_MAX_PARALLEL_ROM_DOWNLOADS
+
+
+def _gate() -> asyncio.Semaphore:
+    """The shared slot counter, rebuilt if an admin changed the limit.
+
+    Rebuilding while downloads hold permits on the previous one can briefly
+    allow more than the new limit; the alternative is a limit that only takes
+    effect after a restart. Queued jobs simply stay `queued`, which is a status
+    the downloads panel already renders.
+    """
+    global _download_gate, _download_gate_limit
+    limit = max_parallel_rom_downloads()
+    if _download_gate is None or limit != _download_gate_limit:
+        _download_gate = asyncio.Semaphore(limit)
+        _download_gate_limit = limit
+    return _download_gate
+
+
 def _roms_base() -> str:
     try:
         cfg = config_manager.get_section("roms")
@@ -672,12 +793,15 @@ async def queue_downloads(
             )
             skipped.append({"entry_id": entry_id, "reason": "could not resolve"})
             continue
-        job_id = next(_job_seq)
-        asyncio.create_task(_rom_download_job(
-            job_id, source_id, entry_id,
-            spec["url"], spec["filename"], spec["fs_slug"],
-            spec["headers"], spec["cookies"], actor, ekey, dkey,
-        ))
+        job = _RomJob(
+            id=next(_job_seq), source_id=source_id, entry_id=entry_id,
+            url=spec["url"], filename=spec["filename"], fs_slug=spec["fs_slug"],
+            headers=spec["headers"], cookies=spec["cookies"], actor=actor,
+            entry_key=ekey, dest_key=dkey,
+        )
+        job_id = job.id
+        _jobs[job_id] = job
+        job.task = asyncio.create_task(_rom_download_job(job))
         queued.append({
             "id": job_id,
             "entry_id": entry_id,
@@ -718,11 +842,31 @@ async def import_rom(
     if dkey in _dest_locks:
         return {"queued": False, "reason": "already downloading", "filename": safe_name}
     _dest_locks.add(dkey)
-    job_id = next(_job_seq)
-    asyncio.create_task(_rom_download_job(
-        job_id, "import", safe_name, url, safe_name, fs_slug, None, None, actor, None, dkey,
-    ))
-    return {"queued": True, "id": job_id, "filename": safe_name, "fs_slug": fs_slug}
+    job = _RomJob(
+        id=next(_job_seq), source_id="import", entry_id=safe_name, url=url,
+        filename=safe_name, fs_slug=fs_slug, headers=None, cookies=None,
+        actor=actor, entry_key=None, dest_key=dkey,
+    )
+    _jobs[job.id] = job
+    job.task = asyncio.create_task(_rom_download_job(job))
+    return {"queued": True, "id": job.id, "filename": safe_name, "fs_slug": fs_slug}
+
+
+def _failed_host(e: Exception, job: _RomJob) -> str:
+    """The host that actually refused, for the log. Host only - never the path.
+
+    archive.org answers a download with a redirect to one of hundreds of data
+    nodes, so the address that failed is usually not the one that was asked
+    for, and the difference is the whole diagnosis: the archive being down
+    looks nothing like one node being unreachable. httpx hangs the request on
+    its transport errors and the response on status errors, so both are tried.
+    """
+    for owner in (getattr(e, "response", None), getattr(e, "request", None)):
+        host = getattr(getattr(owner, "url", None), "host", None)
+        if host:
+            return str(host)
+    from urllib.parse import urlparse
+    return urlparse(job.url).hostname or "?"
 
 
 def _safe_error(e: Exception) -> str:
@@ -738,28 +882,99 @@ def _safe_error(e: Exception) -> str:
     return "Download failed."
 
 
-async def _rom_download_job(
-    job_id: int,
-    source_id: str,
-    entry_id: str,
-    url: str,
-    filename: str,
-    fs_slug: str,
-    headers: dict[str, str] | None,
-    cookies: dict[str, str] | None,
-    actor: str | None,
-    entry_key: tuple[str, str] | None,
-    dest_key: tuple[str, str],
-) -> None:
+def _release_job_locks(job: _RomJob) -> None:
+    """Give back the entry and destination claims, unless the job is paused.
+
+    A paused job still owns its half-written file, so it keeps both until it is
+    resumed, cancelled or thrown away. Mirrors the tail of _run_rom_download.
+    """
+    if job.status != "paused":
+        if job.entry_key is not None:
+            _in_flight.discard(job.entry_key)
+        _dest_locks.discard(job.dest_key)
+
+
+async def _rom_download_job(job: _RomJob, resume_from: int = 0) -> None:
+    """Wait for a free download slot, then transfer.
+
+    A job waiting here stays `queued`, which is a status the downloads panel
+    already renders, so a select-all over sixty entries now reads as a queue
+    rather than sixty simultaneous transfers.
+    """
     from handler.socket_handler import sio
 
-    dest_dir = Path(_roms_base()) / fs_slug
-    dest_path = dest_dir / filename
-    part_path = dest_dir / (filename + ".part")
+    gate = _gate()
+    try:
+        await gate.acquire()
+    except asyncio.CancelledError:
+        # Stopped before it ever held a slot. Nothing was opened and nothing
+        # written, but the job still has to leave "queued" and hand back its
+        # claims, or the panel keeps showing a queued download with no task
+        # behind it and its destination stays reserved forever. Settled without
+        # awaiting: this task is already being cancelled.
+        job.status = "paused" if job.want == "pause" else "cancelled"
+        job.want = None
+        job.task = None
+        _release_job_locks(job)
+        fire_task(sio.emit("romsource:download_state", job.as_dict()))
+        raise
+    landed = False
+    try:
+        if job.want in ("pause", "cancel"):
+            # The request arrived while this was queued: honour it without
+            # opening a connection at all.
+            await _settle_stopped(job, job.part_path)
+            job.task = None
+            _release_job_locks(job)
+            return
+        landed = await _run_rom_download(job, resume_from)
+    finally:
+        gate.release()
+
+    # Registering the file walks the whole ROM tree and the scrape is a network
+    # call to ScreenScraper. Both used to run inside _run_rom_download, which
+    # means they ran while this job still held one of the three download slots
+    # - and because the scan coalesces, every other finishing job waited on
+    # _scan_cv holding *its* slot too, so all three could sit idle behind a
+    # single scan. The slot goes back first; then the file is registered.
+    if landed:
+        await _register_after_download(job)
+
+
+async def _register_after_download(job: _RomJob) -> None:
+    """Scan and scrape the file that just landed, with the slot already free.
+
+    The completion event is emitted afterwards because it carries the rom_id
+    the browser needs to open the game's page; announcing first would hand it
+    a null.
+    """
+    from handler.socket_handler import sio
+
+    rom_id = await _register_and_scrape(job.fs_slug, job.filename)
+    await sio.emit("romsource:download_complete", {
+        "id": job.id,
+        "source_id": job.source_id,
+        "entry_id": job.entry_id,
+        "fs_slug": job.fs_slug,
+        "filename": job.filename,
+        "rom_id": rom_id,
+    })
+
+
+async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
+    """Transfer the bytes. True when a file landed and needs registering."""
+    from handler.socket_handler import sio
+
+    dest_dir = Path(_roms_base()) / job.fs_slug
+    dest_path = dest_dir / job.filename
+    part_path = dest_dir / (job.filename + ".part")
     max_bytes = max_rom_bytes()
-    size = 0
+    size = resume_from
     started = time.monotonic()
     last_emit = 0.0
+    job.status = "downloading"
+    job.want = None
+    job.error = None
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
         # Scope credential cookies to the URL's registrable domain (with a leading
@@ -769,9 +984,9 @@ async def _rom_download_job(
         # still matches ".archive.org"; net_guard only blocks private targets, not
         # cross-domain public ones, so this is the layer that keeps the cookie home.
         cookie_jar: Any = None
-        if cookies:
+        if job.cookies:
             from urllib.parse import urlparse
-            host = (urlparse(url).hostname or "").lower()
+            host = (urlparse(job.url).hostname or "").lower()
             parts = [p for p in host.split(".") if p]
             # Widen to the parent domain ONLY when the URL already sits on a
             # two-label apex, which is the archive.org case the redirect needs
@@ -785,27 +1000,45 @@ async def _rom_download_job(
             else:
                 domain = host
             cookie_jar = httpx.Cookies()
-            for _ck, _cv in cookies.items():
+            for _ck, _cv in job.cookies.items():
                 cookie_jar.set(_ck, _cv, domain=domain)
+        req_headers = dict(job.headers or {})
+        if resume_from:
+            req_headers["Range"] = f"bytes={resume_from}-"
         timeout = httpx.Timeout(30.0, read=600.0)
         async with httpx.AsyncClient(
             follow_redirects=True,
             timeout=timeout,
-            headers=headers or None,
+            headers=req_headers or None,
             cookies=cookie_jar,
             event_hooks={"request": [make_request_guard(allow_private_lan=False)]},
         ) as client:
-            async with client.stream("GET", url) as resp:
+            async with client.stream("GET", job.url) as resp:
                 resp.raise_for_status()
+                # A source that cannot resume answers 200 with the whole file
+                # instead of 206 with the tail. Appending that to what we already
+                # have would produce a file of the right length made of the wrong
+                # bytes, so the partial one is dropped and this starts over.
+                resuming = resume_from > 0 and resp.status_code == 206
+                if resume_from and not resuming:
+                    logger.info(
+                        "ROM download #%d: source ignored Range, starting over", job.id)
+                    size = 0
                 total = int(resp.headers.get("content-length") or 0)
+                if resuming and total:
+                    total += resume_from
                 if total and total > max_bytes:
                     raise ValueError("ROM exceeds the maximum allowed size.")
                 if total:
-                    assert_room_for(dest_dir, total)
-                with open(part_path, "wb") as fh:
+                    assert_room_for(dest_dir, total - size)
+                job.total = total
+                with open(part_path, "ab" if resuming else "wb") as fh:
                     async for chunk in resp.aiter_bytes(_CHUNK_WRITE):
+                        if job.want:
+                            break
                         fh.write(chunk)
                         size += len(chunk)
+                        job.received = size
                         if size > max_bytes:
                             raise ValueError("ROM exceeds the maximum allowed size.")
                         now = time.monotonic()
@@ -813,59 +1046,238 @@ async def _rom_download_job(
                             last_emit = now
                             elapsed = max(now - started, 0.001)
                             await sio.emit("romsource:download_progress", {
-                                "id": job_id,
-                                "source_id": source_id,
-                                "entry_id": entry_id,
-                                "fs_slug": fs_slug,
-                                "filename": filename,
+                                "id": job.id,
+                                "source_id": job.source_id,
+                                "entry_id": job.entry_id,
+                                "fs_slug": job.fs_slug,
+                                "filename": job.filename,
                                 "percent": round(size / total * 100, 1) if total else -1,
                                 "received": size,
                                 "total": total,
-                                "speed": int(size / elapsed),
+                                "speed": int((size - resume_from) / elapsed),
                             })
+        if job.want:
+            await _settle_stopped(job, part_path)
+            return
         os.replace(part_path, dest_path)
 
-        rom_id = await _register_and_scrape(fs_slug, filename)
-        await sio.emit("romsource:download_complete", {
-            "id": job_id,
-            "source_id": source_id,
-            "entry_id": entry_id,
-            "fs_slug": fs_slug,
-            "filename": filename,
-            "rom_id": rom_id,
-        })
+        job.status = "completed"
+        job.received = size
         logger.info(
             "ROM download #%d complete: %s/%s -> %s (%d B)%s",
-            job_id, source_id, entry_id, filename, size,
-            f", actor={actor}" if actor else "",
+            job.id, job.source_id, job.entry_id, job.filename, size,
+            f", actor={job.actor}" if job.actor else "",
         )
+        # The scan and the scrape happen after the caller hands back its
+        # download slot; see _rom_download_job.
+        return True
+    except asyncio.CancelledError:
+        # Only reachable when a stop was asked for and the connection had gone
+        # quiet enough that the flag between chunks was never read.
+        await _settle_stopped(job, part_path, forced=True)
+        raise
     except Exception as e:
+        # Keep what arrived when the failure is one a retry could get past.
+        # This used to unlink unconditionally, which made retry_job's
+        # `start_at = part_path.stat().st_size` dead code: a forty gigabyte
+        # transfer that died at thirty-nine started again from zero. A size cap
+        # or a permanent refusal is different - retrying those gets the same
+        # answer, and the bytes are of no use to anybody.
+        wznawialne = isinstance(e, (httpx.TimeoutException, httpx.TransportError))
+        if isinstance(e, httpx.HTTPStatusError):
+            wznawialne = e.response.status_code in (408, 429, 500, 502, 503, 504)
+        if not wznawialne:
+            try:
+                part_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        job.status = "failed"
+        job.error = _safe_error(e)
+        # Neither the exception message nor the entry id: httpx puts the full
+        # request URL in the message of an HTTP error, and an entry id IS a URL
+        # for a source that keys its listing on one (the shipping archive.org
+        # adapter does), so printing it hands back exactly the query string the
+        # redaction just removed.
+        #
+        # What does go in is the kind of exception and the host that refused,
+        # because without them "Could not reach the source" is unanswerable:
+        # it reads the same whether the network is down, the archive is
+        # overloaded, or one data node out of hundreds is unreachable. A host
+        # carries no path, no query and no credential.
+        logger.warning(
+            "ROM download #%d failed (%s -> %s/%s): %s [%s from %s]",
+            job.id, job.source_id, job.fs_slug, job.filename, job.error,
+            type(e).__name__, _failed_host(e, job),
+        )
+        await sio.emit("romsource:download_error", {
+            "id": job.id,
+            "source_id": job.source_id,
+            "entry_id": job.entry_id,
+            "fs_slug": job.fs_slug,
+            "filename": job.filename,
+            "error": job.error,
+        })
+    finally:
+        job.task = None
+        _release_job_locks(job)
+        _prune_jobs()
+
+
+def _prune_jobs() -> None:
+    """Keep the finished ones from piling up for the life of the process.
+
+    A record is a few hundred bytes, but somebody downloading a platform set
+    would accumulate thousands of them and nothing ever removed one. Live and
+    paused jobs are never touched; the oldest finished ones go first.
+    """
+    finished = [j for j in _jobs.values() if j.terminal]
+    for job in sorted(finished, key=lambda j: j.id)[:max(0, len(finished) - _KEEP_FINISHED)]:
+        _jobs.pop(job.id, None)
+
+
+async def _settle_stopped(job: _RomJob, part_path: Path, forced: bool = False) -> None:
+    """Finish a job that was asked to stop: paused keeps the file, cancel does not."""
+    from handler.socket_handler import sio
+
+    if job.want == "cancel":
+        job.status = "cancelled"
         try:
             part_path.unlink(missing_ok=True)
         except Exception:
             pass
-        # Neither the exception nor the entry id: httpx puts the full request URL
-        # in the message of an HTTP error, and an entry id IS a URL for a source
-        # that keys its listing on one (the shipping archive.org adapter does),
-        # so printing it hands back exactly the query string the redaction just
-        # removed. The job id and the destination identify the failure well
-        # enough, and neither can carry a credential.
-        logger.warning(
-            "ROM download #%d failed (%s -> %s/%s): %s",
-            job_id, source_id, fs_slug, filename, _safe_error(e),
-        )
-        await sio.emit("romsource:download_error", {
-            "id": job_id,
-            "source_id": source_id,
-            "entry_id": entry_id,
-            "fs_slug": fs_slug,
-            "filename": filename,
-            "error": _safe_error(e),
-        })
-    finally:
-        if entry_key is not None:
-            _in_flight.discard(entry_key)
-        _dest_locks.discard(dest_key)
+    else:
+        job.status = "paused"
+        try:
+            job.received = part_path.stat().st_size
+        except OSError:
+            job.received = 0
+    job.want = None
+    logger.info(
+        "ROM download #%d %s: %s/%s%s", job.id, job.status, job.fs_slug, job.filename,
+        " (connection was idle)" if forced else "")
+    await sio.emit("romsource:download_state", job.as_dict())
+
+
+# ── Controlling a download in flight ───────────────────────────────────────────
+
+def list_jobs() -> list[dict[str, Any]]:
+    """Every job this process still knows about, newest first."""
+    return [j.as_dict() for j in sorted(_jobs.values(), key=lambda j: -j.id)]
+
+
+def get_job(job_id: int) -> _RomJob | None:
+    return _jobs.get(job_id)
+
+
+async def _request_stop(job: _RomJob, tryb: str) -> None:
+    """Ask the writing loop to stop, and insist if it is not listening.
+
+    The flag is read between chunks, which is immediate on a healthy transfer
+    and never on a stalled one - a request that has gone quiet can sit in a
+    600 s read timeout. So the flag comes first, politely, and the task is
+    cancelled outright if the loop has not noticed within a few seconds.
+    """
+    job.want = tryb
+    task = job.task
+    if task is None or task.done():
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=3.0)
+    except asyncio.TimeoutError:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+    except Exception:
+        pass
+
+
+async def pause_job(job_id: int) -> bool:
+    """Stop writing but keep what has been written. False if not pausable."""
+    job = _jobs.get(job_id)
+    if job is None:
+        return False
+    if job.status == "paused":
+        return True
+    if job.status not in ("downloading", "queued"):
+        return False
+    await _request_stop(job, "pause")
+    return job.status == "paused"
+
+
+async def resume_job(job_id: int) -> bool:
+    """Carry on from the end of the .part file. False if not paused."""
+    job = _jobs.get(job_id)
+    if job is None or job.status != "paused":
+        return False
+    try:
+        start_at = job.part_path.stat().st_size
+    except OSError:
+        start_at = 0
+    job.task = asyncio.create_task(_rom_download_job(job, start_at))
+    return True
+
+
+async def cancel_or_forget_job(job_id: int) -> bool:
+    """Stop and delete a live job, or drop a finished one from the list."""
+    from handler.socket_handler import sio
+
+    job = _jobs.get(job_id)
+    if job is None:
+        return False
+    if job.status in ("downloading", "queued"):
+        await _request_stop(job, "cancel")
+        return True
+    if job.status == "paused":
+        # Nothing is running, so there is no loop to notice a flag: this is the
+        # end of the job, and the half-written file goes with it.
+        job.status = "cancelled"
+        try:
+            job.part_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        if job.entry_key is not None:
+            _in_flight.discard(job.entry_key)
+        _dest_locks.discard(job.dest_key)
+        await sio.emit("romsource:download_state", job.as_dict())
+        return True
+    # Finished, failed or already cancelled: forget it, and sweep up any
+    # fragment a hard stop may have left behind.
+    _jobs.pop(job_id, None)
+    try:
+        job.part_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return True
+
+
+async def retry_job(job_id: int) -> bool:
+    """Run a failed or cancelled job again. False if it is not repeatable."""
+    from handler.socket_handler import sio
+
+    job = _jobs.get(job_id)
+    if job is None or job.status not in ("failed", "cancelled"):
+        return False
+    # The locks were given back when it stopped, so they have to be taken again -
+    # and somebody else may have claimed the same destination in the meantime.
+    if job.dest_key in _dest_locks:
+        return False
+    if job.entry_key is not None and job.entry_key in _in_flight:
+        return False
+    _dest_locks.add(job.dest_key)
+    if job.entry_key is not None:
+        _in_flight.add(job.entry_key)
+    job.received = 0
+    job.error = None
+    job.status = "queued"
+    try:
+        start_at = job.part_path.stat().st_size
+    except OSError:
+        start_at = 0
+    job.task = asyncio.create_task(_rom_download_job(job, start_at))
+    await sio.emit("romsource:download_state", job.as_dict())
+    return True
 
 
 async def _coalesced_scan_after_write() -> None:

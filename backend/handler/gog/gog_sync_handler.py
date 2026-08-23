@@ -6,6 +6,7 @@ Endpoint used: embed.gog.com/account/getFilteredProducts
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Callable, Awaitable
@@ -16,10 +17,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from decorators.database import begin_session
 from handler.database.base_handler import DBBaseHandler
-from handler.gog.gog_auth_handler import _HDRS, gog_auth_handler
+from handler.gog.gog_auth_handler import gog_auth_handler
+from handler.gog_web import GOG_GALAXY_HEADERS
 from models.gog_game import GogGame
+from utils.http import loggable_error
 
 logger = logging.getLogger(__name__)
+
+# A page is retried before the sync gives up on it: one dropped connection in
+# the middle of a nine-page library used to end the whole run.
+_PAGE_ATTEMPTS = 3
 
 GOG_PRODUCTS_URL = (
     "https://embed.gog.com/account/getFilteredProducts"
@@ -65,21 +72,30 @@ class GogSyncHandler(DBBaseHandler):
         if not access_token:
             return {"ok": False, "error": "GOG account not connected", "synced": 0}
 
-        headers = {**_HDRS, "Authorization": f"Bearer {access_token}"}
+        headers = {**GOG_GALAXY_HEADERS, "Authorization": f"Bearer {access_token}"}
 
         total_pages = 1
         page = 1
         total_products = 0
         synced = 0
+        error: str | None = None
 
         async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=30) as client:
             while page <= total_pages:
-                try:
-                    resp = await client.get(GOG_PRODUCTS_URL.format(page=page))
-                    resp.raise_for_status()
-                    data = resp.json()
-                except Exception as e:
-                    logger.error(f"GOG sync page {page} failed: {e}")
+                data = None
+                for attempt in range(_PAGE_ATTEMPTS):
+                    try:
+                        resp = await client.get(GOG_PRODUCTS_URL.format(page=page))
+                        resp.raise_for_status()
+                        data = resp.json()
+                        break
+                    except Exception as e:
+                        if attempt + 1 < _PAGE_ATTEMPTS:
+                            await asyncio.sleep(2 ** attempt)
+                            continue
+                        error = loggable_error(e)
+                        logger.error("GOG sync page %d failed: %s", page, error)
+                if data is None:
                     break
 
                 total_pages = data.get("totalPages", 1)
@@ -95,8 +111,27 @@ class GogSyncHandler(DBBaseHandler):
 
                 page += 1
 
-        logger.info(f"GOG sync complete: {synced} games")
-        return {"ok": True, "synced": synced}
+        # The loop leaves `page` one past the last page it finished, so this is
+        # true only when every page was actually fetched. It used to return
+        # ok:True unconditionally, including straight after breaking out of the
+        # loop on a network error - so a sync that gave up on page two of nine
+        # reported success, and the caller sent "Library Synced - 100 games" by
+        # webhook and by email over a library of four hundred.
+        completed = page > total_pages
+        if completed:
+            logger.info("GOG sync complete: %d games", synced)
+        else:
+            logger.warning(
+                "GOG sync stopped at page %d of %d after %d games: %s",
+                page, total_pages, synced, error,
+            )
+        return {
+            "ok": completed,
+            "synced": synced,
+            "pages_done": page - 1,
+            "pages_total": total_pages,
+            "error": error,
+        }
 
     @begin_session
     async def _upsert_game(self, product: dict, owner_user_id: int | None = None, *, session: AsyncSession = None) -> None:

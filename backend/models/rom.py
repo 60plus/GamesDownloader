@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Index, Integer, JSON, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from models.base import Base
+from utils.text import clamp_text
 
 
 class Rom(Base):
@@ -121,3 +122,19 @@ class Rom(Base):
     platform: Mapped["RomPlatform"] = relationship(  # noqa: F821
         "RomPlatform", back_populates="roms",
     )
+
+    # Columns a scraper writes, all of them bounded VARCHARs fed by values no
+    # provider promises the length of. ScreenScraper in particular returns a
+    # publisher list as one string and a descriptive `joueurs` rather than a
+    # number. MySQL rejects the whole statement on an oversized value, so one
+    # long publisher would discard the cover, the artwork, the genres and every
+    # other field written in the same UPDATE - the failure the library side hit
+    # for real. Same guard as LibraryGame._clamp_to_column.
+    #
+    # Deliberately not here: fs_name, fs_name_no_ext, fs_path and fs_extension
+    # belong to the filesystem scan, not to a provider, and the ROM's identity
+    # key is (platform_id, fs_name) - trimming one would sever the row from its
+    # file on disk. Nor the hashes, which are fixed-width by construction.
+    @validates("name", "slug", "developer", "publisher", "player_count", "cover_type")
+    def _clamp_to_column(self, key: str, value):
+        return clamp_text(value, getattr(self.__table__.c[key].type, "length", None))

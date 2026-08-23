@@ -22,7 +22,10 @@ class TorrentDownload(Base):
     transmission_id: Mapped[int | None]
     info_hash:       Mapped[str | None] = mapped_column(String(64), index=True)
     status:          Mapped[str]        = mapped_column(String(16), default="downloading", index=True)
-    # "downloading" | "complete" | "error" | "removed"
+    # "downloading" | "paused" | "complete" | "error" | "removed"
+    #
+    # The progress monitor only looks at rows marked "downloading", which is
+    # what makes "paused" hold: nothing overwrites it until somebody resumes.
     title:           Mapped[str]        = mapped_column(String(512))
     os:              Mapped[str]        = mapped_column(String(16), default="windows")
     # Target library slug the finished download should land in. NULL / "games"

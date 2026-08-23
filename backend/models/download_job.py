@@ -10,6 +10,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from models.base import Base
 
+# A job that has not reached an end state: it is queued, running, or waiting to
+# be resumed. Lives here because it describes this table's `status` column, and
+# because the same tuple had grown three copies elsewhere - one of them a
+# private name imported across modules, one of them written out inline in the
+# dashboard's queue filter.
+PENDING_STATES = ("pending", "queued", "downloading", "paused")
+
 
 class DownloadJob(Base):
     __tablename__ = "download_jobs"

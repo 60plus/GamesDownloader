@@ -27,15 +27,51 @@ STATUS = {
 class TransmissionHandler:
     def __init__(self) -> None:
         self._session_id: str = ""
+        self._auth: tuple[str, str] | None = None
+        self._auth_loaded: bool = False
 
     # ── RPC transport ─────────────────────────────────────────────────────────
+
+    def forget_auth(self) -> None:
+        """Drop the cached credentials so the next call re-reads the settings.
+
+        Called when an admin saves the Transmission screen: without it, turning
+        authentication on would lock this client out until the next restart.
+        """
+        self._auth_loaded = False
+
+    async def _get_auth(self) -> tuple[str, str] | None:
+        """Credentials for the RPC, or None while authentication is off.
+
+        Cached because progress polling calls the RPC often and this would
+        otherwise be a database read every time.
+        """
+        if self._auth_loaded:
+            return self._auth
+        self._auth = None
+        try:
+            import json as _json
+
+            from handler.config.config_handler import config_handler
+            raw = await config_handler.get("transmission_settings")
+            if raw:
+                saved = _json.loads(raw)
+                if saved.get("rpc_auth_enabled"):
+                    user = str(saved.get("rpc_username", "")).strip()
+                    if user:
+                        self._auth = (user, str(saved.get("rpc_password", "")))
+        except Exception:
+            self._auth = None          # unreadable settings must not stop the client
+        self._auth_loaded = True
+        return self._auth
 
     async def _rpc(self, method: str, args: dict | None = None) -> dict | None:
         """Send a Transmission RPC request, handling 409 session renewal."""
         payload = {"method": method, "arguments": args or {}}
         headers = {"X-Transmission-Session-Id": self._session_id}
+        auth = await self._get_auth()
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT, auth=auth) as client:
                 resp = await client.post(_RPC_URL, json=payload, headers=headers)
                 if resp.status_code == 409:
                     self._session_id = resp.headers.get("X-Transmission-Session-Id", "")
@@ -70,6 +106,10 @@ class TransmissionHandler:
         "downloadDir", "totalSize", "sizeWhenDone", "error", "errorString",
         "rateDownload", "rateUpload", "eta", "labels",
         "uploadedEver", "isFinished", "addedDate", "peersGettingFromUs",
+        # For the "everything the daemon holds" view: what a torrent has given
+        # back, who it is talking to, and where it sits in the queue.
+        "uploadRatio", "peersConnected", "peersSendingToUs",
+        "downloadedEver", "queuePosition", "doneDate", "isStalled",
     ]
 
     async def add_torrent_file(
@@ -150,6 +190,78 @@ class TransmissionHandler:
 
     async def get_stats(self) -> dict | None:
         return await self._rpc("session-stats")
+
+    # ── Per-file selection ────────────────────────────────────────────────────
+    # A torrent is often a shelf rather than a game: a hundred titles in one
+    # bundle, and no reason to pull the other ninety-nine.
+
+    async def get_files(self, torrent_id: int) -> list[dict]:
+        """Every file in the torrent, with what has arrived and whether we want it.
+
+        `wanted` and `priority` come back as parallel arrays in `fileStats`,
+        indexed the same way as `files` - Transmission's own shape, kept rather
+        than flattened, so the index a caller sends back means the same thing at
+        both ends.
+        """
+        result = await self._rpc("torrent-get", {
+            "ids":    [torrent_id],
+            "fields": ["id", "name", "files", "fileStats"],
+        })
+        torrents = (result or {}).get("torrents") or []
+        if not torrents:
+            return []
+        t = torrents[0]
+        files = t.get("files") or []
+        stats = t.get("fileStats") or []
+        out = []
+        for i, f in enumerate(files):
+            st = stats[i] if i < len(stats) else {}
+            total = f.get("length") or 0
+            done  = f.get("bytesCompleted") or 0
+            out.append({
+                "index":           i,
+                "name":            f.get("name") or "",
+                "length":          total,
+                "bytes_completed": done,
+                "percent":         round(done / total * 100, 1) if total else 0.0,
+                "wanted":          bool(st.get("wanted", True)),
+                "priority":        st.get("priority", 0),
+            })
+        return out
+
+    async def set_files_wanted(self, torrent_id: int, wanted: list[int],
+                               unwanted: list[int]) -> bool:
+        """Choose which files to fetch. Empty lists are left out entirely.
+
+        Transmission reads `files-wanted: []` as "want nothing", which is not
+        what an empty list means to a caller that simply had nothing to add.
+        """
+        args: dict = {"ids": [torrent_id]}
+        if wanted:
+            args["files-wanted"] = wanted
+        if unwanted:
+            args["files-unwanted"] = unwanted
+        if len(args) == 1:
+            return True
+        return await self._rpc("torrent-set", args) is not None
+
+    async def set_torrent_limits(self, torrent_id: int, values: dict) -> bool:
+        """Per-torrent overrides: bandwidth, seed ratio, peer count, priority."""
+        if not values:
+            return True
+        return await self._rpc("torrent-set", {"ids": [torrent_id], **values}) is not None
+
+    async def move_in_queue(self, torrent_id: int, where: str) -> bool:
+        """Reorder a torrent in the download queue."""
+        method = {
+            "top":    "queue-move-top",
+            "up":     "queue-move-up",
+            "down":   "queue-move-down",
+            "bottom": "queue-move-bottom",
+        }.get(where)
+        if not method:
+            return False
+        return await self._rpc(method, {"ids": [torrent_id]}) is not None
 
     # ── Settings ──────────────────────────────────────────────────────────────
 

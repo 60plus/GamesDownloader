@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from decorators.database import begin_session
+from handler.gog_web import GOG_GALAXY_HEADERS
 from handler.config.config_handler import _decrypt, _encrypt
 from handler.database.base_handler import DBBaseHandler
 from models.gog_account import GogAccount
@@ -48,11 +49,6 @@ def _normalize_url(url: str) -> str:
     return url
 
 
-_HDRS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GOGGalaxy/2.0",
-    "Accept": "application/json",
-    "Accept-Language": "en-US,en;q=0.9",
-}
 
 
 class GogAuthHandler(DBBaseHandler):
@@ -73,7 +69,7 @@ class GogAuthHandler(DBBaseHandler):
         m = re.search(r"[?&]code=([^&\s]+)", code_or_url)
         code = m.group(1) if m else code_or_url.strip()
 
-        async with httpx.AsyncClient(headers=_HDRS) as client:
+        async with httpx.AsyncClient(headers=GOG_GALAXY_HEADERS) as client:
             resp = await client.get(GOG_TOKEN_URL, params={
                 "client_id":     GOG_CLIENT_ID,
                 "client_secret": GOG_CLIENT_SECRET,
@@ -224,7 +220,7 @@ class GogAuthHandler(DBBaseHandler):
         2. users.gog.com/users/{id} - structured avatar with extensions + created_date (Galaxy API).
         3. embed.gog.com/users/info/{id} - fallback for creation date (userSince timestamp).
         """
-        headers     = {**_HDRS, "Authorization": f"Bearer {access_token}"}
+        headers     = {**GOG_GALAXY_HEADERS, "Authorization": f"Bearer {access_token}"}
         user_id     = known_user_id
         username    = ""
         avatar      = ""
@@ -315,7 +311,7 @@ class GogAuthHandler(DBBaseHandler):
     async def _refresh_tokens(self, account: GogAccount, *, session: AsyncSession = None) -> None:
         try:
             rt = _decrypt(account.refresh_token)
-            async with httpx.AsyncClient(headers=_HDRS) as client:
+            async with httpx.AsyncClient(headers=GOG_GALAXY_HEADERS) as client:
                 resp = await client.get(GOG_TOKEN_URL, params={
                     "client_id":     GOG_CLIENT_ID,
                     "client_secret": GOG_CLIENT_SECRET,

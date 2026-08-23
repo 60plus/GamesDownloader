@@ -35,7 +35,7 @@ from sqlalchemy import and_, or_, select
 
 from config import BASE_PATH, GAMES_PATH
 from handler.config.config_handler import config_handler
-from models.download_job import DownloadJob
+from models.download_job import PENDING_STATES as _PENDING_STATES, DownloadJob
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +46,6 @@ PLATFORMS: tuple[str, ...] = ("windows", "mac", "linux")
 KEY_ENABLED          = "gog_zip_per_platform"      # bool - master switch
 KEY_DELETE_ORIGINALS = "gog_zip_delete_originals"  # bool - remove loose files after zipping
 KEY_INCLUDE_EXTRAS   = "gog_zip_include_extras"     # bool - also auto-package extras/dlc folders
-
-# Job states that mean "this file is not finished yet".
-_PENDING_STATES = ("pending", "queued", "downloading", "paused")
 
 # Per-(gog_id, platform) locks so two file-completions can't race to build the
 # same archive at the same time.

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from models.base import Base
 from utils.ratings import normalize_star_5
+from utils.text import clamp_text
 
 if TYPE_CHECKING:
     # SQLAlchemy resolves the relationship via the string name "LibraryFile";
@@ -113,6 +114,21 @@ class LibraryGame(Base):
         "LibraryFile", back_populates="game", cascade="all, delete-orphan",
         lazy="selectin",
     )
+
+    # Columns whose value is written from whatever a metadata provider hands
+    # back. None of them promise a length; every one of these is a bounded
+    # VARCHAR. See utils.text.clamp_text for what an oversized value costs.
+    @validates(
+        "title", "subtitle", "description_short",
+        "developer", "publisher", "catalog_external_id",
+    )
+    def _clamp_to_column(self, key: str, value):
+        """Trim an over-long metadata string to the width of its column.
+
+        The limit is read off the column rather than repeated here, so
+        widening a column widens the clamp with it.
+        """
+        return clamp_text(value, getattr(self.__table__.c[key].type, "length", None))
 
     @validates("rating")
     def _normalize_rating(self, _key: str, value):

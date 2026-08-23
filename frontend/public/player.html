@@ -300,7 +300,10 @@
       text-transform: uppercase; color: #a78bfa; margin-bottom: 8px;
       display: flex; align-items: center; gap: 8px;
     }
-    .gd-mi {
+    /* A menu row and a settings row look the same and always have: same box,
+       same hover, same focus. They are written once here, and only the parts
+       that genuinely differ live in the .gd-si block further down. */
+    .gd-mi, .gd-si {
       display: flex; align-items: center; gap: 12px;
       padding: 13px 16px; border-radius: 12px;
       background: rgba(255,255,255,.04);
@@ -309,11 +312,13 @@
       font-size: 14px; font-weight: 600; color: rgba(255,255,255,.65);
       user-select: none;
     }
-    .gd-mi svg { flex-shrink: 0; opacity: .5; transition: opacity .12s; }
-    .gd-mi.gd-mi-focus, .gd-mi:hover {
+    .gd-mi svg, .gd-si svg { flex-shrink: 0; opacity: .5; transition: opacity .12s; }
+    .gd-mi.gd-mi-focus, .gd-mi:hover,
+    .gd-si.gd-si-focus, .gd-si:hover {
       background: rgba(167,139,250,.12); border-color: rgba(167,139,250,.35); color: #fff;
     }
-    .gd-mi.gd-mi-focus svg, .gd-mi:hover svg { opacity: 1; }
+    .gd-mi.gd-mi-focus svg, .gd-mi:hover svg,
+    .gd-si.gd-si-focus svg, .gd-si:hover svg { opacity: 1; }
     .gd-mi-danger.gd-mi-focus, .gd-mi-danger:hover {
       background: rgba(220,38,38,.12); border-color: rgba(220,38,38,.35); color: #f87171;
     }
@@ -373,16 +378,8 @@
     }
 
     /* ── Settings item (shared: categories + sub-page items) ──────────────── */
-    .gd-si {
-      display: flex; align-items: center; gap: 12px;
-      padding: 13px 16px; border-radius: 12px;
-      background: rgba(255,255,255,.04);
-      border: 1px solid rgba(255,255,255,.07);
-      cursor: pointer; transition: all .12s;
-      font-size: 14px; font-weight: 600; color: rgba(255,255,255,.65);
-      user-select: none;
-    }
-    .gd-si svg { flex-shrink: 0; opacity: .5; transition: opacity .12s; }
+    /* Shared box, hover and focus are up with .gd-mi. What follows is only
+       what a settings row has and a menu row does not: a value and an arrow. */
     .gd-si-label { flex: 1; }
     .gd-si-val {
       font-size: 13px; font-weight: 700; color: rgba(167,139,250,.8);
@@ -390,10 +387,6 @@
       display: flex; align-items: center; justify-content: flex-end; gap: 6px;
     }
     .gd-si-arrow { opacity: 0; font-size: 10px; color: rgba(167,139,250,.5); transition: opacity .12s; }
-    .gd-si.gd-si-focus, .gd-si:hover {
-      background: rgba(167,139,250,.12); border-color: rgba(167,139,250,.35); color: #fff;
-    }
-    .gd-si.gd-si-focus svg, .gd-si:hover svg { opacity: 1; }
     .gd-si.gd-si-focus .gd-si-val { color: #c4b5fd; }
     .gd-si.gd-si-focus .gd-si-arrow { opacity: 1; }
     .gd-si-action .gd-si-val { color: rgba(167,139,250,.6); font-weight: 600; font-size: 12px; }
@@ -604,6 +597,26 @@ const BOOT_DISK       = params.get('disk') || '';
 
 const API_BASE   = '';
 const TOKEN      = localStorage.getItem('gd3_token') || '';
+
+// Which account is signed in, read out of the token's subject claim. Nothing is
+// trusted to it - the server decides what this token may do - it only names the
+// owner of the memory cards this browser is holding, and saves that a round
+// trip before the emulator can be told to start.
+//
+// It has to exist. Everything about a battery save is per account, and until
+// this the player had no idea who it was serving: it knew a token and nothing
+// else, so one person's cards were handed to the next person to sign in here.
+const WHO = (function () {
+  try {
+    const czesc = TOKEN.split('.')[1];
+    if (!czesc) return 'anon';
+    const json = atob(czesc.replace(/-/g, '+').replace(/_/g, '/'));
+    const sub = JSON.parse(json).sub;
+    return sub ? String(sub) : 'anon';
+  } catch {
+    return 'anon';
+  }
+})();
 
 let pickerMode   = 'states';   // 'states' | 'saves'
 let cachedStates = [];
@@ -1075,13 +1088,16 @@ const VAMIGA_BRIDGE = `
         try {
           const j = JSON.parse(wasm_export_disk('dh0'));
           if (j.size) {
-            // slice() copies out of the emulator's heap, which is also what
-            // makes the bytes acceptable to SubtleCrypto - it refuses a view
-            // onto shared memory.
+            // slice() copies out of the emulator's heap rather than handing
+            // over a view onto shared memory.
+            //
+            // Not SubtleCrypto: it only exists in a secure context, and this
+            // line is read over plain http on a LAN address more often than
+            // anywhere else, where it was reporting "could not be read" for
+            // every drive. A diagnostic that only works where you are not
+            // looking is worse than none.
             const hdf = new Uint8Array(Module.HEAPU8.buffer, j.address, j.size).slice(0, j.size);
-            const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', hdf));
-            image = Array.from(digest.slice(0, 6))
-              .map((b) => b.toString(16).padStart(2, '0')).join('') + ' (' + j.size + ' B)';
+            image = _quickHash(hdf) + ' (' + j.size + ' B)';
           }
           Module._wasm_delete_disk();
         } catch (err) {
@@ -1422,17 +1438,215 @@ async function uploadState(stateBuffer, screenshotBuffer) {
 async function uploadSave(saveBuffer) {
   if (!saveBuffer || !saveBuffer.length) { cardLog('nothing to send'); return false; }
   if (cardLooksEmpty(saveBuffer)) { cardLog('refusing to send a blank card'); return false; }
+  // Belt and braces behind forgetOtherUsersCards. If the clearing ever fails -
+  // another tab holding the database open, a browser that refuses the delete -
+  // the one thing that must not happen anyway is filing somebody else's card
+  // under this account, which is exactly how this was found.
+  let owner = null;
+  try { owner = localStorage.getItem(CARD_OWNER_KEY); } catch {}
+  if (owner && owner !== WHO) {
+    cardLog('these cards belong to ' + owner + ', not ' + WHO + ' - not sending');
+    return false;
+  }
   const fd = new FormData();
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   fd.append('saveFile', new File([saveBuffer], `${ROM_NAME} [${ts}].srm`));
   if (EJS_CORE) fd.append('emulator_core', EJS_CORE);
-  await fetch(`${API_BASE}/api/savestates/${ROM_ID}/saves`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: fd,
-  });
+  // Which version of the card this browser started from. The server refuses
+  // the write when somebody else has moved on since, which is what stops one
+  // browser undoing an evening played in another.
+  const sync = readCardSync();
+  if (sync && sync.serverHash) fd.append('base_hash', sync.serverHash);
+  // The answer has to be read. Every caller treats "true" as "the server has
+  // this now" and writes down that the card no longer needs sending: the floppy
+  // path remembers the bytes, the WHDLoad path remembers the tag, the timer
+  // remembers the hash. Returning true after a failed request retires a card
+  // that never arrived, and nothing tries again for the rest of the session.
+  let r;
+  try {
+    r = await fetch(`${API_BASE}/api/savestates/${ROM_ID}/saves`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    });
+  } catch (e) {
+    cardLog('the card could not be sent: ' + e);
+    return false;
+  }
+  if (r.status === 409) {
+    // Somebody played this game somewhere else and saved. Nothing is lost:
+    // this browser keeps its card and the server keeps the other one. Say so,
+    // because the alternative is a card that silently stops syncing.
+    cardLog('the server has a newer card - this one was not sent');
+    // Said once. The auto sync retries on its own timer and every attempt gets
+    // the same refusal, so repeating it would be a toast every minute for the
+    // rest of the session.
+    if (!cardConflict) {
+      gdToast('Another device saved this game, so this card was not sent. '
+            + 'Your progress here is safe on this machine - open Saves to see the other one.');
+    }
+    cardConflict = true;
+    cachedSaves = null;
+    return false;
+  }
+  if (!r.ok) { cardLog('the server refused the card: HTTP ' + r.status); return false; }
+  // Remember what the server now holds, and what this card looked like when it
+  // agreed with it. At the next launch those two answer "has anything been
+  // played here that the server has not got?" without hashing being needed on
+  // the way in.
+  try {
+    const saved = await r.json();
+    if (saved && saved.content_hash) rememberCardSync(saved.content_hash, saveBuffer);
+  } catch (e) { cardLog('could not read back the saved card: ' + e); }
   cachedSaves = null;
   return true;
+}
+
+// ── Which version of the card this browser is holding ────────────────────────
+//
+// The server keeps one card per game per user and used to write over it without
+// comparing anything, so whichever browser left the game last won. A browser
+// holding an older card would quietly undo progress made in another one. Seen
+// on the test server: a card with a file time of 21:10 and contents from 19:38.
+//
+// The rule now is that the server's card wins at launch, which is what makes a
+// second machine pick up where the first left off. The exception is a card that
+// has something on it the server never received - a session that ended with the
+// upload failing - because taking that away to install the server's copy would
+// simply lose the progress in the other direction.
+//
+// Two values per game, in this browser's own storage, which is exactly the right
+// scope: the server's hash of the card at the last successful sync, and this
+// browser's own fingerprint of those same bytes. The second one only ever gets
+// compared with itself, so it does not have to match anything the server
+// computes; SHA-256 is used because the browser has it built in and MD5 is not.
+const CARD_SYNC_KEY = 'gd_card_sync_' + WHO + '_' + ROM_ID;
+let cardConflict = false;
+
+// Bumped when the fingerprint changes shape. A record written by an older
+// scheme describes bytes in a language this one does not read, and comparing
+// them would say "changed" for a card that has not: the launch would keep the
+// local copy, the upload would carry a base the server has moved past, and the
+// browser would sit refusing itself. Treating it as no record at all makes the
+// next upload the one that writes a fresh one.
+const CARD_SYNC_VERSION = 2;
+
+function readCardSync() {
+  try {
+    const zapis = JSON.parse(localStorage.getItem(CARD_SYNC_KEY) || 'null');
+    if (!zapis || zapis.v !== CARD_SYNC_VERSION) return null;
+    return zapis;
+  } catch { return null; }
+}
+
+// ── Cards belong to an account, not to a browser ─────────────────────────────
+//
+// EmulatorJS mounts its save filesystem with IDBFS at the fixed path
+// /data/saves. That mount is per browser: not per game, and not per account.
+// So signing in as somebody else on the same browser left the previous
+// person's memory cards sitting in the machine. The next game booted on them,
+// and the auto sync then uploaded them to the new account, which is how one
+// user's progress ended up filed under another user's name.
+//
+// Reported by the user testing exactly that, and it predates the card
+// versioning above: nothing here was ever scoped to an account.
+//
+// A card in this browser has one owner. When that changes, the cards go before
+// the emulator starts, because by the time the game is running the core has
+// already read the file and deleting it then changes nothing. Whoever owned
+// them keeps their copies on the server, untouched; only this browser's copy
+// is cleared, and their next launch pulls it back down.
+const CARD_OWNER_KEY = 'gd_card_owner';
+
+async function forgetOtherUsersCards() {
+  // No readable token means no idea who this is, which is not the same as
+  // knowing it is somebody else. Clearing on a token that merely failed to
+  // parse would throw away a legitimate player's cards over a hiccup, so this
+  // does nothing and leaves the decision to a launch that knows the answer.
+  if (WHO === 'anon') { cardLog('no readable account in the token - leaving the cards alone'); return; }
+
+  let owner = null;
+  try { owner = localStorage.getItem(CARD_OWNER_KEY); } catch {}
+  if (owner === WHO) return;
+  try { localStorage.setItem(CARD_OWNER_KEY, WHO); } catch {}
+  if (!owner) { cardLog('first account to use this browser: ' + WHO); return; }
+
+  cardLog('this browser last held cards for ' + owner + ', now ' + WHO + ' - clearing them');
+
+  // The emulator's own asset stores are named EmulatorJS-*; they hold ROMs,
+  // cores and BIOS files, which are not personal and are expensive to fetch
+  // again. The filesystem mount is named after its path, so it starts with a
+  // slash. Enumerate where the browser allows it and fall back to the known
+  // mount point, because Firefox only learned databases() recently.
+  // /data/saves is EmulatorJS. /exported_hd is vAmigaWeb's writable drive,
+  // which the Amiga path already avoids for its own pulls precisely because
+  // "on a shared machine the next player would find this player's saves
+  // sitting there" - the comment was right and this is the other half of it.
+  const usun = new Set(['/data/saves', '/exported_hd']);
+  try {
+    if (indexedDB.databases) {
+      for (const db of await indexedDB.databases()) {
+        if (db && db.name && db.name.charAt(0) === '/') usun.add(db.name);
+      }
+    }
+  } catch (e) { cardLog('could not list the browser databases: ' + e); }
+
+  for (const nazwa of usun) {
+    await new Promise((done) => {
+      let req;
+      try { req = indexedDB.deleteDatabase(nazwa); } catch (e) { cardLog('delete failed ' + nazwa + ': ' + e); return done(); }
+      req.onsuccess = () => { cardLog('cleared ' + nazwa); done(); };
+      req.onerror   = () => { cardLog('could not clear ' + nazwa); done(); };
+      // A database still open in another tab blocks the delete and never
+      // settles. Do not hold the launch hostage to it.
+      req.onblocked = () => { cardLog('another tab is holding ' + nazwa); done(); };
+      setTimeout(done, 3000);
+    });
+  }
+
+  // The sync points describe cards that no longer exist here, and they are
+  // keyed by account, so the other person's would otherwise sit around for ever.
+  try {
+    const martwe = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf('gd_card_sync_') === 0) martwe.push(k);
+    }
+    martwe.forEach((k) => localStorage.removeItem(k));
+    if (martwe.length) cardLog('dropped ' + martwe.length + ' stale sync point(s)');
+  } catch (e) { cardLog('could not clear the sync points: ' + e); }
+}
+
+// This browser's own mark on a set of bytes, used only to answer "are these
+// the same bytes I last synced?" - it is never compared with anything the
+// server computes, so it does not have to be a cryptographic digest and it
+// does not have to match the server's md5.
+//
+// It must not be crypto.subtle. That is only defined in a secure context, and
+// GD is routinely reached over plain http on a LAN address, where it is simply
+// missing. The first version used it, and on that address the fingerprint came
+// back null every time: no sync point was ever written, so every launch
+// decided the local card held unsent work and kept it. Which is exactly the
+// symptom - a second browser that loads the save, plays on, and never updates
+// the server. The same page already had a hash that works everywhere, used by
+// the auto sync a few lines below.
+function fingerprint(bytes) {
+  if (!bytes || !bytes.length) return null;
+  try {
+    return _fullHash(bytes);
+  } catch (e) {
+    cardLog('could not fingerprint the card: ' + e);
+    return null;
+  }
+}
+
+function rememberCardSync(serverHash, bytes) {
+  const local = fingerprint(bytes);
+  if (!serverHash || !local) { cardLog('no sync point written (server=' + serverHash + ', local=' + local + ')'); return; }
+  try {
+    localStorage.setItem(CARD_SYNC_KEY, JSON.stringify({ v: CARD_SYNC_VERSION, serverHash, local }));
+    cardLog('synced at server ' + serverHash.slice(0, 8) + ', local ' + local);
+  } catch (e) { cardLog('could not write down the sync point: ' + e); }
 }
 
 // ── Save state to the server (GD's own "Save state") ─────────────────────────
@@ -1507,12 +1721,38 @@ let _autoSyncLastHash = null;
 let _autoSyncBusy   = false;
 
 function _quickHash(u8) {
-  // FNV-1a-ish 32-bit fold over a sparse subset of bytes - enough to detect
-  // any meaningful save change while staying O(1k) on multi-MB SRAMs.
+  // FNV-1a-ish 32-bit fold over a sparse subset of bytes. Cheap on multi-MB
+  // images and good enough for a diagnostic line, but it READS ONE BYTE IN
+  // EVERY step - a change that falls between two samples is invisible to it.
+  // Never decide anything about save data with this; see _fullHash.
   if (!u8 || !u8.length) return '0';
   let h = 0x811c9dc5;
   const step = Math.max(1, Math.floor(u8.length / 1024));
   for (let i = 0; i < u8.length; i += step) {
+    h ^= u8[i];
+    h = (h * 16777619) >>> 0;
+  }
+  return h.toString(16) + ':' + u8.length;
+}
+
+function _fullHash(u8) {
+  // The same fold, over every byte. Used wherever the answer decides what
+  // happens to somebody's save: whether a card has changed since it was last
+  // synced, and whether the auto sync has anything to send.
+  //
+  // The sampling version was doing both of those jobs. On a 128 KB memory card
+  // it reads one byte in 128, so a save written entirely between two samples
+  // reads as "nothing changed": the auto sync stays quiet and the next launch
+  // decides the card is safe to replace with the server's. Unlikely, and a
+  // silent way to lose an evening when it happens.
+  //
+  // Not SubtleCrypto, which only exists in a secure context and is simply
+  // missing when GD is reached over plain http on a LAN address. Cost is one
+  // pass over the card: immeasurable for a 128 KB one, and this runs at launch
+  // and once a minute, not per frame.
+  if (!u8 || !u8.length) return '0';
+  let h = 0x811c9dc5;
+  for (let i = 0; i < u8.length; i++) {
     h ^= u8[i];
     h = (h * 16777619) >>> 0;
   }
@@ -1532,12 +1772,14 @@ async function _autoSyncTick() {
   // the server on top of the only copy of somebody's save. Nothing is lost by
   // staying quiet: a card with nothing on it is not worth keeping anyway.
   if (cardLooksEmpty(bytes)) return;
-  const h = _quickHash(bytes);
+  const h = _fullHash(bytes);
   if (h === _autoSyncLastHash) return;
   _autoSyncBusy = true;
   try {
-    await uploadSave(bytes);
-    _autoSyncLastHash = h;
+    // Only remember the hash once the card is actually on the server. Writing it
+    // down after a failed send would mark this card as dealt with, and the next
+    // tick would see no change and stay quiet until the tab is closed.
+    if (await uploadSave(bytes)) _autoSyncLastHash = h;
   } catch (e) {
     // Network blip - retry on next tick
   } finally {
@@ -1741,7 +1983,11 @@ function closePicker() {
 }
 
 async function loadItem(idx) {
-  const items = pickerMode === 'states' ? cachedStates : cachedSaves;
+  // Either cache is set to null when something is uploaded, and the timer can
+  // do that while the picker sits open with its rows already drawn. Indexing
+  // null threw out of the row's onclick, so the click did nothing at all and
+  // said nothing either. The delete paths already guarded; this one did not.
+  const items = (pickerMode === 'states' ? cachedStates : cachedSaves) || [];
   const item  = items[idx];
   if (!item) return;
 
@@ -1768,6 +2014,14 @@ async function loadItem(idx) {
     if (!writeSaveFileIntoCore(buf)) {
       cardLog('manual pick: could not write the card into the core');
       gdToast('Could not put the memory card in');
+      return;
+    }
+    // Taking the server's card by hand is also a sync point, and it is the way
+    // out of a conflict: without writing it down here, this browser would go on
+    // believing it holds unsent work and every upload would keep being refused.
+    if (item.content_hash) {
+      rememberCardSync(item.content_hash, buf);
+      cardConflict = false;
     }
   }
 }
@@ -1868,7 +2122,18 @@ function cardLog(what) {
   try { console.log('[gd-card] ' + what); } catch {}
 }
 
-async function lendServerCardIfBrowserHasNone() {
+// The card on the server is the one that counts, and this is where that gets
+// decided. It used to lend the server's card only to a browser whose own card
+// was blank, which meant a machine that had ever played this game kept its own
+// copy for ever and pushed it back over anything newer at the end of the
+// session. Now the server's card comes in whenever this browser has nothing
+// unsent, so a second machine picks up where the first left off.
+//
+// The one exception is a card carrying something the server never received:
+// installing the server's copy over it would lose that progress just as surely,
+// only in the other direction. That case keeps the local card, says so, and
+// leaves the server's copy one click away in the saves list.
+async function takeServerCardIfItIsAhead() {
   if (IS_AMIGA) { cardLog('Amiga: saves live on a floppy, nothing to do'); return; }
   if (cardCheckSettled) { cardLog('already settled on this page'); return; }
 
@@ -1884,28 +2149,52 @@ async function lendServerCardIfBrowserHasNone() {
   try {
     mine = gm.getSaveFile(false);             // false: read it, do not write it out
   } catch (e) { cardLog('could not read this machine card: ' + e); return; }
-  cardLog('card in this browser: ' + (mine ? mine.length + ' bytes' : 'none')
-          + ', empty=' + cardLooksEmpty(mine));
-  if (!cardLooksEmpty(mine)) { settled(); cardLog('it has saves on it - leaving it alone'); return; }
+  const blank = cardLooksEmpty(mine);
+  cardLog('card in this browser: ' + (mine ? mine.length + ' bytes' : 'none') + ', empty=' + blank);
 
   try {
     await fetchSaves();
     const item = (cachedSaves || [])[0];      // newest first
     if (!item) { settled(); cardLog('server has no card for this game either'); return; }
+
+    if (!blank) {
+      // Does this card hold anything the server has not got?
+      const sync  = readCardSync();
+      const local = fingerprint(mine);
+      if (!sync || !local || sync.local !== local) {
+        settled();
+        cardLog('this card has changes the server never received - keeping it');
+        if (item.content_hash && sync && sync.serverHash && item.content_hash !== sync.serverHash) {
+          cardConflict = true;
+          gdToast('This machine has a save the server never received, so it stays. '
+                + 'The server also has a newer one - open Saves to load it instead.');
+        }
+        return;
+      }
+      if (item.content_hash && item.content_hash === sync.serverHash) {
+        settled();
+        cardLog('this card is already the one the server holds');
+        return;
+      }
+      cardLog('server has moved on since this browser last synced - taking its card');
+    }
+
     const resp = await fetch(item.download_url, { headers: authHeaders() });
     if (!resp.ok) { cardLog('could not fetch the card: HTTP ' + resp.status); return; }
     const buf = new Uint8Array(await resp.arrayBuffer());
     cardLog('fetched ' + buf.length + ' bytes, empty=' + cardLooksEmpty(buf));
     if (!buf.length || cardLooksEmpty(buf)) { settled(); cardLog('nothing worth putting in'); return; }
     if (!writeSaveFileIntoCore(buf)) { cardLog('could not write it into the core'); return; }
+    // Write the sync point down straight away. Without it the very next auto
+    // sync would look at a card it does not recognise, decide it holds unsent
+    // work, and refuse to take the server's side again next launch.
+    if (item.content_hash) rememberCardSync(item.content_hash, buf);
     settled();
     cardLog('card is in');
-    const el = document.getElementById('gd-sp-resume');
-    if (el) {
-      el.textContent = 'Your memory card is in';
-      el.style.display = '';
-      requestAnimationFrame(() => el.classList.add('ready'));
-    }
+    // A toast, not the splash line. This runs ten milliseconds after the game
+    // starts, and starting the game is what begins fading the splash out, so
+    // the message was being written onto a panel on its way off the screen.
+    gdToast(blank ? 'Your memory card is in' : 'Loaded the newer save from the server');
   } catch (e) {
     cardLog('gave up: ' + e);
   }
@@ -1972,14 +2261,19 @@ if (RETURN_TO) {
     const _fsp = document.getElementById('gd-fs-prompt');
     if (!_fsp) return;
     _fsp.classList.add('visible');
+    // Declared before _go so the handle exists to cancel. Dismissing the prompt
+    // with the mouse or the keyboard used to leave this poll running at frame
+    // rate for the rest of the session, next to the in-game pad loop, because
+    // only the gamepad branch ever stopped scheduling itself.
+    let _fsRaf = null;
     const _go = () => {
+      if (_fsRaf !== null) { cancelAnimationFrame(_fsRaf); _fsRaf = null; }
       document.documentElement.requestFullscreen?.().catch(() => {});
       _fsp.classList.remove('visible');
     };
     _fsp.addEventListener('click', _go, { once: true });
     document.addEventListener('keydown', _go, { once: true });
     // Poll gamepad for any button press
-    let _fsRaf;
     const _fsPoll = () => {
       if ([...(navigator.getGamepads?.() ?? [])].some(gp => gp?.buttons.some(b => b?.pressed))) {
         _go(); return;
@@ -2582,8 +2876,6 @@ function installFirmwareHook(files) {
   if (localStorage.getItem('gd_ejs_debug') === '1') {
     window.EJS_DEBUG_XX = true;
   }
-  window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
-
   // ── Toolbar button visibility (EJS_Buttons) ──────────────────────────────────
   // In Couch Mode (RETURN_TO set): hide the entire native toolbar so our custom
   // Start+Select pause menu is the sole UI - pure console-like experience.
@@ -2632,7 +2924,6 @@ function installFirmwareHook(files) {
   if (resolvedBezelUrl) {
     document.getElementById('gd-bezel').src = resolvedBezelUrl;
     document.getElementById('gd-bezel-wrap').style.display = 'block';
-    window._gdHasBezel = true;   // flag used by in-game menu to know whether to restore bezel
   }
 
   // ── Bezel fullscreen fix ─────────────────────────────────────────────────
@@ -2662,26 +2953,11 @@ function installFirmwareHook(files) {
     // Keep splash visible - will fade out on EJS_onGameStart for a branded transition.
     // Fallback: hide after 8s in case EJS_onGameStart never fires.
     setTimeout(() => hideLoading(), 8000);
-    // Scan EJS DOM for the settings/cog button (used by Start+Select combo)
-    // EJS renders its toolbar a moment after ready fires.
+    // Scan the EJS DOM for the Save State button, which the in-game menu falls
+    // back to. EJS renders its toolbar a moment after ready fires.
     setTimeout(() => {
       try {
-        // Look for a button whose title/aria-label mentions "settings" or "options"
         const allBtns = [...document.querySelectorAll('button')];
-        window._ejsSettingsBtn = allBtns.find(b => {
-          const t = (b.title || b.getAttribute('aria-label') || '').toLowerCase();
-          const c = (b.className || '').toLowerCase();
-          return t.includes('setting') || t.includes('option') || t.includes('cog') ||
-                 c.includes('setting') || c.includes('option');
-        }) ?? null;
-        // Fallback: in standard EJS toolbar order, settings is second-to-last
-        // (last is usually fullscreen). Try second-to-last first.
-        if (!window._ejsSettingsBtn) {
-          const gameBtns = [...document.querySelectorAll('#game button')];
-          if (gameBtns.length >= 2) window._ejsSettingsBtn = gameBtns[gameBtns.length - 2];
-          else if (gameBtns.length === 1) window._ejsSettingsBtn = gameBtns[0];
-        }
-        // Also find the Save State button for the in-game menu
         window._ejsSaveStateBtn = allBtns.find(b => {
           const t = (b.title || b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
           return t.includes('save state');
@@ -2692,9 +2968,7 @@ function installFirmwareHook(files) {
         // hide every <button> inside #game individually.  This is safe because
         // it only hides buttons - NOT the canvas or the settings panel.
         if (RETURN_TO) {
-          const gameBtns = [...document.querySelectorAll('#game button')];
-          gameBtns.forEach(b => { b.style.display = 'none'; });
-          window._ejsHiddenBtns = gameBtns;
+          [...document.querySelectorAll('#game button')].forEach(b => { b.style.display = 'none'; });
         }
       } catch {}
     }, 2500);
@@ -2814,7 +3088,7 @@ function installFirmwareHook(files) {
     // ten milliseconds later. Not a second and a half, not at EJS_ready - both
     // were tried and neither took. Their write is the one we already copied;
     // what was missing was doing it at their moment.
-    setTimeout(lendServerCardIfBrowserHasNone, 10);
+    setTimeout(takeServerCardIfItIsAhead, 10);
 
     // Continue playing: auto-load the savestate once the core has settled.
     if (RESUME) setTimeout(autoResume, 600);
@@ -2875,6 +3149,10 @@ function installFirmwareHook(files) {
       document.body.appendChild(s);
     });
   }
+
+  // Whoever used this browser last has to have been the person using it now,
+  // or their cards go before the machine boots. See forgetOtherUsersCards.
+  await forgetOtherUsersCards();
 
   try {
     await _loadEJSFrom(LOCAL_EJS);
@@ -3129,11 +3407,14 @@ function installFirmwareHook(files) {
   }
 
   function _getShaderOptions() {
-    // EJS uses lowercase "disabled" internally, and shader keys end with .glslp
-    // enableShader checks: this.config.shaders[key] - NOT this.shaders[key]
+    // loader.js copies window.EJS_SHADERS onto emulator.config.shaders, and
+    // enableShader() looks a name up in that same object - so the raw key is
+    // what has to be handed back. The keys are mixed: some carry a .glslp
+    // suffix ("crt-geom.glslp"), some do not ("crt-zfast"), so nothing may be
+    // appended or stripped. A name EmulatorJS does not recognise silently
+    // turns the shader off rather than reporting anything.
     var opts = [{ value: 'disabled', label: 'None' }];
     try {
-      // Method 1: read from config.shaders (what enableShader actually uses)
       var emu = window.EJS_emulator;
       var configShaders = emu && emu.config && emu.config.shaders;
       if (configShaders && typeof configShaders === 'object') {
@@ -3143,20 +3424,13 @@ function installFirmwareHook(files) {
           }
         });
       }
-      // Method 2: fallback to this.shaders but add .glslp extension
-      if (opts.length <= 1 && emu && emu.shaders) {
-        Object.keys(emu.shaders).forEach(function(name) {
-          if (name && name.toLowerCase() !== 'disabled') {
-            // Add both with and without .glslp - enableShader might accept either
-            var key = name.endsWith('.glslp') ? name : name;
-            opts.push({ value: key, label: name.replace('.glslp', '') });
-          }
-        });
-      }
     } catch(e) {}
-    // Fallback common shaders (with .glslp extension as EJS expects)
+    // Safety net for a shader list that never loaded. These are the names
+    // EmulatorJS ships, spelled exactly as it stores them.
     if (opts.length <= 1) {
-      ['2xScaleHQ.glslp','4xScaleHQ.glslp','crt-easymode.glslp','crt-mattias.glslp','crt-geom.glslp','SABR.glslp'].forEach(function(s) {
+      ['2xScaleHQ.glslp','4xScaleHQ.glslp','crt-aperture.glslp','crt-easymode.glslp',
+       'crt-geom.glslp','crt-mattias.glslp','crt-beam','crt-caligari','crt-lottes',
+       'crt-zfast','crt-yeetron','bicubic','sabr','mix-frames'].forEach(function(s) {
         opts.push({ value: s, label: s.replace('.glslp','') });
       });
     }

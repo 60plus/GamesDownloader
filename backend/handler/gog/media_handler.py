@@ -18,14 +18,11 @@ from pathlib import Path
 
 from utils.http import fetch_media_bytes
 
-try:
-    from config import GD_BASE_PATH
-except ImportError:
-    GD_BASE_PATH = "/data"
+from config import BASE_PATH
 
 logger = logging.getLogger(__name__)
 
-RESOURCES_PATH = Path(GD_BASE_PATH) / "resources" / "gog"
+RESOURCES_PATH = Path(BASE_PATH) / "resources" / "gog"
 
 _HDRS = {
     "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -183,7 +180,7 @@ async def download_avatar(user_id: str, url: str) -> str | None:
     use the same Fastly CDN that deprecated formatter suffixes (e.g. _glx_av,
     _large2x). Stripping them lets the CDN return the base image (HTTP 200).
     """
-    avatars_dir = Path(GD_BASE_PATH) / "resources" / "avatars"
+    avatars_dir = Path(BASE_PATH) / "resources" / "avatars"
     avatars_dir.mkdir(parents=True, exist_ok=True)
 
     try:

@@ -36,8 +36,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import BASE_PATH, GAMES_PATH
 from decorators.database import begin_session
 from handler.database.base_handler import DBBaseHandler
-from handler.gog.gog_auth_handler import _HDRS, gog_auth_handler
-from models.download_job import DownloadJob
+from handler.gog.gog_auth_handler import gog_auth_handler
+from handler.gog_web import GOG_GALAXY_HEADERS
+from models.download_job import PENDING_STATES, DownloadJob
+from utils.http import loggable_error
+from utils.async_utils import fire_task
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +116,7 @@ async def _fetch_cdn_md5(cdn_url: str) -> str:
     """
     xml_url = cdn_url.split("?")[0] + ".xml"   # strip query params, append .xml
     try:
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=15) as client:
+        async with httpx.AsyncClient(headers=GOG_GALAXY_HEADERS, follow_redirects=True, timeout=15) as client:
             resp = await client.get(xml_url)
         if resp.status_code != 200:
             return ""
@@ -170,7 +173,7 @@ async def gog_download_incomplete(gog_id: int) -> bool:
     cancelled job never blocks: skipping a file is a decision, not a failure.
     """
     from handler.database.session import async_session_factory as _sf
-    from handler.gog.zip_packer import _PENDING_STATES
+    from models.download_job import PENDING_STATES as _PENDING_STATES
     from sqlalchemy import select as _sel
 
     async with _sf() as session:
@@ -435,7 +438,7 @@ class GogDownloadHandler(DBBaseHandler):
         if not token:
             raise ValueError("GOG account not connected")
 
-        headers = {**_HDRS, "Authorization": f"Bearer {token}"}
+        headers = {**GOG_GALAXY_HEADERS, "Authorization": f"Bearer {token}"}
         url = GOG_PRODUCTS_URL.format(gog_id=gog_id)
 
         async with httpx.AsyncClient(
@@ -536,7 +539,7 @@ class GogDownloadHandler(DBBaseHandler):
         sep = "&" if "?" in url else "?"
         url_with_token = f"{url}{sep}access_token={token}"
 
-        headers = {**_HDRS, "Authorization": f"Bearer {token}"}
+        headers = {**GOG_GALAXY_HEADERS, "Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(
             headers=headers,
@@ -552,8 +555,13 @@ class GogDownloadHandler(DBBaseHandler):
                 raise ValueError("GOG downlink redirect had no Location header")
             return cdn_url
 
-        # Handle 200 JSON response
-        resp.raise_for_status()
+        # Not raise_for_status(): httpx puts the whole request URL into the
+        # message, and this one carries access_token= in its query string. That
+        # message is logged and stored on the job row, which the download API
+        # then serves - so an admin reading somebody else's failed job could
+        # read their GOG token out of it.
+        if resp.status_code >= 400:
+            raise ValueError(f"GOG downlink returned HTTP {resp.status_code}")
         try:
             data = resp.json()
         except Exception:
@@ -623,8 +631,27 @@ class GogDownloadHandler(DBBaseHandler):
 
     @begin_session
     async def list_jobs(self, *, session: AsyncSession = None) -> list[DownloadJob]:
+        """Every job ever, newest first. The download tray's history."""
         result = await session.execute(
             select(DownloadJob).order_by(DownloadJob.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    @begin_session
+    async def list_active_jobs(self, *, session: AsyncSession = None) -> list[DownloadJob]:
+        """Only the jobs that have not finished, newest first.
+
+        The dashboard's live panel asks for this every one and a half seconds
+        while an admin has the tab open. It used to call `list_jobs` and drop
+        all but the two or three live rows in Python, so every historical row
+        was fetched and hydrated into an ORM object, sorted, and thrown away -
+        and nothing ever prunes finished rows, so that cost grew for the life
+        of the install, one row per GOG file ever downloaded.
+        """
+        result = await session.execute(
+            select(DownloadJob)
+            .where(DownloadJob.status.in_(PENDING_STATES))
+            .order_by(DownloadJob.created_at.desc())
         )
         return list(result.scalars().all())
 
@@ -827,7 +854,7 @@ class GogDownloadHandler(DBBaseHandler):
 
             # ── Step 4: Stream to disk ────────────────────────────────────────
             token   = await gog_auth_handler.get_access_token(user_id=_owner_user_id)
-            headers = {**_HDRS}
+            headers = {**GOG_GALAXY_HEADERS}
             if token:
                 headers["Authorization"] = f"Bearer {token}"
 
@@ -949,6 +976,13 @@ class GogDownloadHandler(DBBaseHandler):
             # ── Step 5: Verify checksum (optional) ───────────────────────────
             # MD5 was computed incrementally during streaming - zero extra I/O.
             # Fallback to file-size check when GOG didn't supply an MD5.
+            #
+            # A mismatch used to only write a log line. The job had already been
+            # marked completed a few lines above, so a corrupt installer flipped
+            # the game to downloaded, got a LibraryFile marked available, fired
+            # the plugin download_complete event and was packed by zip_packer.
+            # Verification that changes nothing is not verification.
+            corrupt = False
             if verify_checksum:
                 if md5_hasher and expected_md5:
                     # MD5 already computed - just compare
@@ -961,10 +995,22 @@ class GogDownloadHandler(DBBaseHandler):
                     if ok:
                         logger.info("Job %s: MD5 OK (%s)", job_id, actual_md5)
                     else:
+                        corrupt = True
                         logger.warning(
-                            "Job %s: MD5 MISMATCH - expected=%s actual=%s",
+                            "Job %s: MD5 MISMATCH - expected=%s actual=%s - NOT adopted",
                             job_id, expected_md5, actual_md5,
                         )
+                        async with async_session_factory() as session:
+                            async with session.begin():
+                                await _update(
+                                    session,
+                                    status="failed",
+                                    error_msg=(
+                                        f"Checksum mismatch: the file that arrived is not the "
+                                        f"one GOG describes (expected {expected_md5}, "
+                                        f"got {actual_md5}). Download it again."
+                                    )[:1024],
+                                )
                 else:
                     # No MD5 from GOG - fallback: compare file size on disk vs CDN size
                     if total_size:
@@ -978,10 +1024,24 @@ class GogDownloadHandler(DBBaseHandler):
                             if size_ok:
                                 logger.info("Job %s: size OK (%d bytes)", job_id, actual_size)
                             else:
+                                # Without an MD5 this is the only check there is,
+                                # and a file that is not the length GOG says it
+                                # is has not arrived whole.
+                                corrupt = True
                                 logger.warning(
-                                    "Job %s: size MISMATCH - expected=%d actual=%d",
+                                    "Job %s: size MISMATCH - expected=%d actual=%d - NOT adopted",
                                     job_id, total_size, actual_size,
                                 )
+                                async with async_session_factory() as session:
+                                    async with session.begin():
+                                        await _update(
+                                            session,
+                                            status="failed",
+                                            error_msg=(
+                                                f"Incomplete download: expected {total_size} bytes, "
+                                                f"got {actual_size}. Download it again."
+                                            )[:1024],
+                                        )
                         except Exception as exc:
                             logger.warning("Job %s: size check error: %s", job_id, exc)
                             async with async_session_factory() as session:
@@ -1031,9 +1091,13 @@ class GogDownloadHandler(DBBaseHandler):
             except Exception:
                 logger.exception("ClamAV scan of GOG download %s failed; leaving file in place", job_id)
 
-            # Mark game downloaded and sync file into library (best-effort, non-blocking)
-            if not infected:
-                asyncio.create_task(_on_file_downloaded(job_id))
+            # Mark game downloaded and sync file into library (best-effort,
+            # non-blocking). A file that failed its checksum is as unwelcome
+            # here as an infected one: adopting it publishes a broken installer
+            # as a finished game, and the plugin download_complete event that
+            # goes with it says the same thing to everything listening.
+            if not infected and not corrupt:
+                fire_task(_on_file_downloaded(job_id))
 
         except asyncio.CancelledError:
             # Don't overwrite "paused" status set by pause_job()
@@ -1050,13 +1114,18 @@ class GogDownloadHandler(DBBaseHandler):
             logger.info("Download job %s cancelled/paused", job_id)
 
         except Exception as exc:
-            logger.exception("Download job %s failed: %s", job_id, exc)
+            # Both of these used to carry str(exc) straight through, and an
+            # httpx error's message is the whole request URL - which on this
+            # path has the GOG access token in it. error_msg is served by the
+            # download API, so the leak reached anybody who could read a job.
+            safe = loggable_error(exc)
+            logger.warning("Download job %s failed: %s", job_id, safe)
             async with async_session_factory() as session:
                 async with session.begin():
                     await _update(
                         session,
                         status="failed",
-                        error_msg=str(exc)[:1024],
+                        error_msg=safe[:1024],
                         speed_bps=0,
                         finished_at=datetime.now(timezone.utc),
                     )

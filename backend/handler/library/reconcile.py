@@ -109,13 +109,20 @@ async def reconcile_library_state() -> dict:
     # Hold back only the areas that look absent, and only those - a game
     # packaged into a single archive drops several files on purpose, and that
     # must still reconcile.
+    # Both sets are built once. They used to be rebuilt inside the loops -
+    # `set(vanished)` per file and `set(ids)` per element - which is quadratic
+    # exactly in the case this code exists to detect: a second disk unmounted,
+    # with the games root still present so the guard above lets it through. At
+    # twenty thousand rows that was hundreds of millions of set insertions on
+    # the event loop, at startup.
+    vanished_ids = set(vanished)
     per_group: dict[str, list[int]] = {}
     live_groups: set[str] = set()
     for f in files:
         if not f.file_path or not f.is_available:
             continue
         group = _storage_group(f.file_path)
-        if f.id in set(vanished):
+        if f.id in vanished_ids:
             per_group.setdefault(group, []).append(f.id)
         else:
             live_groups.add(group)
@@ -123,7 +130,8 @@ async def reconcile_library_state() -> dict:
     held_back = 0
     for group, ids in per_group.items():
         if _group_looks_unmounted(group, all_missing=group not in live_groups):
-            vanished = [fid for fid in vanished if fid not in set(ids)]
+            held = set(ids)
+            vanished = [fid for fid in vanished if fid not in held]
             held_back += len(ids)
             summary["skipped"] = f"storage area '{group}' is not there"
             logger.error(

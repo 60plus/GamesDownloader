@@ -19,8 +19,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from decorators.database import begin_session
+from handler.gog_web import GOG_GALAXY_HEADERS, gog_image_url
 from handler.database.base_handler import DBBaseHandler
 from handler.gog.gog_sync_handler import canonical_gog_stmt
+from utils.apicalypse import sanitize_search
+from handler.metadata.igdb_auth import igdb_headers
 from models.gog_game import GogGame
 
 logger = logging.getLogger(__name__)
@@ -34,22 +37,6 @@ logger = logging.getLogger(__name__)
 _GOG_V1 = "https://api.gog.com/products/{gog_id}?expand=description,screenshots,videos,downloads"
 _GOG_V2 = "https://api.gog.com/v2/games/{gog_id}"
 _IMG_BASE = "https://images.gog-statics.com/"
-_HDRS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GOGGalaxy/2.0",
-    "Accept": "application/json",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-
-def _abs_url(url: str) -> str:
-    """Normalise protocol-relative or root-relative GOG image URLs."""
-    if not url:
-        return ""
-    if url.startswith("//"):
-        return "https:" + url
-    if url.startswith("/"):
-        return "https://images.gog.com" + url
-    return url
 
 
 def _img_url(image_id: str) -> str:
@@ -57,7 +44,7 @@ def _img_url(image_id: str) -> str:
     if not image_id:
         return ""
     if image_id.startswith("http") or image_id.startswith("//"):
-        return _abs_url(image_id)
+        return gog_image_url(image_id)
     return f"{_IMG_BASE}{image_id}.jpg"
 
 
@@ -216,13 +203,13 @@ class GogScrapeHandler(DBBaseHandler):
     # ── Internal fetchers ─────────────────────────────────────────────────────
 
     async def _fetch_v1(self, gog_id: int) -> dict:
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=15) as client:
+        async with httpx.AsyncClient(headers=GOG_GALAXY_HEADERS, follow_redirects=True, timeout=15) as client:
             resp = await client.get(_GOG_V1.format(gog_id=gog_id))
             resp.raise_for_status()
             return resp.json()
 
     async def _fetch_v2(self, gog_id: int) -> dict:
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=15) as client:
+        async with httpx.AsyncClient(headers=GOG_GALAXY_HEADERS, follow_redirects=True, timeout=15) as client:
             resp = await client.get(_GOG_V2.format(gog_id=gog_id))
             resp.raise_for_status()
             return resp.json()
@@ -279,12 +266,12 @@ class GogScrapeHandler(DBBaseHandler):
             or images.get("sidebarGraphicLo")
         )
         if bg and (overwrite or not game.background_url):
-            game.background_url = _abs_url(str(bg))
+            game.background_url = gog_image_url(str(bg))
 
         # ── Icon (v1) ─────────────────────────────────────────────────────────
         icon = images.get("icon") or images.get("logo2x") or images.get("logo")
         if icon and (overwrite or not game.icon_url):
-            game.icon_url = _abs_url(str(icon))
+            game.icon_url = gog_image_url(str(icon))
 
         # ── Screenshots (v1) ──────────────────────────────────────────────────
         ss_raw = v1.get("screenshots") or []
@@ -417,59 +404,11 @@ class GogScrapeHandler(DBBaseHandler):
         #   B) Dict with requirement_groups list (each group: {type, requirements:[{name,description}]})
         #   C) Dict with systems list (per-OS)
         #   D) Top-level list of OS objects (wrapped as per_os)
-        raw_reqs = v1.get("system_requirements")
-        if raw_reqs and (overwrite or not game.requirements):
-            if isinstance(raw_reqs, dict):
-                reqs: dict = {}
-                min_req = raw_reqs.get("minimum_system_requirements")
-                rec_req = raw_reqs.get("recommended_system_requirements")
-                if isinstance(min_req, dict) and min_req:
-                    reqs["minimum"] = min_req
-                if isinstance(rec_req, dict) and rec_req:
-                    reqs["recommended"] = rec_req
-                if "requirement_groups" in raw_reqs:
-                    reqs["per_os"] = raw_reqs["requirement_groups"]
-                elif isinstance(raw_reqs.get("systems"), list):
-                    reqs["per_os"] = raw_reqs["systems"]
-                if reqs:
-                    game.requirements = reqs
-            elif isinstance(raw_reqs, list) and raw_reqs:
-                # Format D: list of OS or requirement objects.
-                # Several known sub-formats from different GOG API versions:
-                #
-                #  D1 - [{type:'minimum'|'recommended', requirements:[{name,description}]}]
-                #       Entries have explicit type field.
-                #
-                #  D2 - [{description:'product_system_requirement_...', requirements:[{id,name,description}]}]
-                #       GOG native expand format; no type field, uses description key.
-                #       items[].requirements use id as the key (system/processor/memory/graphics)
-                #
-                #  D3 - [{type:'windows', requirement_groups:[...]}]
-                #       Per-OS container format.
-                first = raw_reqs[0] if raw_reqs else {}
-                first_type = first.get("type", "").lower()
-
-                if first_type in ("minimum", "recommended"):
-                    # D1 - wrap in a windows container so frontend finds it
-                    game.requirements = {"per_os": [{"type": "windows", "requirement_groups": raw_reqs}]}
-
-                elif isinstance(first.get("requirements"), list):
-                    # D2 - GOG native format: [{description:str, requirements:[{id,name,description}]}]
-                    # Flatten all items' requirements into a single "minimum" dict.
-                    # GOG typically returns a single requirements block without min/rec split.
-                    reqs_flat: dict = {}
-                    for item in raw_reqs:
-                        for r in (item.get("requirements") or []):
-                            key = r.get("id") or (r.get("name") or "").lower().rstrip(": ").replace(" ", "_")
-                            val = r.get("description") or ""
-                            if key and val:
-                                reqs_flat[key] = val
-                    if reqs_flat:
-                        game.requirements = {"minimum": reqs_flat}
-
-                else:
-                    # D3 - per-OS containers (type='windows'/'mac'/'linux')
-                    game.requirements = {"per_os": raw_reqs}
+        # No system requirements here: v1 does not carry them any more (asking
+        # makes GOG refuse the whole call). They exist in v2, under
+        # _embedded.supportedOperatingSystems[].systemRequirements, which
+        # nothing reads yet. What a game shows today comes from RAWG or Steam
+        # through the metadata editor.
 
         # ── Genres / tags / developer / publisher (v2 is more structured) ─────
         embedded = v2.get("_embedded") or {}
@@ -535,7 +474,7 @@ class GogScrapeHandler(DBBaseHandler):
             cover_v1 = (images_v1.get("coverLarge") or images_v1.get("cover")
                         or images_v1.get("logo2x") or images_v1.get("logo") or "")
             if cover_v1:
-                game.cover_url = _abs_url(str(cover_v1))
+                game.cover_url = gog_image_url(str(cover_v1))
 
 
     async def _apply_steam_fallback(self, game: GogGame) -> None:
@@ -677,7 +616,7 @@ class GogScrapeHandler(DBBaseHandler):
         igdb_rating: float | None = None
         title = game.title or ""
 
-        async with httpx.AsyncClient(headers=_HDRS, follow_redirects=True, timeout=10) as c:
+        async with httpx.AsyncClient(headers=GOG_GALAXY_HEADERS, follow_redirects=True, timeout=10) as c:
             # ── RAWG ──────────────────────────────────────────────────────────
             if rawg_key:
                 try:
@@ -717,34 +656,22 @@ class GogScrapeHandler(DBBaseHandler):
             # ── IGDB ──────────────────────────────────────────────────────────
             if igdb_client_id and igdb_client_sec:
                 try:
-                    tr = await c.post(
-                        "https://id.twitch.tv/oauth2/token",
-                        params={
-                            "client_id":     igdb_client_id,
-                            "client_secret": igdb_client_sec,
-                            "grant_type":    "client_credentials",
-                        },
-                    )
-                    if tr.status_code == 200:
-                        token = tr.json().get("access_token", "")
-                        if token:
-                            gr = await c.post(
-                                "https://api.igdb.com/v4/games",
-                                headers={
-                                    "Client-ID":     igdb_client_id,
-                                    "Authorization": f"Bearer {token}",
-                                },
-                                content=(
-                                    f'fields total_rating,aggregated_rating;'
-                                    f' search "{title}"; limit 3;'
-                                ),
-                            )
-                            if gr.status_code == 200 and gr.json():
-                                ig = gr.json()[0]
-                                r_val = ig.get("total_rating") or ig.get("aggregated_rating")
-                                if r_val:
-                                    igdb_rating = float(r_val)
-                                    logger.debug("IGDB rating for '%s': %.2f", title, igdb_rating)
+                    hdrs = await igdb_headers(igdb_client_id, igdb_client_sec)
+                    if hdrs:
+                        gr = await c.post(
+                            "https://api.igdb.com/v4/games",
+                            headers=hdrs,
+                            content=(
+                                f'fields total_rating,aggregated_rating;'
+                                f' search "{sanitize_search(title)}"; limit 3;'
+                            ),
+                        )
+                        if gr.status_code == 200 and gr.json():
+                            ig = gr.json()[0]
+                            r_val = ig.get("total_rating") or ig.get("aggregated_rating")
+                            if r_val:
+                                igdb_rating = float(r_val)
+                                logger.debug("IGDB rating for '%s': %.2f", title, igdb_rating)
                 except Exception as exc:
                     logger.debug("IGDB rating fetch skipped for '%s': %s", title, exc)
 
