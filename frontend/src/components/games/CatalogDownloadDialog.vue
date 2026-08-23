@@ -146,6 +146,8 @@
 import { ref, computed, watch } from 'vue'
 import { useI18n } from '@/i18n'
 import client from '@/services/api/client'
+import { formatBytes } from '@/utils/format'
+const fmtSize = (b: number | null | undefined) => formatBytes(b, '-')
 
 const { t } = useI18n()
 
@@ -288,13 +290,6 @@ async function start() {
   }
 }
 
-function fmtSize(bytes?: number | null): string {
-  if (!bytes) return '-'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let v = bytes, u = 0
-  while (v >= 1024 && u < units.length - 1) { v /= 1024; u++ }
-  return `${v.toFixed(u > 0 ? 1 : 0)} ${units[u]}`
-}
 </script>
 
 <style scoped>

@@ -12,10 +12,10 @@
                 <polyline points="7 10 12 15 17 10"/>
                 <line x1="12" y1="15" x2="12" y2="3"/>
               </svg>
-              <span class="dl-title">Download</span>
+              <span class="dl-title">{{ t('common.download') }}</span>
             </div>
             <div class="dl-game-name">{{ gameTitle }}</div>
-            <button class="dl-close" @click="$emit('update:modelValue', false)" title="Close">
+            <button class="dl-close" @click="$emit('update:modelValue', false)" :title="t('common.close')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
               </svg>
@@ -27,7 +27,7 @@
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="dl-spin">
               <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
             </svg>
-            <span>Loading download options…</span>
+            <span>{{ t('gogdl.loading') }}</span>
           </div>
 
           <!-- ── Load error state ────────────────────────────────────────────── -->
@@ -36,12 +36,12 @@
               <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
             {{ loadError }}
-            <button class="dl-retry" @click="fetchOptions">Retry</button>
+            <button class="dl-retry" @click="fetchOptions">{{ t('common.retry') }}</button>
           </div>
 
           <!-- ── No options ──────────────────────────────────────────────────── -->
           <div v-else-if="!options || (!options.installers.length && !options.bonus_content.length)" class="dl-error">
-            No download options found for this game. Make sure your GOG account is connected.
+            {{ t('gogdl.none') }}
           </div>
 
           <!-- ── Options ────────────────────────────────────────────────────── -->
@@ -51,8 +51,8 @@
               <!-- ── OS selector ─────────────────────────────────────────────── -->
               <div class="dl-section">
                 <div class="dl-section-head">
-                  <span class="dl-section-label">Platform</span>
-                  <span class="dl-section-hint">Choose which operating system to download for</span>
+                  <span class="dl-section-label">{{ t('gogdl.platform') }}</span>
+                  <span class="dl-section-hint">{{ t('gogdl.platform_hint') }}</span>
                 </div>
                 <div class="dl-os-chips">
                   <button
@@ -80,8 +80,8 @@
               <!-- ── Language selector ───────────────────────────────────────── -->
               <div v-if="availableLanguages.length > 1" class="dl-section">
                 <div class="dl-section-head">
-                  <span class="dl-section-label">Language</span>
-                  <span class="dl-section-hint">Select the installer language (affects in-game text and voice)</span>
+                  <span class="dl-section-label">{{ t('gogdl.language') }}</span>
+                  <span class="dl-section-hint">{{ t('gogdl.language_hint') }}</span>
                 </div>
                 <div class="dl-lang-chips">
                   <button
@@ -99,8 +99,8 @@
               <!-- ── Installer files ─────────────────────────────────────────── -->
               <div v-if="filteredInstallers.length" class="dl-section">
                 <div class="dl-section-head">
-                  <span class="dl-section-label">Installer Files</span>
-                  <span class="dl-section-hint">Select which installer parts to download (multi-part games may have more than one)</span>
+                  <span class="dl-section-label">{{ t('gogdl.installers') }}</span>
+                  <span class="dl-section-hint">{{ t('gogdl.installers_hint') }}</span>
                 </div>
                 <div class="dl-file-list">
                   <label
@@ -127,8 +127,8 @@
               <!-- ── Bonus/Extras ─────────────────────────────────────────────── -->
               <div v-if="options.bonus_content.length" class="dl-section">
                 <div class="dl-section-head">
-                  <span class="dl-section-label">Bonus Content</span>
-                  <span class="dl-section-hint">Extras included with the game - soundtracks, artbooks, wallpapers, etc.</span>
+                  <span class="dl-section-label">{{ t('gogdl.bonus') }}</span>
+                  <span class="dl-section-hint">{{ t('gogdl.bonus_hint') }}</span>
                 </div>
                 <div class="dl-file-list">
                   <label
@@ -157,8 +157,8 @@
               <!-- ── Parallel downloads ──────────────────────────────────────── -->
               <div class="dl-section">
                 <div class="dl-section-head">
-                  <span class="dl-section-label">Simultaneous Downloads</span>
-                  <span class="dl-section-hint">How many files to download at once</span>
+                  <span class="dl-section-label">{{ t('gogdl.parallel') }}</span>
+                  <span class="dl-section-hint">{{ t('gogdl.parallel_hint') }}</span>
                 </div>
                 <div class="dl-parallel-row">
                   <button
@@ -181,8 +181,8 @@
                     <div class="dl-verify-knob" />
                   </div>
                   <div class="dl-verify-text">
-                    <span class="dl-verify-label">Verify after download</span>
-                    <span class="dl-verify-hint">Compare MD5 checksum with GOG data - detects corrupted files</span>
+                    <span class="dl-verify-label">{{ t('gogdl.verify') }}</span>
+                    <span class="dl-verify-hint">{{ t('gogdl.verify_hint') }}</span>
                   </div>
                 </label>
               </div>
@@ -194,8 +194,8 @@
                     <div class="dl-verify-knob" />
                   </div>
                   <div class="dl-verify-text">
-                    <span class="dl-verify-label">Add to Games Library</span>
-                    <span class="dl-verify-hint">Publish this game to the Games Library so other users can download it</span>
+                    <span class="dl-verify-label">{{ t('gogdl.add_library') }}</span>
+                    <span class="dl-verify-hint">{{ t('gogdl.add_library_hint') }}</span>
                   </div>
                 </label>
               </div>
@@ -203,8 +203,8 @@
               <!-- ── Download path ────────────────────────────────────────────── -->
               <div class="dl-section dl-section--path">
                 <div class="dl-section-head">
-                  <span class="dl-section-label">Save Location</span>
-                  <span class="dl-section-hint">Files will be saved to these directories on the server</span>
+                  <span class="dl-section-label">{{ t('gogdl.save_location') }}</span>
+                  <span class="dl-section-hint">{{ t('gogdl.save_location_hint') }}</span>
                 </div>
                 <div v-for="p in pathPreviews" :key="p" class="dl-path-row">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:.5;flex-shrink:0">
@@ -216,9 +216,11 @@
 
               <!-- ── Summary row ──────────────────────────────────────────────── -->
               <div v-if="selectedCount > 0" class="dl-summary">
-                <span>{{ selectedCount }} file{{ selectedCount !== 1 ? 's' : '' }} selected</span>
+                <span>{{ selectedCount === 1
+                  ? t('gogdl.selected_files', { count: selectedCount })
+                  : t('gogdl.selected_files_plural', { count: selectedCount }) }}</span>
                 <span class="dl-summary-dot">·</span>
-                <span>{{ formatBytes(selectedTotalSize) }} total</span>
+                <span>{{ t('gogdl.total', { size: formatBytes(selectedTotalSize) }) }}</span>
               </div>
 
             </div><!-- /dl-body -->
@@ -229,12 +231,12 @@
                 <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
               </svg>
               <div class="dl-queue-error-text">{{ queueError }}</div>
-              <button class="dl-queue-error-close" @click="queueError = ''" title="Dismiss">×</button>
+              <button class="dl-queue-error-close" @click="queueError = ''" :title="t('downloads.dismiss')">×</button>
             </div>
 
             <!-- ── Footer ─────────────────────────────────────────────────────── -->
             <div class="dl-footer">
-              <button class="dl-btn-cancel" @click="$emit('update:modelValue', false)">Cancel</button>
+              <button class="dl-btn-cancel" @click="$emit('update:modelValue', false)">{{ t('common.cancel') }}</button>
               <button
                 class="dl-btn-start"
                 :disabled="selectedCount === 0 || starting"
@@ -248,7 +250,7 @@
                 <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="dl-spin">
                   <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
                 </svg>
-                {{ starting ? 'Starting…' : `Download${selectedCount > 1 ? ` (${selectedCount})` : ''}` }}
+                {{ starting ? t('gogdl.starting') : `${t('common.download')}${selectedCount > 1 ? ` (${selectedCount})` : ''}` }}
               </button>
             </div>
 
@@ -263,6 +265,11 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import client from '@/services/api/client'
+import { useI18n } from '@/i18n'
+import { formatBytes as _formatBytes } from '@/utils/format'
+const formatBytes = (b: number | null | undefined): string => _formatBytes(b, '-')
+
+const { t } = useI18n()
 
 // ── Props / emits ──────────────────────────────────────────────────────────
 
@@ -361,16 +368,9 @@ const sanitizedTitle = computed(() =>
     .replace(/[. ]+$/, '')
 )
 
-const parallelHint = computed(() => {
-  const hints: Record<number, string> = {
-    1: 'One file at a time - safest, lowest bandwidth impact',
-    2: 'Two files in parallel - good balance for most connections',
-    3: 'Three files in parallel - faster on high-speed connections',
-    4: 'Four simultaneous downloads',
-    5: 'Five simultaneous downloads - maximum speed',
-  }
-  return hints[parallelCount.value] ?? ''
-})
+// gogdl.parallel_1 through gogdl.parallel_5 are reached by building the key,
+// so a search for the literal names finds nothing. They are in use.
+const parallelHint = computed(() => t(`gogdl.parallel_${parallelCount.value}`, ''))
 
 const pathPreviews = computed<string[]>(() => {
   const base = `/data/games/GOG/${sanitizedTitle.value}`
@@ -427,7 +427,7 @@ async function fetchOptions() {
     autoSelectLanguage()
     autoSelectInstallers()
   } catch (e: any) {
-    loadError.value = errMsg(e) || 'Failed to load download options'
+    loadError.value = errMsg(e) || t('gogdl.load_failed')
   } finally {
     loading.value = false
   }
@@ -475,7 +475,7 @@ function toggleBonus(id: string) {
 /** Convert any axios/fetch error to a human-readable string. */
 function errMsg(e: any): string {
   const detail = e?.response?.data?.detail
-  if (!detail) return e?.message || 'Unknown error'
+  if (!detail) return e?.message || t('common.unknown_error')
   // FastAPI 422 returns detail as array of {loc, msg, type} objects
   if (Array.isArray(detail)) {
     return detail.map((d: any) => {
@@ -595,14 +595,6 @@ function fileNameFromDownlink(downlink: string, fallbackId: string): string {
   return fallbackId   // GOG internal ID - will be replaced by backend after CDN resolve
 }
 
-function formatBytes(bytes: number): string {
-  if (!bytes) return '-'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let v = bytes
-  let u = 0
-  while (v >= 1024 && u < units.length - 1) { v /= 1024; u++ }
-  return `${v.toFixed(u > 0 ? 1 : 0)} ${units[u]}`
-}
 
 function osDisplayName(os: string): string {
   return { windows: 'Windows', mac: 'macOS', linux: 'Linux' }[os] ?? os

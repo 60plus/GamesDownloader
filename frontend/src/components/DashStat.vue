@@ -15,7 +15,6 @@ import { ref, watch, onUnmounted } from "vue";
 const props = defineProps<{
   value: number;
   format?: (n: number) => string;
-  duration?: number;
 }>();
 
 const display = ref("");
@@ -40,7 +39,7 @@ function animate(to: number): void {
     display.value = fmt(to);
     return;
   }
-  const dur = props.duration ?? 900;
+  const dur = 900;
   const t0 = performance.now();
   const step = (now: number): void => {
     const p = Math.min(1, (now - t0) / dur);

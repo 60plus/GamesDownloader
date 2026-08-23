@@ -63,7 +63,7 @@
           <div class="pv-section-title">{{ t('profile.avatar') }}</div>
           <div class="pv-avatar-row">
             <div class="pv-avatar-wrap" @click="triggerAvatarUpload" :title="t('profile.click_change_avatar')">
-              <img v-if="avatarUrl" :src="avatarUrl" class="pv-avatar" alt="Avatar" @error="avatarUrl = ''" />
+              <img v-if="avatarUrl" :src="avatarUrl" class="pv-avatar" :alt="t('profile.avatar')" @error="avatarUrl = ''" />
               <div v-else class="pv-avatar-placeholder">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:.4">
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
@@ -75,7 +75,7 @@
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
                   <circle cx="12" cy="13" r="4"/>
                 </svg>
-                <span>Change</span>
+                <span>{{ t('common.change') }}</span>
               </div>
               <div v-if="avatarUploading" class="pv-avatar-uploading">
                 <span class="spinner" />
@@ -90,8 +90,8 @@
             />
             <div class="pv-avatar-info">
               <div class="pv-avatar-name">{{ user?.username || '-' }}</div>
-              <div class="pv-avatar-sub">{{ user?.email || 'No email set' }}</div>
-              <div class="pv-avatar-hint">PNG, JPG, GIF, WEBP · max 5 MB</div>
+              <div class="pv-avatar-sub">{{ user?.email || t('profile.no_email') }}</div>
+              <div class="pv-avatar-hint">{{ t('profile.avatar_formats') }}</div>
             </div>
           </div>
           <div v-if="avatarMsg" class="pv-msg" :class="avatarOk ? 'pv-msg--ok' : 'pv-msg--err'">{{ avatarMsg }}</div>
@@ -113,7 +113,7 @@
               <span class="pv-detail-label">{{ t('profile.role') }}</span>
               <span class="pv-detail-value">
                 <span class="pv-role-badge" :class="`pv-role--${(user?.role || 'viewer').toLowerCase()}`">
-                  {{ user?.role || 'Viewer' }}
+                  {{ user?.role ? t('users.role_' + user.role, user.role) : t('users.role_user') }}
                 </span>
               </span>
             </div>
@@ -161,7 +161,7 @@
                   v-if="gogStatus.avatar_url"
                   :src="gogStatus.avatar_url"
                   class="sg-avatar"
-                  alt="GOG avatar"
+                  :alt="t('gog.avatar')"
                   @error="gogStatus!.avatar_url = ''"
                 />
                 <div v-else class="sg-avatar-placeholder">
@@ -344,7 +344,7 @@
                   :type="showNew ? 'text' : 'password'"
                   class="pv-input"
                   :class="{ 'pv-input--error': pwError }"
-                  :placeholder="t('profile.min_8_chars')"
+                  :placeholder="t('auth.password_hint')"
                   autocomplete="new-password"
                 />
                 <button type="button" class="pv-eye" @click="showNew = !showNew" tabindex="-1">
@@ -377,14 +377,14 @@
             <div class="pv-form-actions">
               <button
                 type="submit"
-                class="pv-save-btn"
+                class="pv-save-btn btn-save-action"
                 :disabled="!pwForm.current || !pwForm.newPw || !pwForm.confirm || pwSaving"
               >
                 <span v-if="pwSaving" class="spinner spinner--sm" />
                 <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <polyline points="20 6 9 17 4 12"/>
                 </svg>
-                {{ pwSaving ? 'Saving…' : 'Update Password' }}
+                {{ pwSaving ? t('common.saving') : t('profile.change_password') }}
               </button>
             </div>
           </form>
@@ -525,9 +525,14 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
 import { useI18n } from '@/i18n'
+import { useDialog } from '@/composables/useDialog'
+import { isPasswordOk } from '@/utils/password'
 import LanguagePicker from '@/components/common/LanguagePicker.vue'
+import { formatDate as _formatDate } from '@/utils/format'
+const formatDate = (iso: string | null | undefined): string => _formatDate(iso, '-')
 
 const { t } = useI18n()
+const { gdConfirm } = useDialog()
 
 interface UserInfo {
   id: number
@@ -777,13 +782,6 @@ const favoriteGenre = computed<string | null>(() => {
   return top ? top[0] : null
 })
 
-function formatDate(iso?: string): string {
-  if (!iso) return '-'
-  try {
-    const loc = localStorage.getItem('gd3_locale') || navigator.language || 'en'
-    return new Date(iso).toLocaleDateString(loc, { dateStyle: 'long' })
-  } catch { return iso }
-}
 
 function formatExpiry(iso?: string): string {
   if (!iso) return '-'
@@ -835,12 +833,12 @@ async function uploadAvatar(event: Event) {
     // Use static path from response (no auth required for /resources/...)
     avatarUrl.value = (respData.avatar_url || '') + `?t=${Date.now()}`
     avatarOk.value  = true
-    avatarMsg.value = 'Profile picture updated.'
+    avatarMsg.value = t('profile.picture_updated')
     await authStore.fetchUser()
     setTimeout(() => { avatarMsg.value = '' }, 3000)
   } catch (e: any) {
     avatarOk.value  = false
-    avatarMsg.value = e?.message || 'Failed to upload avatar.'
+    avatarMsg.value = e?.message || t('profile.avatar_upload_failed')
   } finally {
     avatarUploading.value = false
     if (fileInput.value) fileInput.value.value = ''
@@ -896,7 +894,7 @@ async function syncGog() {
 }
 
 async function disconnectGog() {
-  if (!confirm(t('profile.gog_disconnect_confirm'))) return
+  if (!await gdConfirm(t('profile.gog_disconnect_confirm'), { title: t('profile.gog_disconnect'), danger: true })) return
   try {
     await client.delete('/gog/user/auth')
     gogStatus.value = { authenticated: false }
@@ -908,12 +906,12 @@ async function disconnectGog() {
 async function changePassword() {
   pwError.value = ''
   pwMsg.value   = ''
-  if (pwForm.value.newPw.length < 8) {
-    pwError.value = 'New password must be at least 8 characters.'
+  if (!isPasswordOk(pwForm.value.newPw)) {
+    pwError.value = t('auth.password_rule')
     return
   }
   if (pwForm.value.newPw !== pwForm.value.confirm) {
-    pwError.value = 'Passwords do not match.'
+    pwError.value = t('reset.mismatch')
     return
   }
   pwSaving.value = true
@@ -923,12 +921,12 @@ async function changePassword() {
       new_password:     pwForm.value.newPw,
     })
     pwOk.value  = true
-    pwMsg.value = 'Password updated successfully.'
+    pwMsg.value = t('profile.password_updated')
     pwForm.value = { current: '', newPw: '', confirm: '' }
     setTimeout(() => { pwMsg.value = '' }, 3000)
   } catch (e: any) {
     pwOk.value  = false
-    pwMsg.value = e?.response?.data?.detail || 'Failed to update password.'
+    pwMsg.value = e?.response?.data?.detail || t('profile.password_update_failed')
   } finally {
     pwSaving.value = false
   }
@@ -1402,7 +1400,6 @@ async function changePassword() {
   animation: spin .7s linear infinite; display: inline-block;
 }
 .spinner--sm { width: 10px; height: 10px; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Game Saves tab ───────────────────────────────────────────────────────── */
 .pv-saves-loading {

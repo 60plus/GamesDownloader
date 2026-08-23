@@ -37,6 +37,27 @@ export interface ThemeSetting {
   cssVar: string;      // CSS custom property name to set on :root (e.g. '--glass-blur-px')
 }
 
+/**
+ * The card and hero effects the Appearance page offers.
+ *
+ * A theme lists the ones it actually draws. Anything it leaves out is shown
+ * greyed out with a note, instead of offering a switch that quietly does
+ * nothing - which is what happened while the list did not exist: Vapor drew
+ * no highlight at all, yet its users had a Card shine switch.
+ */
+export type ThemeEffect =
+  | "cardTilt" | "cardShine" | "cardZoom" | "cardGlow" | "cardLift"
+  | "heroAnim" | "heroAnimStyle" | "heroBlur" | "heroFade"
+  | "ambient" | "orbMotion"
+  | "classicHero" | "platformPhoto";
+
+/** Every effect there is. A theme that says nothing is taken to draw them all. */
+export const ALL_EFFECTS: ThemeEffect[] = [
+  "cardTilt", "cardShine", "cardZoom", "cardGlow", "cardLift",
+  "heroAnim", "heroAnimStyle", "heroBlur", "heroFade",
+  "ambient", "orbMotion", "classicHero", "platformPhoto",
+];
+
 export interface Theme {
   id: string;
   name: string;
@@ -45,9 +66,13 @@ export interface Theme {
   skins: Skin[];
   defaultSkin: string;
   cssFile: string;     // path to theme CSS (dynamic import)
-  font?: string;       // Google Fonts import URL
+  font?: string;       // stylesheet URL, injected as <link> (see stores/theme.ts)
   previewHtml?: string; // optional inline HTML for ThemeSwitcher preview card (plugin-provided)
   settings?: ThemeSetting[]; // per-theme configurable options applied as CSS vars
+  /** Core effects this theme draws. Omit to mean all of them, which is what
+   *  every theme meant before the field existed - so an older plugin theme
+   *  keeps behaving exactly as it did. */
+  effects?: ThemeEffect[];
 }
 
 // ── Default skins (shared by both default themes) ───────────────────────────
@@ -165,18 +190,6 @@ const GLOW_SETTINGS: ThemeSetting[] = [
     default: true,
     cssVar: "--logo-glow",
   },
-  {
-    key: "uiGlow",
-    label: "ts.uiGlow.label",
-    hint: "ts.uiGlow.hint",
-    description: "ts.uiGlow.desc",
-    type: "range",
-    default: 1,
-    min: 0,
-    max: 2,
-    step: 0.1,
-    cssVar: "--ui-glow-mult",
-  },
 ];
 
 // ── Built-in themes ─────────────────────────────────────────────────────────
@@ -190,7 +203,13 @@ export const BUILTIN_THEMES: Theme[] = [
     skins: NEON_SKINS,
     defaultSkin: "purple",
     cssFile: "gameyfin",
-    font: "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap",
+    font: "/fonts/inter.css",
+    // Everything but the Classic-only hero switch.
+    effects: [
+      "cardTilt", "cardShine", "cardZoom", "cardGlow", "cardLift",
+      "heroAnim", "heroAnimStyle", "heroBlur", "heroFade",
+      "ambient", "orbMotion", "platformPhoto",
+    ],
     settings: [
       {
         key: "glassBlur",
@@ -261,17 +280,15 @@ export const BUILTIN_THEMES: Theme[] = [
     skins: NEON_SKINS,
     defaultSkin: "purple",
     cssFile: "classic",
-    font: "https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&display=swap",
+    font: "/fonts/rajdhani.css",
+    // The library grids are shared with Modern, so the card effects apply.
+    // The detail views are Classic's own and have no configurable hero fade.
+    effects: [
+      "cardTilt", "cardShine", "cardZoom", "cardGlow", "cardLift",
+      "heroAnim", "heroAnimStyle", "heroBlur",
+      "ambient", "orbMotion", "classicHero", "platformPhoto",
+    ],
     settings: [
-      {
-        key: "tabGlow",
-        label: "ts.tabGlow.label",
-        hint: "ts.tabGlow.hint",
-        description: "ts.tabGlow.desc",
-        type: "toggle",
-        default: true,
-        cssVar: "--tab-glow",
-      },
       {
         key: "sidebarWidth",
         label: "ts.sidebarWidth.label",
@@ -284,19 +301,6 @@ export const BUILTIN_THEMES: Theme[] = [
         step: 10,
         unit: "px",
         cssVar: "--sidebar-w",
-      },
-      {
-        key: "logPanelHeight",
-        label: "ts.logPanelHeight.label",
-        hint: "ts.logPanelHeight.hint",
-        description: "ts.logPanelHeight.desc",
-        type: "range",
-        default: 140,
-        min: 60,
-        max: 220,
-        step: 10,
-        unit: "px",
-        cssVar: "--log-h",
       },
       {
         key: "coverHeight",

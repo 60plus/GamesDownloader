@@ -45,7 +45,6 @@
               :style="{ transform: coverTilt, willChange: 'transform' }"
               @mousemove="onCoverMove"
               @mouseleave="onCoverLeave"
-              @mouseenter="onCoverEnter"
             >
               <img
                 v-if="!coverFailed && game.cover_path"
@@ -81,7 +80,7 @@
 
             <!-- Source badge -->
             <div class="source-badge" :class="'source-' + game.source">
-              {{ game.catalog_origin || (game.source === 'gog' ? 'GOG' : 'Custom') }}
+              {{ game.catalog_origin || (game.source === 'gog' ? 'GOG' : t('library.source_custom')) }}
             </div>
 
             <div class="gd-meta-row">
@@ -190,7 +189,7 @@
                 class="gd-btn-torrent"
                 :disabled="heroTorrentBusy"
                 @click="openTorrentPicker"
-                title="Download via torrent"
+                :title="t('detail.download_via_torrent')"
               >
                 <span v-if="heroTorrentBusy" class="gd-spinner" />
                 <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -209,7 +208,7 @@
               </button>
 
               <!-- Refresh Metadata (scrape) -->
-              <button v-if="canEdit" class="gd-btn-ghost" :disabled="scraping" @click="onScrapeClick" title="Fetch metadata from GOG, Steam, RAWG, IGDB">
+              <button v-if="canEdit" class="gd-btn-ghost" :disabled="scraping" @click="onScrapeClick" :title="t('detail.fetch_metadata_hint')">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" :class="{ spin: scraping }">
                   <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
                   <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
@@ -218,7 +217,7 @@
               </button>
 
               <!-- Clear Metadata -->
-              <button v-if="isAdmin" class="gd-btn-danger" :disabled="clearing" @click="onClearMetadataClick" title="Remove all scraped metadata">
+              <button v-if="isAdmin" class="gd-btn-danger" :disabled="clearing" @click="onClearMetadataClick" :title="t('detail.remove_scraped_hint')">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
                   <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
@@ -381,7 +380,7 @@
               </template>
               <template v-if="game.source">
                 <span class="gd-dk">{{ t('detail.source') }}</span>
-                <span class="gd-dv">{{ game.catalog_origin || (game.source === 'gog' ? 'GOG' : 'Custom') }}</span>
+                <span class="gd-dv">{{ game.catalog_origin || (game.source === 'gog' ? 'GOG' : t('library.source_custom')) }}</span>
               </template>
               <template v-if="gameCollections.length">
                 <span class="gd-dk">{{ t('detail.collections') }}</span>
@@ -400,9 +399,13 @@
               </template>
             </div>
 
-            <!-- Minimum Requirements (Windows) -->
+            <!-- Minimum requirements, headed by the operating system they
+                 describe - the same mark the GOG view puts on its cards. -->
             <template v-if="reqRows.length">
-              <div class="gd-section-label" style="margin-top:28px">{{ t('detail.min_requirements') }}</div>
+              <div class="gd-section-label gd-section-label--os" style="margin-top:28px">
+                <OsIcon v-if="reqOs" :os="reqOs" />
+                {{ t('detail.min_requirements') }}
+              </div>
               <div class="gd-dlist">
                 <template v-for="[k, v] in reqRows" :key="k">
                   <span class="gd-dk">{{ formatReqKey(k) }}</span>
@@ -419,7 +422,7 @@
         <section v-if="isAdmin" class="gd-section gd-admin-section">
           <h2 class="gd-section-title">
             {{ t('detail.file_management') }}
-            <span class="admin-badge">Admin</span>
+            <span class="admin-badge">{{ t('detail.admin_badge') }}</span>
           </h2>
           <div class="admin-files-list">
             <div v-for="f in game.files" :key="f.id" class="admin-file-row">
@@ -627,8 +630,14 @@ import { resolveDetailRows } from '@/themes/index'
 import { sanitizeHtml } from '@/utils/sanitize'
 import HeroBackground from '@/components/common/HeroBackground.vue'
 import { useDialog } from '@/composables/useDialog'
+import { useCoverTilt } from '@/composables/useCoverTilt'
+const { coverTilt, sheenStyle, onCoverMove, onCoverLeave } = useCoverTilt()
 import { buildLanguageList } from '@/utils/langMap'
 import { ratingVal } from '@/utils/rating'
+import { formatReqKey, reqOs as reqOsFrom, reqRows as reqRowsFrom } from '@/utils/requirements'
+import OsIcon from '@/components/common/OsIcon.vue'
+import { formatBytes, formatDate } from '@/utils/format'
+const formatSize = (b: number | null | undefined) => formatBytes(b, '-')
 import { useI18n } from '@/i18n'
 
 interface LibFile {
@@ -913,42 +922,8 @@ const carouselSlides = computed(() => {
 const hasMedia = computed(() => carouselSlides.value.length > 0)
 
 // ── Requirements (Windows Minimum only) ───────────────────────────────────────
-const REQ_SHOW = new Set(['processor', 'cpu', 'memory', 'ram', 'graphics', 'gpu', 'video', 'os', 'storage', 'directx'])
-
-function formatReqKey(k: string): string {
-  const key = k.toLowerCase()
-  if (['processor', 'cpu'].includes(key))          return 'CPU'
-  if (['memory', 'ram'].includes(key))             return 'RAM'
-  if (['graphics', 'gpu', 'video'].includes(key))  return 'GPU'
-  if (key === 'os')                                return 'OS'
-  if (key === 'storage')                           return 'Storage'
-  if (key === 'directx')                           return 'DirectX'
-  return k
-}
-
-const reqRows = computed((): [string, string][] => {
-  const reqs = game.value?.requirements
-  if (!reqs) return []
-  // Try Windows first, then fallback to first available OS
-  let minimum: any =
-    reqs.minimum ??
-    reqs.Windows?.minimum ??
-    reqs.windows?.minimum ??
-    (reqs.per_os as any[] | undefined)?.find((o: any) => (o.os || '').toLowerCase().includes('win'))?.minimum ??
-    (Object.values(reqs)[0] as any)?.minimum ?? null
-  if (!minimum) return []
-  if (Array.isArray(minimum)) {
-    return minimum
-      .filter((r: any) => REQ_SHOW.has((r.name || r.id || '').toLowerCase()) && (r.description || r.value))
-      .map((r: any) => [r.name || r.id, r.description || r.value] as [string, string])
-  }
-  if (typeof minimum === 'object') {
-    return Object.entries(minimum)
-      .filter(([k, v]) => REQ_SHOW.has(k.toLowerCase()) && v)
-      .map(([k, v]) => [k, String(v)] as [string, string])
-  }
-  return []
-})
+const reqRows = computed((): [string, string][] => reqRowsFrom(game.value?.requirements))
+const reqOs = computed(() => reqOsFrom(game.value?.requirements))
 
 function slideTo(idx: number) {
   const max = Math.max(0, carouselSlides.value.length - 3)
@@ -1042,30 +1017,7 @@ async function fetchPluginRatings(title: string) {
 
 // ── 3D tilt effect ─────────────────────────────────────────────────────────────
 
-const coverTilt  = ref('perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)')
-const sheenStyle = ref('')
 
-function onCoverEnter() {
-  // tilt becomes active on first mousemove
-}
-function onCoverMove(e: MouseEvent) {
-  const el = e.currentTarget as HTMLElement
-  const rect = el.getBoundingClientRect()
-  const cx = rect.width / 2
-  const cy = rect.height / 2
-  const dx = e.clientX - rect.left - cx
-  const dy = e.clientY - rect.top - cy
-  const rotY =  (dx / cx) * 10
-  const rotX = -(dy / cy) * 7
-  coverTilt.value = `perspective(800px) rotateX(${rotX}deg) rotateY(${rotY}deg) scale3d(1.03,1.03,1.03)`
-  const mx = ((e.clientX - rect.left) / rect.width  * 100).toFixed(1)
-  const my = ((e.clientY - rect.top)  / rect.height * 100).toFixed(1)
-  sheenStyle.value = `opacity:1; background: radial-gradient(ellipse at ${mx}% ${my}%, rgba(255,255,255,0.22) 0%, transparent 65%);`
-}
-function onCoverLeave() {
-  coverTilt.value  = 'perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)'
-  sheenStyle.value = 'opacity:0;'
-}
 
 // ── Scrape metadata ────────────────────────────────────────────────────────────
 
@@ -1086,7 +1038,7 @@ async function onScrapeClick() {
     )
     await fetchGame()
   } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Scrape failed')
+    await gdAlert(e?.response?.data?.detail || t('common.scrape_failed'))
   } finally {
     scraping.value = false
   }
@@ -1100,7 +1052,7 @@ async function onClearMetadataClick() {
     await client.post(`/library/games/${game.value.id}/clear-metadata`)
     await fetchGame()
   } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Clear failed')
+    await gdAlert(e?.response?.data?.detail || t('common.clear_failed'))
   } finally {
     clearing.value = false
   }
@@ -1179,14 +1131,6 @@ function fmtHltb(s: number): string {
   return `${m}m`
 }
 
-function formatDate(raw: string): string {
-  const d = new Date(raw)
-  if (!isNaN(d.getTime())) {
-    const loc = localStorage.getItem('gd3_locale') || navigator.language || 'en'
-    return d.toLocaleDateString(loc, { year: 'numeric', month: 'long', day: 'numeric' })
-  }
-  return raw.length <= 10 ? raw : raw.slice(0, 10)
-}
 
 const totalSize = computed(() => {
   const bytes = availableFiles.value.reduce((n, f) => n + (f.size_bytes ?? 0), 0)
@@ -1196,13 +1140,6 @@ const totalSize = computed(() => {
   return (bytes / 1024).toFixed(0) + ' KB'
 })
 
-function formatSize(bytes: number | null): string {
-  if (!bytes) return '-'
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  if (bytes < 1024 ** 3) return (bytes / 1024 / 1024).toFixed(1) + ' MB'
-  return (bytes / 1024 ** 3).toFixed(2) + ' GB'
-}
 
 // ── Transmission enabled flag ──────────────────────────────────────────────────
 
@@ -1285,7 +1222,6 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 .sk-line--lg { width: 55%; }
 .sk-line--md { width: 42%; }
 .sk-line--sm { width: 28%; }
-@keyframes shimmer { to { background-position: -400% 0; } }
 
 /* ══ EMPTY ═════════════════════════════════════════════════════════════════════ */
 .gd-empty {
@@ -1415,7 +1351,6 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 }
 
 .spin { animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Unified button styles (same as GOG view) ─────────────────────────────── */
 .gd-btn-dl {
@@ -1545,7 +1480,6 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
   border-top-color: currentColor; border-radius: 50%;
   animation: gd-spin .7s linear infinite; display: inline-block; flex-shrink: 0;
 }
-@keyframes gd-spin { to { transform: rotate(360deg); } }
 
 /* ── Admin file management ───────────────────────────────────────────────────── */
 .gd-admin-section { border: 1px solid rgba(239,68,68,.15); border-radius: 10px; padding: var(--space-5, 20px); }
@@ -1681,15 +1615,14 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
   border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite;
 }
 .btn-spinner--sm { width: 11px; height: 11px; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* Hero animations now in <HeroBackground>. */
 
 /* ══ SEPARATOR ════════════════════════════════════════════════════════════════ */
 .gd-separator {
   width: 100%;
-  height: 80px;
-  margin-top: -80px;
+  height: var(--gd-hero-fade-h, 80px);
+  margin-top: calc(-1 * var(--gd-hero-fade-h, 80px));
   background: linear-gradient(to bottom, transparent, var(--bg1, rgba(8,7,18,1)));
   pointer-events: none;
   flex-shrink: 0;
@@ -1794,6 +1727,11 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
   text-transform: uppercase; letter-spacing: 1.4px;
   margin-bottom: 16px;
 }
+.gd-section-label--os { display: flex; align-items: center; gap: 8px; }
+.gd-req-os-icon { flex-shrink: 0; opacity: .9; }
+.gd-req-os-icon--win  { color: #60a5fa; }
+.gd-req-os-icon--mac  { color: #c4b5fd; }
+.gd-req-os-icon--linux { color: #fbbf24; }
 
 /* ══ MEDIA / CAROUSEL ════════════════════════════════════════════════════════ */
 .gd-media-section {
@@ -1919,7 +1857,7 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
   display: flex; align-items: center; justify-content: center;
   animation: lb-in .15s ease;
 }
-@keyframes lb-in { from { opacity: 0; } to { opacity: 1; } }
+
 .gd-lb-img {
   max-width: 90vw; max-height: 86vh;
   border-radius: var(--radius-sm, 8px); box-shadow: 0 0 80px rgba(0,0,0,.9);

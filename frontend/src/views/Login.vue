@@ -11,6 +11,12 @@
         <div class="brand-name">GamesDownloader</div>
       </div>
 
+      <!-- The one screen someone can reach before having a profile to set this
+           in, so it belongs here rather than only behind a sign-in. -->
+      <div class="login-lang">
+        <LanguagePicker />
+      </div>
+
       <!-- SSO error from callback -->
       <Transition name="err">
         <div v-if="ssoError" class="login-error" style="margin-bottom:12px;">
@@ -116,6 +122,17 @@
             <line x1="15" y1="12" x2="3" y2="12"/>
           </svg>
           {{ loading ? t('auth.signing_in') : t('auth.signin') }}
+        </button>
+
+        <!-- Only where anyone may sign up. Under invite-only the way in is the
+             invite link itself, and under disabled there is no way in at all,
+             so offering the button would lead to a refusal either way. -->
+        <button v-if="regMode === 'open'" type="button" class="btn-register" @click="router.push('/register')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>
+          </svg>
+          {{ t('register.submit') }}
         </button>
 
         <div class="forgot-link-row">
@@ -232,6 +249,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import AmbientBackground from '@/components/common/AmbientBackground.vue'
+import LanguagePicker from '@/components/common/LanguagePicker.vue'
 import client from '@/services/api/client'
 import { useI18n } from '@/i18n'
 
@@ -260,6 +278,8 @@ const showPwd      = ref(false)
 const usernameRef  = ref<HTMLInputElement>()
 const providers    = ref<Provider[]>([])
 const showLocalForm = ref(true)
+// Decides whether this screen offers a way to create an account at all.
+const regMode      = ref('')
 
 // TOTP step (after a successful password when 2FA is enabled on the account)
 const totpChallenge = ref<string | null>(null)
@@ -291,6 +311,11 @@ onMounted(async () => {
       showLocalForm.value = false
     }
   } catch { /* SSO not available or not configured */ }
+
+  try {
+    const { data } = await client.get('/auth/registration-mode')
+    regMode.value = String(data?.mode || '')
+  } catch { /* leave the button hidden rather than offer a dead end */ }
 
   if (showLocalForm.value) {
     setTimeout(() => usernameRef.value?.focus(), 120)
@@ -390,10 +415,6 @@ async function doForgot() {
   box-shadow: 0 32px 80px rgba(0,0,0,.5);
   animation: card-in .35s ease;
 }
-@keyframes card-in {
-  from { opacity: 0; transform: translateY(18px) scale(.97); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
 
 /* Brand */
 .login-brand {
@@ -401,8 +422,10 @@ async function doForgot() {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  margin-bottom: 32px;
+  margin-bottom: 18px;
 }
+
+.login-lang { display: flex; justify-content: center; margin-bottom: 24px; }
 
 .logo-glow-wrap { position: relative; }
 
@@ -415,10 +438,6 @@ async function doForgot() {
     drop-shadow(0 0 12px var(--pglow, rgba(124,77,255,.7)))
     drop-shadow(0 0 28px var(--pglow2, rgba(91,33,182,.5)));
   animation: logo-pulse 3.5s ease-in-out infinite;
-}
-@keyframes logo-pulse {
-  0%,100% { filter: drop-shadow(0 0 10px var(--pglow)) drop-shadow(0 0 22px var(--pglow2)); }
-  50%     { filter: drop-shadow(0 0 20px var(--pglow)) drop-shadow(0 0 48px var(--pglow2)); }
 }
 
 .brand-name {
@@ -505,12 +524,29 @@ async function doForgot() {
 }
 .btn-login:disabled { opacity: .6; cursor: not-allowed; transform: none; }
 
+/* Secondary to Sign In: this screen is for people who already have an account,
+   so the way in stays the loud one and creating an account sits under it. */
+.btn-register {
+  display: flex; align-items: center; justify-content: center; gap: var(--space-2, 8px);
+  padding: 10px; margin-top: -4px;
+  background: transparent; color: var(--pl-light, #a78bfa);
+  border: 1px solid var(--glass-border, rgba(255,255,255,.12));
+  border-radius: var(--radius-sm, 10px);
+  cursor: pointer; font-family: inherit; font-weight: 600;
+  font-size: var(--fs-sm, 12px); letter-spacing: .4px;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.btn-register:hover {
+  background: color-mix(in srgb, var(--pl, #7c3aed) 14%, transparent);
+  border-color: var(--pl, #7c3aed);
+  color: #fff;
+}
+
 .btn-spinner {
   width: 15px; height: 15px; border-radius: 50%;
   border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
   animation: spin .7s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* SSO divider */
 .sso-divider {

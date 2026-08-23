@@ -60,7 +60,7 @@
         </template>
         <button
           class="cgl-viewbtn" :class="{ active: view === 'list' }"
-          @click="$emit('setView','list')" title="List">
+          @click="$emit('setView','list')" :title="t('couch.list')">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
             <circle cx="3" cy="6" r="1.2" fill="currentColor"/><circle cx="3" cy="12" r="1.2" fill="currentColor"/><circle cx="3" cy="18" r="1.2" fill="currentColor"/>
@@ -68,7 +68,7 @@
         </button>
         <button
           class="cgl-viewbtn" :class="{ active: view === 'grid' }"
-          @click="$emit('setView','grid')" title="Grid">
+          @click="$emit('setView','grid')" :title="t('couch.grid')">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
             <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
@@ -371,7 +371,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useI18n } from '@/i18n'
-import { useCouchNav, navPaused } from '@/composables/useCouchNav'
+import { useCouchNav } from '@/composables/useCouchNav'
 import { useCouchTheme } from '@/composables/useCouchTheme'
 import type { CouchPlatform } from './CouchSystemView.vue'
 import client from '@/services/api/client'
@@ -455,11 +455,31 @@ function applyVideoVol() {
     el.muted = true
   }
 }
-// Listen for CouchMenu changes (custom events, same page)
-window.addEventListener('gd-video-vol-change', applyVideoVol)
-window.addEventListener('gd-cover-size-change', (e: Event) => {
+// Listen for CouchMenu changes (custom events, same page).
+//
+// Registered on mount and removed on unmount. They used to be added in the
+// setup body with nothing taking them off again, and this component is
+// destroyed and rebuilt on every system-and-back cycle - so each cycle left a
+// live handler pinning that instance's list of up to five hundred ROMs and its
+// populated detail cache. Couch mode runs on televisions and small boxes.
+//
+// The size handler has to be a named function: removeEventListener only
+// detaches the identical reference, so passing a fresh inline arrow to it
+// would silently do nothing and leave a bug that looks fixed.
+function onCoverSizeChange(e: Event) {
   const sz = (e as CustomEvent).detail
   if (sz && coverSize.value !== sz) coverSize.value = sz
+}
+
+onMounted(() => {
+  window.addEventListener('gd-video-vol-change', applyVideoVol)
+  window.addEventListener('gd-cover-size-change', onCoverSizeChange)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('gd-video-vol-change', applyVideoVol)
+  window.removeEventListener('gd-cover-size-change', onCoverSizeChange)
+  clearTimeout(detailTimer)
 })
 const shotViewIdx  = ref(-1)      // screenshot fullscreen viewer (-1 = closed)
 const devLogoFailed = ref(false)  // ScreenScraper developer logo failed to load

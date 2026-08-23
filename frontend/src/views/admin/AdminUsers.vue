@@ -160,23 +160,23 @@
           </div>
           <div class="au-dlg-body">
             <label class="au-label">{{ t('users.username') }}</label>
-            <input v-model="createForm.username" class="au-input" placeholder="username" autocomplete="off" />
+            <input v-model="createForm.username" class="au-input" :placeholder="t('users.username_ph')" autocomplete="off" />
             <label class="au-label">{{ t('users.email') }}</label>
             <input v-model="createForm.email" class="au-input" placeholder="user@example.com" type="email" required />
             <label class="au-label">{{ t('users.password') }}</label>
-            <input v-model="createForm.password" class="au-input" placeholder="min. 8 characters" type="password" autocomplete="new-password" />
+            <input v-model="createForm.password" class="au-input" :placeholder="t('auth.password_hint')" type="password" autocomplete="new-password" />
             <label class="au-label">{{ t('users.role') }}</label>
             <select v-model="createForm.role" class="au-input">
-              <option value="user">User</option>
-              <option value="editor">Editor</option>
-              <option value="uploader">Uploader</option>
-              <option value="admin">Admin</option>
+              <option value="user">{{ t('users.role_user') }}</option>
+              <option value="editor">{{ t('users.role_editor') }}</option>
+              <option value="uploader">{{ t('users.role_uploader') }}</option>
+              <option value="admin">{{ t('users.role_admin') }}</option>
             </select>
           </div>
           <div v-if="createError" class="au-dlg-error">{{ createError }}</div>
           <div class="au-dlg-footer">
             <button class="au-ghost-btn" @click="showCreate = false">{{ t('common.cancel') }}</button>
-            <button class="au-submit-btn" :disabled="creating" @click="doCreate">
+            <button class="au-submit-btn btn-save-action" :disabled="creating" @click="doCreate">
               <div v-if="creating" class="btn-spinner" />
               <span v-else>{{ t('users.create') }}</span>
             </button>
@@ -195,12 +195,12 @@
           </div>
           <div class="au-dlg-body">
             <label class="au-label">{{ t('users.new_pwd_label') }}</label>
-            <input v-model="newPassword" class="au-input" placeholder="••••••••" type="password" autocomplete="new-password" />
+            <input v-model="newPassword" class="au-input" :placeholder="t('auth.password_hint')" type="password" autocomplete="new-password" />
           </div>
           <div v-if="resetPwdError" class="au-dlg-error">{{ resetPwdError }}</div>
           <div class="au-dlg-footer">
             <button class="au-ghost-btn" @click="showResetPwd = false">{{ t('common.cancel') }}</button>
-            <button class="au-submit-btn" :disabled="resetting" @click="doResetPwd">
+            <button class="au-submit-btn btn-save-action" :disabled="resetting" @click="doResetPwd">
               <div v-if="resetting" class="btn-spinner" />
               <span v-else>{{ t('users.set_password') }}</span>
             </button>
@@ -227,7 +227,7 @@
           <div v-if="limitsError" class="au-dlg-error">{{ limitsError }}</div>
           <div class="au-dlg-footer">
             <button class="au-ghost-btn" @click="showLimits = false">{{ t('common.cancel') }}</button>
-            <button class="au-submit-btn" :disabled="limitsSaving" @click="saveUserLimits">
+            <button class="au-submit-btn btn-save-action" :disabled="limitsSaving" @click="saveUserLimits">
               <div v-if="limitsSaving" class="btn-spinner" />
               <span v-else>{{ t('common.save') }}</span>
             </button>
@@ -273,11 +273,11 @@
           </div>
           <div class="au-field">
             <label class="au-field-label">{{ t('users.expires_in') }}</label>
-            <input type="number" v-model.number="newInvite.expires_in_hours" min="1" class="au-input" style="width:100px" placeholder="never" />
+            <input type="number" v-model.number="newInvite.expires_in_hours" min="1" class="au-input" style="width:100px" :placeholder="t('users.invite_expiry_ph')" />
           </div>
           <div class="au-field" style="flex:1">
             <label class="au-field-label">{{ t('users.note') }}</label>
-            <input type="text" v-model="newInvite.note" class="au-input" placeholder="e.g. for John" maxlength="100" />
+            <input type="text" v-model="newInvite.note" class="au-input" :placeholder="t('users.invite_note_ph')" maxlength="100" />
           </div>
         </div>
         <button class="au-add-btn" :disabled="inviteCreating" @click="createInvite" style="margin-top:8px">
@@ -294,16 +294,19 @@
         </thead>
         <tbody>
           <tr v-for="inv in invites" :key="inv.id" :style="!inv.is_active ? 'opacity:.4' : ''">
-            <td><code class="au-invite-code" @click="copyInviteCode(inv.code)" title="Click to copy" style="cursor:pointer;color:var(--pl)">{{ inv.code }}</code></td>
+            <td><a class="au-invite-code" :href="inviteUrl(inv.code)" target="_blank" rel="noopener" :title="inviteUrl(inv.code)" style="color:var(--pl);text-decoration:none">{{ inv.code }}</a></td>
             <td style="font-family:monospace">{{ inv.use_count }} / {{ inv.max_uses }}</td>
             <td>{{ inv.expires_at ? new Date(inv.expires_at).toLocaleString() : '∞' }}</td>
             <td>{{ inv.note || '-' }}</td>
             <td style="font-family:monospace">{{ inv.created_by || '-' }}</td>
-            <td><button class="au-icon-btn au-icon-btn--danger" @click="deleteInvite(inv.id)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button></td>
+            <td style="white-space:nowrap">
+              <button class="au-icon-btn" :title="t('downloads.copy_link')" @click="copyInviteCode(inv.code)" style="margin-right:4px"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+              <button class="au-icon-btn au-icon-btn--danger" @click="deleteInvite(inv.id)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
+            </td>
           </tr>
         </tbody>
       </table>
-      <div v-if="inviteCopied" class="au-ok" style="margin-top:6px;color:#4ade80;font-size:12px">{{ t('users.code_copied') }}</div>
+      <div v-if="inviteCopied" class="au-ok" style="margin-top:6px;color:#4ade80;font-size:12px">{{ t('users.link_copied') }}</div>
     </div>
 
     <!-- ── Active Sessions (paginated, 10 per page) ─────────────────────────── -->
@@ -397,7 +400,11 @@ import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
 import { useDialog } from '@/composables/useDialog'
 import { useI18n } from '@/i18n'
+import { isPasswordOk } from '@/utils/password'
 import { escapeHtml } from '@/utils/sanitize'
+import { formatDateShort, formatDateTime } from '@/utils/format'
+const fmtDate = formatDateShort
+const fmtDateTime = formatDateTime
 
 const { t } = useI18n()
 
@@ -432,15 +439,7 @@ function avatarUrl(u: UserRecord): string {
   return filename ? `/resources/avatars/${filename}` : ''
 }
 
-function fmtDate(iso: string): string {
-  const loc = localStorage.getItem('gd3_locale') || navigator.language || 'en'
-  return new Date(iso).toLocaleDateString(loc, { year: 'numeric', month: 'short', day: 'numeric' })
-}
 
-function fmtDateTime(iso: string): string {
-  const loc = localStorage.getItem('gd3_locale') || navigator.language || 'en'
-  return new Date(iso).toLocaleString(loc)
-}
 
 // Permission chip: undefined = role default (neutral), false = denied, true = explicitly granted
 function permChipClass(u: UserRecord, key: string): string {
@@ -481,33 +480,61 @@ const inviteLoading = ref(false)
 const inviteCreating = ref(false)
 const inviteCopied = ref(false)
 const newInvite = ref({ max_uses: 1, expires_in_hours: null as number | null, note: '' })
+const publicBaseUrl = ref('')
 
+// The invite endpoints live under the network-security router, so the path
+// carries /network. Without it every call 404s, and because these catches used
+// to be empty the failure was invisible: the list stayed empty and Create did
+// nothing. Log the error rather than swallow it.
 async function loadInvites() {
   inviteLoading.value = true
-  try { const { data } = await client.get('/settings/security/invites'); invites.value = Array.isArray(data) ? data : [] } catch {}
+  try { const { data } = await client.get('/settings/security/network/invites'); invites.value = Array.isArray(data) ? data : [] }
+  catch (e) { console.error('Failed to load invite codes', e) }
   finally { inviteLoading.value = false }
 }
 async function createInvite() {
   inviteCreating.value = true
   try {
-    await client.post('/settings/security/invites', newInvite.value)
+    await client.post('/settings/security/network/invites', newInvite.value)
     newInvite.value = { max_uses: 1, expires_in_hours: null, note: '' }
     await loadInvites()
-  } catch {}
+  } catch (e) { console.error('Failed to create invite code', e) }
   finally { inviteCreating.value = false }
 }
 async function deleteInvite(id: number) {
-  try { await client.delete(`/settings/security/invites/${id}`); await loadInvites() } catch {}
+  try { await client.delete(`/settings/security/network/invites/${id}`); await loadInvites() }
+  catch (e) { console.error('Failed to delete invite code', e) }
 }
+// The link an admin hands out has to work from wherever the invited person is,
+// which is rarely where the admin is standing. window.location.origin would put
+// the LAN address into a link meant for someone outside it, so prefer the
+// configured public base URL exactly as the password-reset mail does.
+function inviteUrl(code: string): string {
+  const base = publicBaseUrl.value || window.location.origin
+  return `${base}/register?code=${encodeURIComponent(code)}`
+}
+
 function copyInviteCode(code: string) {
-  const url = `${window.location.origin}/register?code=${code}`
-  navigator.clipboard.writeText(url).then(() => { inviteCopied.value = true; setTimeout(() => { inviteCopied.value = false }, 3000) })
+  navigator.clipboard.writeText(inviteUrl(code))
+    .then(() => { inviteCopied.value = true; setTimeout(() => { inviteCopied.value = false }, 3000) })
+    .catch(e => console.error('Failed to copy the invite link', e))
+}
+
+async function loadPublicBaseUrl() {
+  try {
+    const { data } = await client.get('/settings/security/network/config')
+    publicBaseUrl.value = String(data?.public_base_url || '').trim().replace(/\/+$/, '')
+  } catch (e) {
+    // Not fatal: the link falls back to the current origin.
+    console.error('Failed to load the public base URL', e)
+  }
 }
 
 onMounted(async () => {
   myId.value = (auth.user as any)?.id ?? null
   await Promise.all([fetchUsers(), loadSessions()])
   loadInvites().catch(() => {})
+  loadPublicBaseUrl()
 })
 
 // ── Role ──────────────────────────────────────────────────────────────────────
@@ -517,7 +544,7 @@ async function changeRole(u: UserRecord, role: string) {
     await client.patch(`/users/${u.id}`, { role })
     u.role = role
   } catch (e: any) {
-    alert(e?.response?.data?.detail || 'Failed to change role')
+    await gdAlert(e?.response?.data?.detail || t('users.role_change_failed'), { title: t('common.error'), danger: true })
   }
 }
 
@@ -528,7 +555,7 @@ async function toggleEnabled(u: UserRecord) {
     await client.patch(`/users/${u.id}`, { enabled: !u.enabled })
     u.enabled = !u.enabled
   } catch (e: any) {
-    alert(e?.response?.data?.detail || 'Failed to update user')
+    await gdAlert(e?.response?.data?.detail || t('users.update_failed'), { title: t('common.error'), danger: true })
   }
 }
 
@@ -551,7 +578,7 @@ async function togglePerm(u: UserRecord, key: string) {
     await client.patch(`/users/${u.id}`, { permissions: payload })
     u.permissions = payload as Record<string, boolean> | null
   } catch (e: any) {
-    alert(e?.response?.data?.detail || 'Failed to update permissions')
+    await gdAlert(e?.response?.data?.detail || t('users.perms_failed'), { title: t('common.error'), danger: true })
   }
 }
 
@@ -570,7 +597,13 @@ function openCreate() {
 
 async function doCreate() {
   if (!createForm.value.username || !createForm.value.password || !createForm.value.email) {
-    createError.value = 'Username, email and password are required'
+    createError.value = t('users.fields_required')
+    return
+  }
+  // Without this the server's 422 was the first thing to mention the rule, and
+  // it arrives as a list of validation objects, not a sentence.
+  if (!isPasswordOk(createForm.value.password)) {
+    createError.value = t('auth.password_rule')
     return
   }
   creating.value = true
@@ -586,7 +619,7 @@ async function doCreate() {
     showCreate.value = false
     await fetchUsers()
   } catch (e: any) {
-    createError.value = e?.response?.data?.detail || 'Failed to create user'
+    createError.value = e?.response?.data?.detail || t('users.create_failed')
   } finally {
     creating.value = false
   }
@@ -666,8 +699,8 @@ function openResetPwd(u: UserRecord) {
 }
 
 async function doResetPwd() {
-  if (newPassword.value.length < 8) {
-    resetPwdError.value = 'Password must be at least 8 characters'
+  if (!isPasswordOk(newPassword.value)) {
+    resetPwdError.value = t('auth.password_rule')
     return
   }
   resetting.value = true
@@ -678,7 +711,7 @@ async function doResetPwd() {
     })
     showResetPwd.value = false
   } catch (e: any) {
-    resetPwdError.value = e?.response?.data?.detail || 'Failed to reset password'
+    resetPwdError.value = e?.response?.data?.detail || t('users.reset_pwd_failed')
   } finally {
     resetting.value = false
   }
@@ -724,7 +757,7 @@ async function revokeSession(id: number, isCurrent: boolean) {
     }
     await loadSessions()
   } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Failed to revoke session.', { title: 'Error', danger: true })
+    await gdAlert(e?.response?.data?.detail || t('users.revoke_failed'), { title: 'Error', danger: true })
   } finally {
     sessRevoking.value = false
   }
@@ -742,7 +775,7 @@ async function revokeAllSessions() {
     auth.logout()
     window.location.href = '/login'
   } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Failed.', { title: 'Error', danger: true })
+    await gdAlert(e?.response?.data?.detail || t('common.failed'), { title: 'Error', danger: true })
     sessRevoking.value = false
   }
 }
@@ -766,7 +799,7 @@ async function doDelete() {
     showDeleteConfirm.value = false
     await fetchUsers()
   } catch (e: any) {
-    alert(e?.response?.data?.detail || 'Failed to delete user')
+    await gdAlert(e?.response?.data?.detail || t('users.delete_failed'), { title: t('common.error'), danger: true })
   } finally {
     deleting.value = false
   }
@@ -1000,5 +1033,5 @@ async function confirmReset2fa(u: UserRecord) {
   width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.3);
   border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+
 </style>

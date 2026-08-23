@@ -30,7 +30,7 @@
         <!-- User chip -->
         <div class="user-chip-wrap" @click="showUserMenu = !showUserMenu" v-click-outside="() => showUserMenu = false">
           <div class="user-chip">
-            <img v-if="avatarSrc" :src="avatarSrc" class="user-avatar-img" alt="Avatar" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+            <img v-if="avatarSrc" :src="avatarSrc" class="user-avatar-img" :alt="t('profile.avatar')" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
             <div v-else class="user-avatar-placeholder">{{ initials }}</div>
             <span v-if="notifStore.hasBadge" class="user-chip-badge" @click.stop="showNotifPopup = !showNotifPopup">{{ notifStore.totalCount }}</span>
           </div>
@@ -54,7 +54,7 @@
             <div v-if="showUserMenu" class="user-menu glass">
               <div class="user-menu-header">
                 <div class="user-menu-avatar">
-                  <img v-if="avatarSrc" :src="avatarSrc" class="user-menu-avatar-img" alt="Avatar" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                  <img v-if="avatarSrc" :src="avatarSrc" class="user-menu-avatar-img" :alt="t('profile.avatar')" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                   <div v-else class="user-avatar-placeholder small">{{ initials }}</div>
                 </div>
                 <div class="user-menu-info">
@@ -69,7 +69,7 @@
               </button>
               <button class="menu-item" @click="showUserMenu = false; $router.push('/dashboard')">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
-                Dashboard
+                {{ t('dashboard.title') }}
               </button>
               <button class="menu-item" @click="showUserMenu = false; $router.push('/settings')">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -619,14 +619,7 @@ onUnmounted(() => { _unregHomeSections?.() })
   animation: chip-shake 3s ease-in-out infinite;
   cursor: pointer; z-index: 2;
 }
-@keyframes chip-shake {
-  0%, 88%, 100% { transform: none; }
-  90% { transform: rotate(-10deg) scale(1.15); }
-  92% { transform: rotate(10deg) scale(1.15); }
-  94% { transform: rotate(-6deg); }
-  96% { transform: rotate(6deg); }
-  98% { transform: rotate(0); }
-}
+
 .notif-popup {
   position: absolute; top: calc(100% + 8px); right: 0; z-index: 200;
   min-width: 280px; max-width: 360px; padding: 14px;

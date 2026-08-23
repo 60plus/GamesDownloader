@@ -146,7 +146,6 @@ async function fetchPlatforms() {
         manufacturer:          null,
         release_year_platform: null,
         generation:            null,
-        wheel_path:            null,
       }))
   } catch (e) {
     console.error('[CouchMode] fetch platforms failed', e)

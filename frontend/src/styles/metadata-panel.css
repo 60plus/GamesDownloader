@@ -1,0 +1,354 @@
+/* Shared chrome for the game and collection metadata panels.
+ *
+ * These two panels are the same design; 167 rules were byte-identical in
+ * both files, so a fix to one of them had to be remembered twice.
+ *
+ * EVERY rule here hangs off `.mep-std`, which only those two panels put on
+ * their overlay. The emulation ROM panel reuses the same class NAMES for a
+ * different design - different sizes, different colours, rem instead of px -
+ * so without that marker this sheet would reach in and change whatever it
+ * does not happen to override itself. It is not a drifted copy; leave it be.
+ */
+
+.mep-std.mep-overlay {position: fixed; inset: 0; z-index: 8000; background: rgba(0,0,0,.72); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; animation: mep-fade-in .18s ease;}
+
+@keyframes mep-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.mep-std .mep-panel {width: 92vw; max-width: 1180px; height: 88vh; background: var(--glass-bg, rgba(15,10,30,.85)); border: 1px solid var(--glass-border, rgba(255,255,255,.1)); border-radius: 16px; backdrop-filter: blur(var(--glass-blur-px, 22px)) saturate(var(--glass-sat, 180%)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--pl) 15%, transparent), 0 24px 60px rgba(0,0,0,.6), 0 0 40px color-mix(in srgb, var(--pl) 8%, transparent); display: flex; flex-direction: column; overflow: hidden; animation: mep-slide-up .2s cubic-bezier(.23,1,.32,1);}
+
+@keyframes mep-slide-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+.mep-std .mep-header {display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--glass-border); flex-shrink: 0;}
+
+.mep-std .mep-header-left {display: flex; align-items: center; gap: var(--space-2, 8px); font-size: var(--fs-md, 14px); font-weight: 700; color: var(--text);}
+
+.mep-std .mep-game-name {color: var(--muted); font-weight: 500;}
+
+.mep-std .mep-close {width: 32px; height: 32px; border-radius: var(--radius-sm, 8px); background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s;}
+
+.mep-std .mep-close:hover {background: rgba(255,255,255,.12); color: var(--text);}
+
+.mep-std .mep-body {display: flex; flex: 1; overflow: hidden;}
+
+.mep-std .mep-left {width: 200px; flex-shrink: 0; padding: 18px; border-right: 1px solid var(--glass-border); overflow-y: auto; background: rgba(255,255,255,.02);}
+
+.mep-std .mep-label {font-size: var(--fs-xs, 10px); font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px;}
+
+.mep-std .mep-cover-current, .mep-std .mep-cover-selected-wrap {position: relative; width: 100%; aspect-ratio: 3/4; border-radius: 10px; overflow: hidden; background: var(--bg3); border: 1px solid var(--glass-border);}
+
+.mep-std .mep-cover-current--wide {aspect-ratio: 16/9;}
+
+.mep-std .mep-cover-current--logo {aspect-ratio: 16/9; background: rgba(0,0,0,.35);}
+
+.mep-std .mep-cover-current--icon {width: 60px; height: 60px; aspect-ratio: 1/1; background: rgba(0,0,0,.25);}
+
+.mep-std .mep-cover-selected-wrap--wide {aspect-ratio: 16/9;}
+
+.mep-std .mep-cover-selected-wrap--logo {aspect-ratio: 16/9; background: rgba(0,0,0,.35);}
+
+.mep-std .mep-cover-img {width: 100%; height: 100%; object-fit: cover; display: block;}
+
+.mep-std .mep-cover-empty {width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;}
+
+.mep-std .mep-anim-badge {position: absolute; bottom: 6px; left: 6px; display: flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: var(--radius-xs, 4px); background: color-mix(in srgb, var(--pl-light) 85%, transparent); color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .5px;}
+
+.mep-std .mep-selected-info {margin-top: 2px;}
+
+.mep-std .mep-clear-btn {margin-top: 6px; font-size: 11px; color: var(--muted); background: none; border: none; cursor: pointer; padding: 0; font-family: inherit;}
+
+.mep-std .mep-clear-btn:hover {color: var(--text);}
+
+.mep-std .mep-right {flex: 1; display: flex; flex-direction: column; overflow: hidden;}
+
+.mep-std .mep-tabs {display: flex; border-bottom: 1px solid var(--glass-border); flex-shrink: 0; padding: 0 20px;}
+
+.mep-std .mep-tab {padding: 14px 16px; font-size: 13px; font-weight: 600; color: var(--muted); border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-family: inherit; transition: color .15s, border-color .15s;}
+
+.mep-std .mep-tab:hover {color: var(--text);}
+
+.mep-std .mep-tab.active {color: var(--pl-light); border-bottom-color: var(--pl);}
+
+.mep-std .mep-tab-content {flex: 1; overflow-y: auto; padding: 0 20px 20px;}
+
+.mep-std .mep-source-section {padding: 18px 0 12px; border-bottom: 1px solid var(--glass-border);}
+
+.mep-std .mep-source-section:last-child {border-bottom: none;}
+
+.mep-std .mep-source-header {display: flex; align-items: center; gap: var(--space-2, 8px); margin-bottom: 14px;}
+
+.mep-std .mep-source-header > img {width: 28px; height: 28px; border-radius: var(--radius-xs, 4px);}
+
+.mep-std .mep-source-name {font-size: var(--fs-sm, 12px); font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: .8px;}
+
+.mep-std .mep-chip-bar {display: flex; gap: 6px; flex-wrap: wrap;}
+
+.mep-std .mep-chip-btn {display: inline-flex; align-items: center; gap: var(--space-1, 4px); padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; border: 1px solid var(--glass-border); background: rgba(255,255,255,.05); color: var(--muted); cursor: pointer; font-family: inherit; transition: all .15s;}
+
+.mep-std .mep-chip-btn:hover {border-color: var(--pl); color: var(--text);}
+
+.mep-std .mep-chip-btn.active {background: var(--pl-dim); border-color: var(--pl); color: var(--pl-light); box-shadow: 0 0 8px var(--pglow2);}
+
+.mep-std .mep-covers-grid {display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--space-3, 12px);}
+
+.mep-std .mep-covers-grid--wide {grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));}
+
+.mep-std .mep-cover-option {cursor: pointer; display: flex; flex-direction: column; gap: 5px;}
+
+.mep-std .mep-cover-option-img {position: relative; aspect-ratio: 3/4; border-radius: var(--radius-sm, 8px); overflow: hidden; border: 2px solid transparent; background: var(--bg3); transition: border-color .15s, box-shadow .15s, transform .15s;}
+
+.mep-std .mep-cover-option:hover .mep-cover-option-img {border-color: rgba(255,255,255,.3); box-shadow: 0 4px 20px rgba(0,0,0,.5); transform: translateY(-2px);}
+
+.mep-std .mep-cover-option.selected .mep-cover-option-img {border-color: var(--pl); box-shadow: 0 0 18px var(--pglow2);}
+
+.mep-std .mep-cover-option-img img {width: 100%; height: 100%; object-fit: cover; display: block;}
+
+.mep-std .mep-cover-option-img--hero {aspect-ratio: 32/10;}
+
+.mep-std .mep-cover-option-img--logo {aspect-ratio: 16/9; background: rgba(0,0,0,.3);}
+
+.mep-std .mep-cover-option-img--logo img {object-fit: contain; padding: var(--space-2, 8px);}
+
+.mep-std .mep-cover-option-img--icon {aspect-ratio: 1/1;}
+
+.mep-std .mep-cover-option-img--wide {aspect-ratio: 16/9;}
+
+.mep-std .mep-anim-badge-grid {position: absolute; top: 5px; left: 5px; padding: 2px 6px; border-radius: var(--radius-xs, 4px); background: color-mix(in srgb, var(--pl) 85%, transparent); color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .6px; pointer-events: none;}
+
+.mep-std .mep-selected-check {position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; background: color-mix(in srgb, var(--pl) 25%, transparent); color: var(--pl-light); display: flex; align-items: center; justify-content: center;}
+
+.mep-std .mep-source-badge {position: absolute; bottom: 4px; left: 4px; width: 20px; height: 20px; border-radius: var(--radius-xs, 4px); background: rgba(0,0,0,.65); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center;}
+
+.mep-std .mep-source-badge img {border-radius: 2px; width: 12px !important; height: 12px !important;}
+
+.mep-std .mep-source-badge--lg {width: 28px; height: 28px; border-radius: 5px;}
+
+.mep-std .mep-source-badge--lg img {width: 32px !important; height: 32px !important;}
+
+.mep-std .mep-cover-label {font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+
+.mep-std .mep-cover-author {font-size: var(--fs-xs, 10px); color: rgba(255,255,255,.3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+
+.mep-std .mep-search-row {display: flex; gap: var(--space-2, 8px); margin-bottom: 14px;}
+
+.mep-std .mep-search-input {flex: 1; background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); border-radius: var(--radius-sm); color: var(--text); font-size: 13px; font-family: inherit; padding: 8px 12px; outline: none; transition: border-color .15s;}
+
+.mep-std .mep-search-input:focus {border-color: var(--pl);}
+
+.mep-std .mep-search-btn {display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--pl) 20%, transparent); border: 1px solid color-mix(in srgb, var(--pl) 40%, transparent); color: var(--pl-light); font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; transition: all .15s; white-space: nowrap;}
+
+.mep-std .mep-search-btn:not(:disabled):hover {background: color-mix(in srgb, var(--pl) 30%, transparent); border-color: var(--pl); color: #fff;}
+
+.mep-std .mep-search-btn:disabled {opacity: .55; cursor: not-allowed;}
+
+.mep-std .mep-loading {display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; padding: 20px 0;}
+
+.mep-std .mep-empty-state {padding: 40px 0; text-align: center; color: var(--muted); font-size: var(--fs-md, 14px);}
+
+.mep-std .mep-empty-state-sm {font-size: var(--fs-sm, 12px); color: rgba(255,255,255,.3); padding: 8px 0 4px;}
+
+.mep-std .mep-spinner {width: 20px; height: 20px; border-radius: 50%; border: 2px solid rgba(255,255,255,.1); border-top-color: var(--pl); animation: mep-spin .7s linear infinite; flex-shrink: 0;}
+
+.mep-std .mep-spinner--sm {width: 14px; height: 14px;}
+
+@keyframes mep-spin { to { transform: rotate(360deg); } }
+
+.mep-std .mep-desc-list {display: flex; flex-direction: column; gap: 14px; padding-top: 18px;}
+
+.mep-std .mep-desc-source {border: 1px solid var(--glass-border); border-radius: var(--radius-sm); overflow: hidden;}
+
+.mep-std .mep-desc-source-header {display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid var(--glass-border);}
+
+.mep-std .mep-desc-source-name {font-size: 13px; font-weight: 700; color: var(--text);}
+
+.mep-std .mep-desc-apply-btn:hover {background: color-mix(in srgb, var(--pl) 30%, transparent); border-color: var(--pl); color: #fff;}
+
+.mep-std .mep-desc-preview {padding: 14px; font-size: 13px; color: rgba(255,255,255,.62); line-height: 1.7;}
+
+.mep-std .mep-detail-sources {display: flex; flex-direction: column; gap: 10px; padding-top: 12px;}
+
+.mep-std .mep-detail-source {border: 1px solid var(--glass-border); border-radius: var(--radius-sm); overflow: hidden;}
+
+.mep-std .mep-detail-grid {display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px;}
+
+.mep-std .mep-detail-chip {display: inline-block; font-size: var(--fs-sm, 12px); color: rgba(255,255,255,.7); background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); border-radius: 6px; padding: 4px 10px; line-height: 1.4;}
+
+.mep-std .mep-detail-chip b {color: var(--pl-light); font-weight: 600; margin-right: 2px;}
+
+.mep-std .mep-form {display: flex; flex-direction: column; gap: 14px; padding-top: 18px;}
+
+.mep-std .mep-form-section-label {font-size: var(--fs-xs, 10px); font-weight: 700; color: var(--pl-light); text-transform: uppercase; letter-spacing: 1.2px; padding-bottom: 4px; border-bottom: 1px solid var(--glass-border);}
+
+.mep-std .mep-form-row {display: grid; grid-template-columns: 1fr 1fr; gap: 14px;}
+
+.mep-std .mep-field {display: flex; flex-direction: column; gap: 5px;}
+
+.mep-std .mep-field-label {font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .8px;}
+
+.mep-std .mep-field-row {display: flex; gap: var(--space-2, 8px);}
+
+.mep-std .mep-input {flex: 1; background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); border-radius: var(--radius-sm); color: var(--text); font-size: 13px; font-family: inherit; padding: 9px 12px; outline: none; transition: border-color .15s;}
+
+.mep-std .mep-input:focus {border-color: var(--pl);}
+
+.mep-std .mep-textarea {background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); border-radius: var(--radius-sm); color: var(--text); font-size: 13px; font-family: inherit; padding: 9px 12px; outline: none; resize: vertical; transition: border-color .15s; line-height: 1.6;}
+
+.mep-std .mep-textarea:focus {border-color: var(--pl);}
+
+.mep-std .mep-apply-btn {padding: 9px 16px; border-radius: var(--radius-sm); background: rgba(255,255,255,.08); border: 1px solid var(--glass-border); color: var(--text); font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap; transition: all .15s;}
+
+.mep-std .mep-apply-btn:not(:disabled):hover {background: rgba(255,255,255,.14);}
+
+.mep-std .mep-apply-btn:disabled {opacity: .4; cursor: not-allowed;}
+
+.mep-std .mep-desc-source-icon {display: flex; align-items: center; flex-shrink: 0;}
+
+.mep-std .mep-desc-source-icon img {image-rendering: pixelated; border-radius: 3px;}
+
+.mep-std .mep-os-checks {display: flex; gap: 18px; flex-wrap: wrap;}
+
+.mep-std .mep-os-check-label {display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer;}
+
+.mep-std .mep-os-check-label input[type="checkbox"] {width: 15px; height: 15px; cursor: pointer; accent-color: var(--pl);}
+
+.mep-std .mep-field-hint {font-size: var(--fs-xs, 10px); font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0;}
+
+.mep-std .mep-upload-btn:hover {background: rgba(255,255,255,.12); color: var(--text); border-color: rgba(255,255,255,.25);}
+
+.mep-std .mep-file-input {display: none;}
+
+.mep-std .mep-cover-option--removable {position: relative;}
+
+.mep-std .mep-ss-remove {position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 50%; background: rgba(239,68,68,.85); border: 1px solid rgba(239,68,68,.5); color: #fff; font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .15s; z-index: 2;}
+
+.mep-std .mep-cover-option--removable:hover .mep-ss-remove {opacity: 1;}
+
+.mep-std .mep-ss-list {display: flex; flex-direction: column; gap: 6px; margin-top: 4px;}
+
+.mep-std .mep-ss-item {display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,.04); border: 1px solid var(--glass-border); border-radius: var(--radius-sm, 8px); padding: 6px 8px; transition: background .15s;}
+
+.mep-std .mep-ss-item:hover {background: rgba(255,255,255,.07);}
+
+.mep-std .mep-ss-item-thumb {width: 120px; height: 68px; object-fit: cover; border-radius: 5px; flex-shrink: 0;}
+
+.mep-std .mep-ss-order-col {display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0;}
+
+.mep-std .mep-ss-ord-btn {width: 22px; height: 20px; background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); border-radius: var(--radius-xs, 4px); color: var(--muted); cursor: pointer; font-size: 9px; display: flex; align-items: center; justify-content: center; padding: 0; transition: background .12s;}
+
+.mep-std .mep-ss-ord-btn:hover:not(:disabled) {background: rgba(255,255,255,.14); color: var(--text);}
+
+.mep-std .mep-ss-ord-btn:disabled {opacity: .3; cursor: default;}
+
+.mep-std .mep-ss-num {font-size: var(--fs-xs, 10px); color: var(--muted); font-weight: 600; min-width: 16px; text-align: center;}
+
+.mep-std .mep-ss-remove--list {margin-left: auto; flex-shrink: 0; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: var(--fs-sm, 12px); transition: background .12s, color .12s;}
+
+.mep-std .mep-ss-remove--list:hover {background: rgba(239,68,68,.15); color: #f87171; border-color: rgba(239,68,68,.3);}
+
+.mep-std .mep-vid-results {display: flex; flex-direction: column; gap: var(--space-2, 8px); margin-top: 8px;}
+
+.mep-std .mep-vid-option {display: flex; align-items: center; gap: var(--space-3, 12px); background: rgba(255,255,255,.04); border: 1px solid var(--glass-border); border-radius: var(--radius-sm, 8px); padding: var(--space-2, 8px); cursor: pointer; transition: background .15s;}
+
+.mep-std .mep-vid-option:hover {background: rgba(255,255,255,.08);}
+
+.mep-std .mep-vid-option.selected {border-color: var(--pl); background: color-mix(in srgb, var(--pl) 8%, transparent);}
+
+.mep-std .mep-vid-opt-thumb {width: 140px; height: 79px; object-fit: cover; border-radius: 5px; flex-shrink: 0;}
+
+.mep-std .mep-vid-opt-info {flex: 1; min-width: 0;}
+
+.mep-std .mep-vid-opt-label {font-size: 13px; font-weight: 600; color: var(--text);}
+
+.mep-std .mep-vid-opt-author {font-size: 11px; color: var(--muted); margin-top: 2px;}
+
+.mep-std .mep-vid-selected-check {width: 22px; height: 22px; border-radius: 50%; background: color-mix(in srgb, var(--pl) 25%, transparent); color: var(--pl-light); flex-shrink: 0; display: flex; align-items: center; justify-content: center;}
+
+.mep-std .mep-video-preview {display: flex; align-items: flex-start; gap: var(--space-4, 16px); padding: 14px; border-radius: var(--radius-sm); background: rgba(255,255,255,.04); border: 1px solid var(--glass-border); margin-bottom: 14px;}
+
+.mep-std .mep-video-thumb {width: 180px; aspect-ratio: 16/9; object-fit: cover; border-radius: 6px; flex-shrink: 0; border: 1px solid var(--glass-border);}
+
+.mep-std .mep-video-info {display: flex; flex-direction: column; gap: var(--space-2, 8px);}
+
+.mep-std .mep-video-yt-id {font-size: var(--fs-sm, 12px); color: var(--muted); font-family: monospace; word-break: break-all;}
+
+.mep-std .mep-video-link {font-size: var(--fs-sm, 12px); color: var(--pl-light); text-decoration: none;}
+
+.mep-std .mep-video-link:hover {text-decoration: underline;}
+
+.mep-std .mep-cover-selected-wrap--icon {width: 80px; height: 80px; aspect-ratio: 1/1; border-radius: 10px; background: rgba(0,0,0,.35); border: 1px solid var(--glass-border);}
+
+.mep-std .mep-footer {display: flex; align-items: center; justify-content: space-between; padding: 14px 22px; border-top: 1px solid var(--glass-border); flex-shrink: 0; background: rgba(255,255,255,.02);}
+
+.mep-std .mep-save-status {font-size: 13px;}
+
+.mep-std .mep-ok {color: #4ade80;}
+
+.mep-std .mep-err {color: #f87171;}
+
+.mep-std .mep-footer-actions {display: flex; gap: 10px;}
+
+.mep-std .mep-btn-cancel {padding: 9px 20px; border-radius: var(--radius-sm); background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); color: var(--muted); font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; transition: all .15s;}
+
+.mep-std .mep-btn-cancel:hover {background: rgba(255,255,255,.12); color: var(--text);}
+
+.mep-std .mep-btn-save {display: inline-flex; align-items: center; gap: var(--space-2, 8px); padding: 9px 22px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--pl) 20%, transparent); border: 1px solid color-mix(in srgb, var(--pl) 50%, transparent); color: var(--pl-light); font-size: 13px; font-weight: 700; font-family: inherit; cursor: pointer; transition: all .15s; box-shadow: 0 2px 12px var(--pglow2);}
+
+.mep-std .mep-btn-save:not(:disabled):hover {background: color-mix(in srgb, var(--pl) 30%, transparent); border-color: var(--pl); color: #fff;}
+
+.mep-std .mep-btn-save:disabled {opacity: .45; cursor: not-allowed; box-shadow: none;}
+
+.mep-std .srl-search-row {display: flex; gap: 6px; margin-bottom: 8px;}
+
+.mep-std .srl-search-row .mep-input {flex: 1;}
+
+.mep-std .srl-error {font-size: 11px; color: #f87171; margin-bottom: 6px;}
+
+.mep-std .srl-no-data {font-size: var(--fs-sm, 12px); color: rgba(255,255,255,.35); font-style: italic;}
+
+.mep-std .srl-matches {display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px;}
+
+.mep-std .srl-match-row {display: flex; align-items: center; gap: var(--space-2, 8px); padding: 5px 8px; border-radius: 6px; border: 1px solid var(--glass-border); background: rgba(255,255,255,.03); cursor: pointer; transition: background .12s;}
+
+.mep-std .srl-match-row:hover {background: rgba(255,255,255,.07);}
+
+.mep-std .srl-match-row--active {border-color: color-mix(in srgb, var(--pl) 50%, transparent); background: color-mix(in srgb, var(--pl) 8%, transparent);}
+
+.mep-std .srl-match-score {font-size: var(--fs-xs, 10px); font-weight: 700; color: var(--pl-light, var(--pl)); min-width: 32px; text-align: center; background: color-mix(in srgb, var(--pl) 15%, transparent); border-radius: var(--radius-xs, 4px); padding: 1px 4px;}
+
+.mep-std .srl-match-title {flex: 1; font-size: var(--fs-sm, 12px); color: rgba(255,255,255,.75); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+
+.mep-std .srl-fetch-btn {flex-shrink: 0; padding: 3px 10px; font-size: 11px;}
+
+.mep-std .srl-req-table {display: flex; flex-direction: column; gap: var(--space-1, 4px); margin: 6px 0;}
+
+.mep-std .srl-req-row {display: flex; gap: var(--space-2, 8px); align-items: baseline;}
+
+.mep-std .srl-req-key {font-size: 11px; font-weight: 700; color: var(--muted); min-width: 72px; flex-shrink: 0; text-transform: uppercase; letter-spacing: .04em;}
+
+.mep-std .srl-req-val {font-size: 11px; color: rgba(255,255,255,.7); line-height: 1.4;}
+
+.mep-std .srl-preview {background: color-mix(in srgb, var(--pl) 6%, rgba(0,0,0,.3)); border: 1px solid color-mix(in srgb, var(--pl) 25%, transparent); border-radius: var(--radius-sm, 8px); padding: 10px 12px; margin-top: 8px;}
+
+.mep-std .srl-preview-head {font-size: var(--fs-xs, 10px); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--pl-light, var(--pl)); margin-bottom: 4px;}
+
+.mep-std .srl-apply-row {display: flex; gap: var(--space-2, 8px); margin-top: 10px;}
+
+.mep-std .srl-clear-btn {margin-top: 8px; font-size: 11px; color: rgba(255,255,255,.3); background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; transition: color .15s;}
+
+.mep-std .srl-clear-btn:hover {color: #f87171;}
+
+.mep-std .srl-pending-notice {font-size: 11px; color: #4ade80; padding: 6px 8px; background: rgba(74,222,128,.08); border: 1px solid rgba(74,222,128,.2); border-radius: 6px; margin-top: 8px;}
+
+.mep-std .srl-manual-grid {display: grid; grid-template-columns: 72px 1fr; gap: 4px 8px; align-items: center; margin-bottom: 4px;}
+
+.mep-std .mep-input--sm {padding: 4px 8px; font-size: 11px;}
+
+@media (max-width: 640px) {
+  .mep-std .mep-panel {width: 100vw; height: 100vh; border-radius: 0; max-width: none;}
+  .mep-std .mep-left {display: none;}
+  .mep-std .mep-tabs {flex-wrap: wrap; gap: 2px;}
+  .mep-std .mep-tab {font-size: .68rem; padding: 6px 8px;}
+  .mep-std .mep-header {padding: 10px 14px;}
+  .mep-std .mep-tab-content {padding: 10px;}
+  .mep-std .mep-covers-grid {grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 6px;}
+  .mep-std .mep-form-row {grid-template-columns: 1fr;}
+}

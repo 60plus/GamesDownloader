@@ -84,7 +84,7 @@
       </button>
       <button
         v-if="form.host"
-        class="wizard-btn wizard-btn--primary"
+        class="wizard-btn wizard-btn--primary btn-save-action"
         :disabled="saving"
         @click="save"
       >
@@ -215,5 +215,5 @@ async function save() {
   border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
   animation: spin .7s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+
 </style>

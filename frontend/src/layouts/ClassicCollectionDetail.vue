@@ -183,7 +183,7 @@
         <div class="icard">
           <div class="icard-head">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-            <span>Collection</span>
+            <span>{{ t('detail.collection') }}</span>
           </div>
           <div v-if="yearRange" class="icard-row"><span class="icard-label">{{ t('detail.released') }}: </span><span class="icard-val">{{ yearRange }}</span></div>
           <div v-if="detail.rating != null" class="icard-row">
@@ -373,7 +373,6 @@ async function onDelete() {
 /* Loading */
 .cd-loading { flex: 1; display: flex; align-items: center; justify-content: center; }
 .cd-spin { animation: cd-spin-anim 1s linear infinite; }
-@keyframes cd-spin-anim { to { transform: rotate(360deg); } }
 
 /* ── COVER HERO ────────────────────────────────────────────────────────────── */
 .cover-hero {
@@ -393,23 +392,7 @@ async function onDelete() {
   background-size: cover; background-position: center center;
   transform-origin: center center; transform: scale(1.06); will-change: transform;
 }
-@keyframes cd-kenburns {
-  0%   { transform: scale(1.06) translate(0%,    0%   ); }
-  20%  { transform: scale(1.12) translate(-2.5%, 1%   ); }
-  45%  { transform: scale(1.09) translate( 1.5%, -1.5%); }
-  70%  { transform: scale(1.14) translate(-1%,   2%   ); }
-  100% { transform: scale(1.06) translate(0%,    0%   ); }
-}
-@keyframes cd-drift {
-  0%   { transform: scale(1.1) translateX(0%);  }
-  50%  { transform: scale(1.1) translateX(-5%); }
-  100% { transform: scale(1.1) translateX(0%);  }
-}
-@keyframes cd-pulse {
-  0%   { transform: scale(1.04); }
-  50%  { transform: scale(1.11); }
-  100% { transform: scale(1.04); }
-}
+
 .cd-hero--kenburns { animation: cd-kenburns calc(44s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite; }
 .cd-hero--drift { animation: cd-drift calc(28s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite alternate; }
 .cd-hero--pulse { animation: cd-pulse calc(10s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite; }

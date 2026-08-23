@@ -163,6 +163,13 @@ export async function scan(librarySlug?: string | null): Promise<any> {
   const lib = _target(librarySlug);
   const { data } = await client.post("/library/scan", null, {
     params: lib ? { library: lib } : {},
+    // No timeout. The server walks the whole games folder before it answers,
+    // and the client's default thirty seconds is nowhere near enough for a
+    // real library: the scan carried on and finished perfectly well while the
+    // browser reported it as failed, skipped the refresh that would have shown
+    // the new games, and invited the operator to press Scan again on top of a
+    // walk that was still running.
+    timeout: 0,
   });
   return data;
 }

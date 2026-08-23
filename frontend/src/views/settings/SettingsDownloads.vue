@@ -103,7 +103,7 @@
             @mouseleave="clearHint()">
             <label class="field-label">{{ t('downloads.note') }}</label>
             <div class="field-hint">{{ t('downloads.note_hint') }}</div>
-            <input v-model="form.note" type="text" class="field-input" placeholder="e.g. for John" maxlength="256" />
+            <input v-model="form.note" type="text" class="field-input" :placeholder="t('downloads.note_placeholder')" maxlength="256" />
           </div>
 
         </div>
@@ -247,7 +247,7 @@
         <div v-if="speedError" class="field-server-error">{{ speedError }}</div>
         <div v-if="speedSaved" class="field-ok">{{ t('downloads.speed_saved') }}</div>
         <div class="sd-actions">
-          <button class="action-btn action-btn--primary" :disabled="speedSaving" @click="saveSpeed">
+          <button class="action-btn action-btn--primary btn-save-action" :disabled="speedSaving" @click="saveSpeed">
             <span v-if="speedSaving" class="spinner" />
             {{ t('common.save') }}
           </button>
@@ -312,7 +312,7 @@
           <div v-if="limitsError" class="field-server-error">{{ limitsError }}</div>
           <div v-if="limitsSaved" class="field-ok">{{ t('dllimits.saved') }}</div>
           <div class="sd-actions">
-            <button class="action-btn action-btn--primary" :disabled="limitsSaving" @click="saveLimits">
+            <button class="action-btn action-btn--primary btn-save-action" :disabled="limitsSaving" @click="saveLimits">
               <span v-if="limitsSaving" class="spinner" />
               {{ t('common.save') }}
             </button>
@@ -380,7 +380,7 @@
           <div v-if="pkgError" class="field-server-error">{{ pkgError }}</div>
           <div v-if="pkgSaved" class="field-ok">{{ t('packaging.saved') }}</div>
           <div class="sd-actions">
-            <button class="action-btn action-btn--primary" :disabled="pkgSaving" @click="savePackaging">
+            <button class="action-btn action-btn--primary btn-save-action" :disabled="pkgSaving" @click="savePackaging">
               <span v-if="pkgSaving" class="spinner" />
               {{ t('common.save') }}
             </button>
@@ -390,16 +390,19 @@
     </div>
 
     <!-- ── Section: Transmission ─────────────────────────────────────────────── -->
+    <!-- Just the switch. Everything else moved to its own tab, which appears
+         once this is on - the section had grown to four groups of fields and
+         was the longest thing on a page about something else. -->
     <div class="sd-section">
       <div class="sd-section-title sd-section-title--collapsible" @click="toggleSection('transmission')">
         <div class="sd-tr-title-row">
           <span>{{ t('transmission.title') }}</span>
-          <span v-if="tr.enabled" :class="['sd-badge', trOnline ? 'sd-badge--active' : 'sd-badge--expired']" style="margin-left:10px; text-transform:lowercase;">
+          <span v-if="tr.enabled" :class="['sd-badge', trOnline ? 'sd-badge--active' : 'sd-badge--expired']">
             {{ trOnline ? t('transmission.online') : t('transmission.offline') }}
           </span>
         </div>
         <svg class="sd-chevron" :class="{ 'sd-chevron--open': !collapsed.transmission }"
-          width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="6 9 12 15 18 9"/>
         </svg>
       </div>
@@ -408,7 +411,6 @@
         <div v-if="trLoading" class="sd-loading"><span class="spinner" /> {{ t('common.loading') }}</div>
         <template v-else>
 
-          <!-- Enable -->
           <div class="sd-tr-row"
             @mouseenter="setHint(t('thint.tr_enable_title'), t('thint.tr_enable_body'))"
             @mouseleave="clearHint()">
@@ -417,179 +419,17 @@
               <div class="field-hint">{{ t('transmission.enable_hint') }}</div>
             </div>
             <label class="sd-toggle">
-              <input type="checkbox" v-model="tr.enabled" />
+              <input type="checkbox" v-model="tr.enabled" @change="saveTransmission" />
               <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
             </label>
           </div>
 
-          <template v-if="tr.enabled">
-            <!-- Peer port -->
-            <div class="sd-tr-group-label">{{ t('transmission.networking') }}</div>
-            <div class="sd-tr-fields">
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_port_title'), t('thint.tr_port_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.peer_port') }}</label>
-                <div class="field-hint">{{ t('transmission.peer_port_hint') }}</div>
-                <input v-model.number="tr.peer_port" type="number" min="1024" max="65535" class="field-input" />
-              </div>
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_random_title'), t('thint.tr_random_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.random_port') }}</label>
-                <div class="field-hint">{{ t('transmission.random_port_hint') }}</div>
-                <label class="sd-toggle sd-toggle--inline">
-                  <input type="checkbox" v-model="tr.peer_port_random" />
-                  <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
-                </label>
-              </div>
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_upnp_title'), t('thint.tr_upnp_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.upnp') }}</label>
-                <div class="field-hint">{{ t('transmission.upnp_hint') }}</div>
-                <label class="sd-toggle sd-toggle--inline">
-                  <input type="checkbox" v-model="tr.port_forwarding_enabled" />
-                  <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
-                </label>
-              </div>
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_hostname_title'), t('thint.tr_hostname_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.hostname') }}</label>
-                <div class="field-hint">{{ t('transmission.hostname_hint') }}</div>
-                <input v-model="tr.announce_ip" class="field-input" placeholder="e.g. 192.168.1.100 or my.domain.com" maxlength="255" />
-              </div>
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_dht_title'), t('thint.tr_dht_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.dht') }}</label>
-                <div class="field-hint">{{ t('transmission.dht_hint') }}</div>
-                <label class="sd-toggle sd-toggle--inline">
-                  <input type="checkbox" v-model="tr.dht_enabled" />
-                  <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
-                </label>
-              </div>
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_utp_title'), t('thint.tr_utp_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.utp') }}</label>
-                <div class="field-hint">{{ t('transmission.utp_hint') }}</div>
-                <label class="sd-toggle sd-toggle--inline">
-                  <input type="checkbox" v-model="tr.utp_enabled" />
-                  <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
-                </label>
-              </div>
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_lpd_title'), t('thint.tr_lpd_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.lpd') }}</label>
-                <div class="field-hint">{{ t('transmission.lpd_hint') }}</div>
-                <label class="sd-toggle sd-toggle--inline">
-                  <input type="checkbox" v-model="tr.lpd_enabled" />
-                  <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
-                </label>
-              </div>
-
-            </div><!-- /sd-tr-fields -->
-
-            <!-- Speed limits -->
-            <div class="sd-tr-group-label">{{ t('transmission.speed_limits') }}</div>
-            <div class="sd-tr-fields">
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_dl_speed_title'), t('thint.tr_dl_speed_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.limit_download') }}</label>
-                <div class="field-hint">{{ t('transmission.limit_download_hint') }}</div>
-                <div class="sd-speed-input-row">
-                  <label class="sd-toggle sd-toggle--inline">
-                    <input type="checkbox" v-model="tr.speed_limit_down_enabled" />
-                    <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
-                  </label>
-                  <input v-model.number="tr.speed_limit_down" type="number" min="0"
-                    class="field-input sd-speed-input" :disabled="!tr.speed_limit_down_enabled" placeholder="KB/s" />
-                </div>
-              </div>
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_ul_speed_title'), t('thint.tr_ul_speed_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.limit_upload') }}</label>
-                <div class="field-hint">{{ t('transmission.limit_upload_hint') }}</div>
-                <div class="sd-speed-input-row">
-                  <label class="sd-toggle sd-toggle--inline">
-                    <input type="checkbox" v-model="tr.speed_limit_up_enabled" />
-                    <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
-                  </label>
-                  <input v-model.number="tr.speed_limit_up" type="number" min="0"
-                    class="field-input sd-speed-input" :disabled="!tr.speed_limit_up_enabled" placeholder="KB/s" />
-                </div>
-              </div>
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_ratio_title'), t('thint.tr_ratio_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.ratio_limit') }}</label>
-                <div class="field-hint">{{ t('transmission.ratio_hint') }}</div>
-                <div class="sd-speed-input-row">
-                  <label class="sd-toggle sd-toggle--inline">
-                    <input type="checkbox" v-model="tr.ratio_limit_enabled" />
-                    <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
-                  </label>
-                  <input v-model.number="tr.ratio_limit" type="number" min="0" step="0.1"
-                    class="field-input sd-speed-input" :disabled="!tr.ratio_limit_enabled" placeholder="e.g. 2.0" />
-                </div>
-              </div>
-
-            </div><!-- /sd-tr-fields -->
-
-            <!-- Advanced -->
-            <div class="sd-tr-group-label">{{ t('transmission.advanced') }}</div>
-            <div class="sd-tr-fields">
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_trash_title'), t('thint.tr_trash_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.trash_torrent') }}</label>
-                <div class="field-hint">{{ t('transmission.trash_hint') }}</div>
-                <label class="sd-toggle sd-toggle--inline">
-                  <input type="checkbox" v-model="tr.trash_original" />
-                  <span class="sd-toggle-track"><span class="sd-toggle-thumb" /></span>
-                </label>
-              </div>
-
-              <div class="field-group"
-                @mouseenter="setHint(t('thint.tr_log_title'), t('thint.tr_log_body'))"
-                @mouseleave="clearHint()">
-                <label class="field-label">{{ t('transmission.log_verbosity') }}</label>
-                <div class="field-hint">{{ t('transmission.log_hint') }}</div>
-                <select v-model.number="tr.message_level" class="field-input">
-                  <option :value="0">{{ t('transmission.log_silent') }}</option>
-                  <option :value="1">{{ t('transmission.log_errors') }}</option>
-                  <option :value="2">{{ t('transmission.log_info') }}</option>
-                  <option :value="3">{{ t('transmission.log_debug') }}</option>
-                </select>
-              </div>
-
-            </div><!-- /sd-tr-fields -->
-          </template><!-- /v-if tr.enabled -->
+          <div v-if="tr.enabled" class="field-hint" style="margin-top:8px">
+            {{ t('transmission.moved_hint') }}
+          </div>
 
           <div v-if="trError" class="field-server-error">{{ trError }}</div>
           <div v-if="trSaved" class="field-ok">{{ t('transmission.saved') }}</div>
-          <div class="sd-actions">
-            <button class="action-btn action-btn--primary" :disabled="trSaving" @click="saveTransmission">
-              <span v-if="trSaving" class="spinner" />
-              {{ t('common.save') }}
-            </button>
-          </div>
 
         </template>
       </div><!-- /v-show transmission -->
@@ -605,6 +445,9 @@ import client from '@/services/api/client'
 import { useSettingsHint } from '@/composables/useSettingsHint'
 import { useDialog } from '@/composables/useDialog'
 import { useI18n } from '@/i18n'
+import { formatBytes as fmtSize, formatDateShort, formatDateTime } from '@/utils/format'
+const fmtDate = (iso: string | null | undefined) => formatDateShort(iso, '-')
+const fmtDateTime = (iso: string | null | undefined) => formatDateTime(iso, '-')
 
 const { t } = useI18n()
 
@@ -664,7 +507,7 @@ const form = reactive({
 const filesByGame = computed(() => {
   const map: Record<string, FileEntry[]> = {}
   for (const f of files.value) {
-    const key = f.game_title || 'Unknown'
+    const key = f.game_title || t('requests.unknown')
     if (!map[key]) map[key] = []
     map[key].push(f)
   }
@@ -673,21 +516,8 @@ const filesByGame = computed(() => {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function fmtDateTime(iso: string): string {
-  if (!iso) return '-'
-  return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
-}
 
-function fmtDate(iso: string): string {
-  if (!iso) return '-'
-  return new Date(iso).toLocaleDateString(undefined, { dateStyle: 'short' })
-}
 
-function fmtSize(bytes: number): string {
-  if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB'
-  if (bytes >= 1048576)    return (bytes / 1048576).toFixed(0) + ' MB'
-  return (bytes / 1024).toFixed(0) + ' KB'
-}
 
 function tokenUrl(token: string): string {
   return `${window.location.origin}/dl/${token}`
@@ -924,6 +754,18 @@ interface TransmissionConfig {
   ratio_limit:              number
   trash_original:           boolean
   message_level:            number
+  rpc_auth_enabled:         boolean
+  rpc_username:             string
+  // Write-only: the server never sends it back, so an empty box means
+  // "leave whatever is stored". rpc_password_set says whether there is one.
+  rpc_password:             string
+  rpc_password_set?:        boolean
+  rpc_whitelist_enabled:    boolean
+  rpc_whitelist:            string
+  rpc_host_whitelist_enabled: boolean
+  // Publish Transmission's control port outside the container. Refused by the
+  // server unless rpc_auth_enabled is on as well.
+  rpc_expose:               boolean
 }
 
 const tr = reactive<TransmissionConfig>({
@@ -935,6 +777,10 @@ const tr = reactive<TransmissionConfig>({
   speed_limit_up_enabled: false, speed_limit_up: 0,
   ratio_limit_enabled: false, ratio_limit: 2.0,
   trash_original: false, message_level: 1,
+  rpc_auth_enabled: false, rpc_username: '', rpc_password: '', rpc_password_set: false,
+  rpc_expose: false,
+  rpc_whitelist_enabled: false, rpc_whitelist: '127.0.0.1,::1,192.168.*.*',
+  rpc_host_whitelist_enabled: false,
 })
 const trLoading = ref(true)
 const trSaving  = ref(false)
@@ -962,6 +808,14 @@ async function saveTransmission() {
   trError.value  = ''
   try {
     await client.post('/settings/downloads/transmission', { ...tr })
+    // Drop the typed password and ask the server what it now holds. Keeping it
+    // in the box would leave it in memory for the rest of the visit, and the
+    // reply is the only thing that knows whether one is stored.
+    tr.rpc_password = ''
+    try {
+      const { data } = await client.get('/settings/downloads/transmission')
+      tr.rpc_password_set = data?.rpc_password_set === true
+    } catch { /* the save itself succeeded; the indicator can wait */ }
     trSaved.value = true
     setTimeout(() => { trSaved.value = false }, 5000)
     // Refresh online status
@@ -1051,7 +905,7 @@ onMounted(async () => {
   display: flex; align-items: center; justify-content: center; color: var(--pl-light); flex-shrink: 0;
 }
 .sd-title    { font-size: var(--fs-lg, 16px); font-weight: 600; color: var(--text-primary); }
-.sd-subtitle { font-size: var(--fs-sm, 12px); color: var(--text-muted); margin-top: 2px; }
+.sd-subtitle { font-size: var(--fs-sm, 12px); color: var(--muted); margin-top: 2px; }
 
 /* ── Section ─────────────────────────────────────────────────────────────── */
 .sd-section {
@@ -1068,7 +922,7 @@ onMounted(async () => {
   cursor: pointer; user-select: none; padding-bottom: 2px;
 }
 .sd-section-title--collapsible:hover { color: var(--text-primary); }
-.sd-chevron { color: var(--text-muted); transition: transform .2s; }
+.sd-chevron { color: var(--muted); transition: transform .2s; }
 .sd-chevron--open { transform: rotate(180deg); }
 .sd-section-actions-row { display: flex; gap: var(--space-2, 8px); justify-content: flex-end; }
 .sd-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
@@ -1077,11 +931,11 @@ onMounted(async () => {
 .sd-speed-global { max-width: 340px; margin-top: 4px; }
 .sd-speed-input-row { display: flex; align-items: center; gap: 10px; }
 .sd-speed-input { width: 120px !important; }
-.sd-speed-equiv { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.sd-speed-equiv { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .sd-speed-unlimited { color: #4ade80; }
-.sd-speed-global-label { color: var(--text-muted); }
+.sd-speed-global-label { color: var(--muted); }
 .sd-speed-users-label {
-  font-size: 11px; font-weight: 700; color: var(--text-muted);
+  font-size: 11px; font-weight: 700; color: var(--muted);
   text-transform: uppercase; letter-spacing: .5px; margin-top: 10px; margin-bottom: 4px;
 }
 .sd-speed-user-list { display: flex; flex-direction: column; gap: 6px; }
@@ -1091,12 +945,12 @@ onMounted(async () => {
   border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
 }
 .sd-speed-username { font-size: 13px; color: var(--text-primary); min-width: 100px; }
-.sd-speed-role { font-size: 11px; color: var(--text-muted); min-width: 60px; }
+.sd-speed-role { font-size: 11px; color: var(--muted); min-width: 60px; }
 
 .field-ok { color: #4ade80; font-size: var(--fs-sm, 12px); }
 
 /* ── Packaging ───────────────────────────────────────────────────────────── */
-.sd-pkg-desc { font-size: 12px; color: var(--text-muted); margin: 2px 0 10px; line-height: 1.5; }
+.sd-pkg-desc { font-size: 12px; color: var(--muted); margin: 2px 0 10px; line-height: 1.5; }
 
 /* ── Create panel ────────────────────────────────────────────────────────── */
 .sd-create-panel {
@@ -1106,7 +960,7 @@ onMounted(async () => {
 }
 .sd-create-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
 .sd-create-actions { display: flex; justify-content: flex-end; gap: var(--space-2, 8px); }
-.sd-files-loading { display: flex; align-items: center; gap: var(--space-2, 8px); color: var(--text-muted); font-size: var(--fs-sm, 12px); padding: 8px 0; }
+.sd-files-loading { display: flex; align-items: center; gap: var(--space-2, 8px); color: var(--muted); font-size: var(--fs-sm, 12px); padding: 8px 0; }
 
 /* ── Created token URL ───────────────────────────────────────────────────── */
 .sd-token-created {
@@ -1129,7 +983,7 @@ onMounted(async () => {
 .sd-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm, 12px); min-width: 560px; }
 .sd-table th {
   text-align: left; padding: 7px 10px; font-size: var(--fs-xs, 10px); font-weight: 700;
-  color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px;
+  color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
   border-bottom: 1px solid var(--glass-border); white-space: nowrap;
 }
 .sd-table td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.04); vertical-align: middle; }
@@ -1137,7 +991,7 @@ onMounted(async () => {
 .sd-cell-file { max-width: 220px; }
 .sd-file-name { color: var(--text-primary); font-size: var(--fs-sm, 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
 .sd-file-meta { display: flex; align-items: center; gap: 6px; margin-top: 2px; flex-wrap: wrap; }
-.sd-file-meta > span:first-child { color: var(--text-muted); font-size: 11px; }
+.sd-file-meta > span:first-child { color: var(--muted); font-size: 11px; }
 .sd-pw-icon { display: inline-flex; align-items: center; }
 .sd-note-tag {
   font-size: var(--fs-xs, 10px); color: var(--pl-light);
@@ -1147,7 +1001,7 @@ onMounted(async () => {
 }
 .sd-cell-mono { font-family: monospace; font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
 .sd-cell-actions { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
-.sd-muted { color: var(--text-muted); }
+.sd-muted { color: var(--muted); }
 
 /* ── Status badges ───────────────────────────────────────────────────────── */
 .sd-badge {
@@ -1160,13 +1014,13 @@ onMounted(async () => {
 .sd-badge--revoked  { background: rgba(239,68,68,.15);   color: #ef4444; border: 1px solid rgba(239,68,68,.3); }
 
 /* ── Transmission ────────────────────────────────────────────────────────── */
-.sd-tr-title-row { display: flex; align-items: center; }
+.sd-tr-title-row { display: flex; align-items: center; gap: 10px; }
 .sd-tr-row {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 0; border-bottom: 1px solid var(--glass-border); margin-bottom: 10px;
 }
 .sd-tr-group-label {
-  font-size: 11px; font-weight: 700; color: var(--text-muted);
+  font-size: 11px; font-weight: 700; color: var(--muted);
   text-transform: uppercase; letter-spacing: .5px;
   margin-top: 14px; margin-bottom: 6px;
 }
@@ -1188,7 +1042,7 @@ onMounted(async () => {
 .sd-toggle-thumb {
   position: absolute; top: 3px; left: 3px;
   width: 14px; height: 14px; border-radius: 50%;
-  background: var(--text-muted); transition: transform .2s, background .2s;
+  background: var(--muted); transition: transform .2s, background .2s;
 }
 .sd-toggle input:checked ~ .sd-toggle-track .sd-toggle-thumb {
   transform: translateX(16px); background: #fff;
@@ -1196,8 +1050,8 @@ onMounted(async () => {
 .sd-toggle--inline { align-items: center; margin-top: 8px; }
 
 /* ── Misc ────────────────────────────────────────────────────────────────── */
-.sd-loading { display: flex; align-items: center; gap: var(--space-2, 8px); color: var(--text-muted); font-size: 13px; padding: 16px 0; }
-.sd-empty   { color: var(--text-muted); font-size: 13px; padding: 16px 0; }
+.sd-loading { display: flex; align-items: center; gap: var(--space-2, 8px); color: var(--muted); font-size: 13px; padding: 16px 0; }
+.sd-empty   { color: var(--muted); font-size: 13px; padding: 16px 0; }
 
 /* ── Shared form classes (mirror SettingsSecurity) ───────────────────────── */
 .fields-grid {
@@ -1208,7 +1062,7 @@ onMounted(async () => {
 .field-group        { display: flex; flex-direction: column; gap: 5px; }
 .field-group--wide  { grid-column: 1 / -1; }
 .field-label        { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .4px; }
-.field-hint         { font-size: 11px; color: var(--text-muted); }
+.field-hint         { font-size: 11px; color: var(--muted); }
 .field-input {
   background: var(--glass-bg); border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm); padding: 7px 10px;
@@ -1240,5 +1094,5 @@ onMounted(async () => {
   border-top-color: currentColor; border-radius: 50%;
   animation: spin .7s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+
 </style>

@@ -79,7 +79,7 @@
         <div v-if="bfSaved" class="field-ok">{{ t('security.bruteforce_saved') }}</div>
 
         <div class="ss-actions">
-          <button class="action-btn action-btn--primary" :disabled="bfSaving" @click="saveBf">
+          <button class="action-btn action-btn--primary btn-save-action" :disabled="bfSaving" @click="saveBf">
             <span v-if="bfSaving" class="spinner" />
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
@@ -97,8 +97,8 @@
         <table v-else class="ss-table">
           <thead>
             <tr>
-              <th>IP Address</th>
-              <th>Remaining (s)</th>
+              <th>{{ t('security.ip_address') }}</th>
+              <th>{{ t('security.remaining_s') }}</th>
               <th></th>
             </tr>
           </thead>
@@ -274,7 +274,7 @@
 
         <div v-if="cvSaved" class="field-ok">{{ t('security.clamav_saved') }}</div>
         <div class="ss-actions">
-          <button class="action-btn action-btn--primary" :disabled="cvConfigSaving" @click="saveCvConfig">
+          <button class="action-btn action-btn--primary btn-save-action" :disabled="cvConfigSaving" @click="saveCvConfig">
             <span v-if="cvConfigSaving" class="spinner" />
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
@@ -365,7 +365,7 @@
         <!-- Scan history -->
         <div class="ss-subsection-title">{{ t('security.scan_history') }}</div>
         <div v-if="cvScansLoading" class="ss-loading"><span class="spinner" /> {{ t('common.loading') }}</div>
-        <div v-else-if="cvScans.length === 0" class="ss-empty">No scans yet.</div>
+        <div v-else-if="cvScans.length === 0" class="ss-empty">{{ t('security.no_scans') }}</div>
         <table v-else class="ss-table">
           <thead>
             <tr>
@@ -421,7 +421,7 @@
                 <div class="cv-q-origpath">{{ q.original_path }}</div>
               </td>
               <td class="cv-q-threat">{{ q.threat }}</td>
-              <td class="td-mono">{{ q.file_size ? formatSize(q.file_size) : '-' }}</td>
+              <td class="td-mono">{{ q.file_size ? formatBytes(q.file_size) : '-' }}</td>
               <td class="td-time">{{ formatTime(q.created_at) }}</td>
               <td class="cv-q-actions">
                 <button
@@ -527,7 +527,7 @@
 
         <div v-if="netSaved" class="field-ok">{{ t('security.network_saved') }}</div>
         <div class="ss-actions">
-          <button class="action-btn action-btn--primary" :disabled="netSaving" @click="saveNet">
+          <button class="action-btn action-btn--primary btn-save-action" :disabled="netSaving" @click="saveNet">
             <span v-if="netSaving" class="spinner" />
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
@@ -574,7 +574,7 @@
           </label>
         </div>
         <div class="ss-actions">
-          <button class="action-btn action-btn--primary" :disabled="netRegSaving" @click="saveRegistration">
+          <button class="action-btn action-btn--primary btn-save-action" :disabled="netRegSaving" @click="saveRegistration">
             <span v-if="netRegSaving" class="spinner" />
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
@@ -620,7 +620,7 @@
                 :disabled="sessionLifetimeSaving"
               >{{ opt.label }}</button>
             </div>
-            <span v-if="sessionLifetimeSaved" class="field-ok" style="margin-left:10px;">Saved</span>
+            <span v-if="sessionLifetimeSaved" class="field-ok" style="margin-left:10px;">{{ t('security.saved') }}</span>
           </div>
         </div>
         <div class="ss-hint-note">
@@ -713,7 +713,7 @@
         </div>
 
         <div v-if="emailError" class="field-server-error">{{ emailError }}</div>
-        <div v-if="emailSaved" class="field-ok">Alert settings saved.</div>
+        <div v-if="emailSaved" class="field-ok">{{ t('security.alerts_saved') }}</div>
         <div v-if="emailTestOk" class="field-ok">{{ t('security.test_email_ok') }}</div>
         <div v-if="emailTestErr" class="field-server-error">{{ emailTestErr }}</div>
 
@@ -722,7 +722,7 @@
             <span v-if="emailTesting" class="spinner" />
             {{ t('security.send_test_email') }}
           </button>
-          <button class="action-btn action-btn--primary" :disabled="emailSaving" @click="saveEmail">
+          <button class="action-btn action-btn--primary btn-save-action" :disabled="emailSaving" @click="saveEmail">
             <span v-if="emailSaving" class="spinner" />
             {{ t('common.save') }}
           </button>
@@ -796,7 +796,7 @@
             <span v-if="reportSending" class="spinner" />
             {{ t('security.send_now') }}
           </button>
-          <button class="action-btn action-btn--primary" :disabled="reportSaving" @click="saveReport">
+          <button class="action-btn action-btn--primary btn-save-action" :disabled="reportSaving" @click="saveReport">
             <span v-if="reportSaving" class="spinner" />
             {{ t('common.save') }}
           </button>
@@ -842,7 +842,7 @@
           </div>
           <div class="sr-stat-card">
             <div class="sr-stat-label">{{ t('security.data_transferred') }}</div>
-            <div class="sr-stat-value">{{ fmtBytes(previewData.downloads_bytes) }}</div>
+            <div class="sr-stat-value">{{ formatBytes(previewData.downloads_bytes) }}</div>
           </div>
           <div class="sr-stat-card">
             <div class="sr-stat-label">{{ t('security.threats_detected') }}</div>
@@ -1065,7 +1065,7 @@
         <div v-if="ssoError" class="field-server-error">{{ ssoError }}</div>
         <div v-if="ssoSaved" class="field-ok">{{ t('security.sso_saved') }}</div>
         <div class="ss-actions" style="margin-top:12px;">
-          <button class="action-btn action-btn--primary" :disabled="ssoSaving" @click="saveSso">
+          <button class="action-btn action-btn--primary btn-save-action" :disabled="ssoSaving" @click="saveSso">
             <span v-if="ssoSaving" class="spinner" />
             {{ t('common.save') }}
           </button>
@@ -1174,6 +1174,8 @@ import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
 import { useDialog } from '@/composables/useDialog'
+import { formatBytes, formatDateTime, uiLocale } from '@/utils/format'
+const formatTime = (iso: string | null | undefined) => formatDateTime(iso, '-')
 
 const { gdConfirm, gdAlert } = useDialog()
 
@@ -1244,7 +1246,7 @@ async function saveBf() {
     bfSaved.value = true
     setTimeout(() => { bfSaved.value = false }, 3000)
   } catch (e: any) {
-    bfError.value = e?.response?.data?.detail || 'Failed to save.'
+    bfError.value = e?.response?.data?.detail || t('common.save_failed')
   } finally {
     bfSaving.value = false
   }
@@ -1257,7 +1259,7 @@ async function unban(ip: string) {
     await client.delete(`/settings/security/banned-ips/${encodeURIComponent(ip)}`)
     await loadBanned()
   } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Failed to unban.', { title: 'Error', danger: true })
+    await gdAlert(e?.response?.data?.detail || t('security.unban_failed'), { title: 'Error', danger: true })
   }
 }
 
@@ -1300,22 +1302,10 @@ async function confirmClearAudit() {
     await client.delete('/settings/security/audit-log')
     await loadAudit(0)
   } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Failed to clear.', { title: 'Error', danger: true })
+    await gdAlert(e?.response?.data?.detail || t('common.clear_failed'), { title: 'Error', danger: true })
   }
 }
 
-function getLocale(): string {
-  return localStorage.getItem('gd3_locale') || navigator.language || 'en'
-}
-
-function formatTime(iso: string | null): string {
-  if (!iso) return '-'
-  try {
-    return new Date(iso).toLocaleString(getLocale())
-  } catch {
-    return iso
-  }
-}
 
 // Action badge icons
 function actionIcon(action: string) {
@@ -1458,7 +1448,7 @@ async function updateDefinitions() {
   try {
     await client.post('/settings/security/clamav/update-definitions')
   } catch (e: any) {
-    cvUpdateLog.value.push({ msg: e?.response?.data?.detail || 'Request failed', status: 'error' })
+    cvUpdateLog.value.push({ msg: e?.response?.data?.detail || t('common.request_failed'), status: 'error' })
     cvUpdating.value = false
   }
   // Progress comes via Socket.IO: clamav:update_progress
@@ -1479,7 +1469,7 @@ async function startScan() {
     }).then(r => r.data)
     cvActiveScanId.value = data.scan_id
   } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Failed to start scan.', { title: 'Scan Error', danger: true })
+    await gdAlert(e?.response?.data?.detail || t('security.scan_start_failed'), { title: 'Scan Error', danger: true })
     cvScanning.value = false
   }
 }
@@ -1513,7 +1503,7 @@ async function restoreQuarantine(id: number) {
     await loadQuarantine()
     await gdAlert(`File restored to:\n${data.restored_to}`, { title: 'Restored', confirmText: 'OK' })
   } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Restore failed.', { title: 'Error', danger: true })
+    await gdAlert(e?.response?.data?.detail || t('metadata.restore_failed'), { title: 'Error', danger: true })
   }
 }
 
@@ -1523,16 +1513,10 @@ async function deleteQuarantine(id: number, filename: string) {
     await client.delete(`/settings/security/clamav/quarantine/${id}`)
     await loadQuarantine()
   } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Delete failed.', { title: 'Error', danger: true })
+    await gdAlert(e?.response?.data?.detail || t('common.delete_failed'), { title: 'Error', danger: true })
   }
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
 
 function cvScanStatusClass(status: string) {
   if (status === 'complete') return 'status-badge--ok'
@@ -1578,17 +1562,6 @@ interface NetConfig {
   public_base_url:      string
 }
 
-interface InviteCode {
-  id:         number
-  code:       string
-  created_by: string | null
-  note:       string | null
-  max_uses:   number
-  use_count:  number
-  expires_at: string | null
-  is_active:  boolean
-}
-
 const net = reactive<NetConfig & { registration_mode: string }>({
   trusted_proxies:      '',
   ip_allowlist_enabled: false,
@@ -1603,13 +1576,6 @@ const netSaving     = ref(false)
 const netSaved      = ref(false)
 const netRegSaving  = ref(false)
 const netRegSaved   = ref(false)
-
-const invites        = ref<InviteCode[]>([])
-const inviteLoading  = ref(false)
-const inviteCreating = ref(false)
-const inviteCopied   = ref(false)
-
-const newInvite = reactive({ max_uses: 1, expires_in_hours: null as number | null, note: '' })
 
 async function loadNet() {
   netLoading.value = true
@@ -1658,54 +1624,6 @@ async function saveRegistration() {
     setTimeout(() => { netRegSaved.value = false }, 3000)
   } catch { /* ignore */ } finally {
     netRegSaving.value = false
-  }
-}
-
-async function loadInvites() {
-  inviteLoading.value = true
-  try {
-    invites.value = await client.get('/settings/security/network/invites').then(r => r.data)
-  } catch { /* ignore */ } finally {
-    inviteLoading.value = false
-  }
-}
-
-async function createInvite() {
-  inviteCreating.value = true
-  try {
-    await client.post('/settings/security/network/invites', {
-      max_uses:        newInvite.max_uses,
-      expires_in_hours: newInvite.expires_in_hours || null,
-      note:            newInvite.note || null,
-    })
-    newInvite.max_uses = 1
-    newInvite.expires_in_hours = null
-    newInvite.note = ''
-    await loadInvites()
-  } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Failed to create invite code.', { title: 'Error', danger: true })
-  } finally {
-    inviteCreating.value = false
-  }
-}
-
-async function deleteInvite(id: number) {
-  if (!await gdConfirm('Delete this invite code?', { title: 'Delete Invite', danger: true, confirmText: 'Delete' })) return
-  try {
-    await client.delete(`/settings/security/network/invites/${id}`)
-    await loadInvites()
-  } catch (e: any) {
-    await gdAlert(e?.response?.data?.detail || 'Failed to delete.', { title: 'Error', danger: true })
-  }
-}
-
-async function copyInviteCode(code: string) {
-  try {
-    await navigator.clipboard.writeText(code)
-    inviteCopied.value = true
-    setTimeout(() => { inviteCopied.value = false }, 2500)
-  } catch {
-    await gdAlert(`Could not access clipboard.\n\nYour invite code:\n${code}`, { title: 'Copy Code', confirmText: 'Close' })
   }
 }
 
@@ -1763,7 +1681,7 @@ async function saveEmail() {
     emailSaved.value = true
     setTimeout(() => { emailSaved.value = false }, 3000)
   } catch (e: any) {
-    emailError.value = e?.response?.data?.detail || 'Failed to save alert settings.'
+    emailError.value = e?.response?.data?.detail || t('security.alerts_save_failed')
   } finally {
     emailSaving.value = false
   }
@@ -1872,7 +1790,7 @@ async function saveSso() {
     ssoSaved.value = true
     setTimeout(() => { ssoSaved.value = false }, 3000)
   } catch (e: any) {
-    ssoError.value = e?.response?.data?.detail || 'Failed to save SSO settings.'
+    ssoError.value = e?.response?.data?.detail || t('security.sso_save_failed')
   } finally {
     ssoSaving.value = false
   }
@@ -1901,15 +1819,6 @@ const reportSentErr  = ref('')
 const previewLoading = ref(false)
 const previewData    = ref<PreviewData | null>(null)
 
-function fmtBytes(n: number): string {
-  const units = ['B','KB','MB','GB','TB']
-  let v = n
-  for (const u of units) {
-    if (v < 1024) return `${v.toFixed(1)} ${u}`
-    v /= 1024
-  }
-  return `${v.toFixed(1)} PB`
-}
 
 async function loadReport() {
   reportLoading.value = true
@@ -1918,7 +1827,7 @@ async function loadReport() {
     reportCfg.enabled   = r.data.enabled
     reportCfg.frequency = r.data.frequency
     if (r.data.last_sent) {
-      reportLastSent.value = new Date(r.data.last_sent).toLocaleString(getLocale())
+      reportLastSent.value = new Date(r.data.last_sent).toLocaleString(uiLocale())
     }
   } catch { /* ignore */ } finally {
     reportLoading.value = false
@@ -1948,7 +1857,7 @@ async function saveReport() {
     reportSaved.value = true
     setTimeout(() => { reportSaved.value = false }, 3000)
   } catch (e: any) {
-    reportError.value = e?.response?.data?.detail || 'Failed to save report settings.'
+    reportError.value = e?.response?.data?.detail || t('security.report_save_failed')
   } finally {
     reportSaving.value = false
   }
@@ -1961,10 +1870,10 @@ async function sendReportNow() {
   try {
     await client.post('/settings/security/report/send-now')
     reportSentOk.value = true
-    reportLastSent.value = new Date().toLocaleString(getLocale())
+    reportLastSent.value = new Date().toLocaleString(uiLocale())
     setTimeout(() => { reportSentOk.value = false }, 5000)
   } catch (e: any) {
-    reportSentErr.value = e?.response?.data?.detail || 'Failed to send report.'
+    reportSentErr.value = e?.response?.data?.detail || t('security.report_send_failed')
     setTimeout(() => { reportSentErr.value = '' }, 8000)
   } finally {
     reportSending.value = false
@@ -1974,7 +1883,7 @@ async function sendReportNow() {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 onMounted(async () => {
-  await Promise.all([loadBf(), loadBanned(), loadAudit(0), loadCvStatus(), loadCvScans(), loadQuarantine(), loadNet(), loadInvites(), loadEmail(), loadSso(), loadReport(), loadSessionLifetime()])
+  await Promise.all([loadBf(), loadBanned(), loadAudit(0), loadCvStatus(), loadCvScans(), loadQuarantine(), loadNet(), loadEmail(), loadSso(), loadReport(), loadSessionLifetime()])
 
   // Register Socket.IO listeners
   socketStore.connect()
@@ -2107,7 +2016,7 @@ onUnmounted(() => {
   border-color: #a78bfa; background: rgba(167,139,250,.08);
 }
 .sso-mode-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; }
-.sso-mode-desc  { font-size: 11px; color: var(--text-muted); }
+.sso-mode-desc  { font-size: 11px; color: var(--muted); }
 
 .sso-provider-card {
   margin-top: 12px;
@@ -2125,7 +2034,7 @@ onUnmounted(() => {
   display: flex; align-items: center; gap: var(--space-2, 8px);
   font-size: 13px; font-weight: 600; color: var(--text-primary);
 }
-.sso-provider-hint { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+.sso-provider-hint { font-size: 11px; font-weight: 400; color: var(--muted); }
 .sso-provider-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
@@ -2133,7 +2042,7 @@ onUnmounted(() => {
 .sso-dot--off { background: #444; }
 .sso-provider-fields { padding: 14px; border-top: 1px solid var(--glass-border); }
 .sso-callback-info {
-  margin-top: 10px; font-size: 11px; color: var(--text-muted);
+  margin-top: 10px; font-size: 11px; color: var(--muted);
 }
 .sso-callback-info code {
   font-family: monospace; font-size: 11px;
@@ -2142,7 +2051,7 @@ onUnmounted(() => {
 }
 .sso-note {
   margin-top: 14px; display: flex; align-items: flex-start; gap: var(--space-2, 8px);
-  font-size: var(--fs-sm, 12px); color: var(--text-muted); line-height: 1.5;
+  font-size: var(--fs-sm, 12px); color: var(--muted); line-height: 1.5;
   padding: 10px 12px;
   background: rgba(255,255,255,.02); border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
@@ -2151,10 +2060,10 @@ onUnmounted(() => {
 
 /* Security Report */
 .sr-last-sent {
-  font-size: var(--fs-sm, 12px); color: var(--text-muted); margin-bottom: 4px;
+  font-size: var(--fs-sm, 12px); color: var(--muted); margin-bottom: 4px;
 }
 .sr-preview-title {
-  font-size: 11px; font-weight: 700; color: var(--text-muted);
+  font-size: 11px; font-weight: 700; color: var(--muted);
   text-transform: uppercase; letter-spacing: .5px;
   margin-top: 18px; margin-bottom: 10px;
   display: flex; align-items: center; gap: 10px;
@@ -2171,7 +2080,7 @@ onUnmounted(() => {
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
 }
-.sr-stat-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+.sr-stat-label { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
 .sr-stat-value { font-size: 20px; font-weight: 700; color: var(--text-primary); font-family: monospace; }
 .sr-stat--green { color: #4ade80; }
 .sr-stat--amber { color: #fbbf24; }
@@ -2403,7 +2312,6 @@ onUnmounted(() => {
 .cv-infected-count { color: #fca5a5; font-weight: 700; }
 .cv-clean-count    { color: var(--muted); }
 
-
 /* Sessions / Session Lifetime */
 .session-lifetime-chips {
   display: flex;
@@ -2471,28 +2379,6 @@ onUnmounted(() => {
   width: 13px; height: 13px; border-radius: 50%;
   border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
   animation: spin .7s linear infinite; display: inline-block; flex-shrink: 0;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* Invite codes */
-.cv-invite-create {
-  display: flex; flex-direction: column; gap: 10px;
-  padding: 12px 14px; border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm); background: rgba(255,255,255,.03);
-}
-.cv-invite-fields {
-  display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;
-}
-.cv-invite-fields .field-group { min-width: 100px; }
-.cv-invite-code {
-  display: inline-block; padding: 2px 8px; border-radius: var(--radius-sm);
-  background: rgba(139,92,246,.15); border: 1px solid rgba(139,92,246,.3);
-  color: #c4b5fd; font-size: var(--fs-sm, 12px); font-family: monospace;
-  cursor: pointer; transition: background var(--transition), border-color var(--transition);
-  user-select: all;
-}
-.cv-invite-code:hover {
-  background: rgba(139,92,246,.28); border-color: rgba(139,92,246,.55);
 }
 
 /* Email alerts */

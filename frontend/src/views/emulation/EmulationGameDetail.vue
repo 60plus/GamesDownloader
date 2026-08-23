@@ -51,7 +51,6 @@
               :style="{ transform: coverTilt, aspectRatio: coverAspect }"
               @mousemove="onCoverMove"
               @mouseleave="onCoverLeave"
-              @mouseenter="onCoverEnter"
             >
               <img
                 v-if="!coverFailed && rom.cover_path"
@@ -571,6 +570,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import client from '@/services/api/client'
 import { useDialog } from '@/composables/useDialog'
+import { useCoverTilt } from '@/composables/useCoverTilt'
+const { coverTilt, sheenStyle, onCoverMove, onCoverLeave } = useCoverTilt()
 import { useI18n } from '@/i18n'
 import EmulationRomMetadataPanel from './EmulationRomMetadataPanel.vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
@@ -578,6 +579,8 @@ import { resolveDetailRows } from '@/themes/index'
 import HeroBackground from '@/components/common/HeroBackground.vue'
 import { getEjsCore } from '@/utils/ejsCores'
 import { ratingVal } from '@/utils/rating'
+import { formatBytes } from '@/utils/format'
+const formatSize = (b: number | null | undefined) => formatBytes(b, '-')
 
 const { gdConfirm, gdAlert } = useDialog()
 const { t } = useI18n()
@@ -831,25 +834,7 @@ const coverAspect = computed(() => {
 })
 
 // ── 3D tilt ────────────────────────────────────────────────────────────────────
-const coverTilt  = ref('perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)')
-const sheenStyle = ref('')
 
-function onCoverEnter() { /* active on mousemove */ }
-function onCoverMove(e: MouseEvent) {
-  const el = e.currentTarget as HTMLElement
-  const rect = el.getBoundingClientRect()
-  const cx = rect.width / 2, cy = rect.height / 2
-  const dx = e.clientX - rect.left - cx, dy = e.clientY - rect.top - cy
-  const rotY = (dx / cx) * 10, rotX = -(dy / cy) * 7
-  coverTilt.value = `perspective(800px) rotateX(${rotX}deg) rotateY(${rotY}deg) scale3d(1.03,1.03,1.03)`
-  const mx = ((e.clientX - rect.left) / rect.width  * 100).toFixed(1)
-  const my = ((e.clientY - rect.top)  / rect.height * 100).toFixed(1)
-  sheenStyle.value = `opacity:1; background: radial-gradient(ellipse at ${mx}% ${my}%, rgba(255,255,255,0.22) 0%, transparent 65%);`
-}
-function onCoverLeave() {
-  coverTilt.value  = 'perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)'
-  sheenStyle.value = 'opacity:0;'
-}
 
 // ── Carousel ───────────────────────────────────────────────────────────────────
 function slideTo(idx: number) {
@@ -981,13 +966,6 @@ function fmtHltb(s: number): string {
   return `${m}m`
 }
 
-function formatSize(bytes: number): string {
-  if (!bytes) return '-'
-  if (bytes < 1024)       return `${bytes} B`
-  if (bytes < 1024 ** 2)  return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 ** 3)  return `${(bytes / 1024 ** 2).toFixed(1)} MB`
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
-}
 
 // Handle postMessage from player iframe
 function onPlayerMessage(e: MessageEvent) {
@@ -1034,7 +1012,6 @@ onUnmounted(() => {
 .sk-line--lg { width: 55%; }
 .sk-line--md { width: 42%; }
 .sk-line--sm { width: 28%; }
-@keyframes shimmer { to { background-position: -400% 0; } }
 
 /* ══ EMPTY ═════════════════════════════════════════════════════════════════════ */
 .gd-empty {
@@ -1340,7 +1317,6 @@ onUnmounted(() => {
 .gd-disk-dl { padding: 4px 7px; border-left: 1px solid color-mix(in srgb, var(--pl) 26%, transparent); color: rgba(255,255,255,.5); }
 
 .spin { animation: gd-spin .8s linear infinite; }
-@keyframes gd-spin { to { transform: rotate(360deg); } }
 
 /* ══ SEPARATOR ═════════════════════════════════════════════════════════════════ */
 .gd-separator { height: 1px; background: linear-gradient(to right, transparent, rgba(255,255,255,.07) 30%, rgba(255,255,255,.07) 70%, transparent); }

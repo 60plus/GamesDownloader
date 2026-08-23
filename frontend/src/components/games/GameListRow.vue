@@ -118,11 +118,11 @@
     <!-- Right column: the blended star first, then each source's own mark -->
     <div class="list-right">
       <div v-if="game.rating_agg || game.rating || game.meta_ratings?.rawg || game.meta_ratings?.igdb || game.meta_ratings?.steam" class="list-scores">
-        <div v-if="game.rating_agg" class="list-score" title="Rating">
+        <div v-if="game.rating_agg" class="list-score" :title="t('library.rating')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg>
           {{ ratingVal(game.rating_agg).toFixed(1) }}
         </div>
-        <div v-if="isGogRating && game.rating" class="list-score" title="GOG Rating">
+        <div v-if="isGogRating && game.rating" class="list-score" :title="t('meta.gog_rating')">
           <img src="/icons/gog.ico" alt="GOG" class="list-primary-ico" />
           {{ ratingVal(game.rating).toFixed(1) }}
         </div>
@@ -228,18 +228,27 @@ function onCardEnter(e: MouseEvent) {
   ;(e.currentTarget as HTMLElement).querySelector<HTMLElement>('.cover-img-wrap')?.classList.add('glow-active')
 }
 function onCardMove(e: MouseEvent) {
-  if (!themeStore.cardTilt && !themeStore.cardShine) return
+  if (!themeStore.cardTilt && !themeStore.cardShine && !themeStore.cardLift && !themeStore.cardZoom) return
   const el = e.currentTarget as HTMLElement
   const imgWrap = el.querySelector<HTMLElement>('.cover-img-wrap')
   if (!imgWrap) return
   const rect = imgWrap.getBoundingClientRect()
+
+  // Same ladder as the grids: tilt, else lift, else zoom. A row used to lean
+  // or do nothing, so Card lift and Card zoom were dead in every list view.
+  let transform = ''
   if (themeStore.cardTilt) {
     const cx = rect.width / 2, cy = rect.height / 2
     const dx = e.clientX - rect.left - cx, dy = e.clientY - rect.top - cy
     const ry = (dx / cx) * 8, rx = -(dy / cy) * 5
-    const zoom = themeStore.cardZoom ? 'scale3d(1.03,1.03,1.03)' : ''
-    imgWrap.style.transform = `perspective(600px) rotateX(${rx}deg) rotateY(${ry}deg) ${zoom}`
+    const scale = themeStore.cardZoom ? 1.04 : (themeStore.cardLift ? 1.01 : 1)
+    transform = `perspective(600px) rotateX(${rx}deg) rotateY(${ry}deg) scale3d(${scale},${scale},${scale})`
+  } else if (themeStore.cardLift) {
+    transform = 'translateY(-2px) scale(1.04)'
+  } else if (themeStore.cardZoom) {
+    transform = 'scale(1.04)'
   }
+  if (transform) imgWrap.style.transform = transform
   const sheen = imgWrap.querySelector<HTMLElement>('.cover-sheen')
   if (sheen && themeStore.cardShine) {
     const mx = ((e.clientX - rect.left) / rect.width * 100).toFixed(1)
@@ -337,9 +346,7 @@ function onCardLeave(e: MouseEvent) {
 .list-hero-img--kenburns { animation: list-kb calc(44s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite; }
 .list-hero-img--drift { animation: list-drift calc(30s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite; }
 .list-hero-img--pulse { animation: list-pulse calc(10s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite; }
-@keyframes list-kb { 0% { transform: scale(1.05) translateX(0); } 50% { transform: scale(1.12) translateX(-3%); } 100% { transform: scale(1.05) translateX(0); } }
-@keyframes list-drift { 0% { transform: translateX(0) scale(1.04); } 50% { transform: translateX(-4%) scale(1.04); } 100% { transform: translateX(0) scale(1.04); } }
-@keyframes list-pulse { 0%,100% { transform: scale(1.02); } 50% { transform: scale(1.08); } }
+
 [data-animations="false"] .list-hero-img--kenburns,
 [data-animations="false"] .list-hero-img--drift,
 [data-animations="false"] .list-hero-img--pulse { animation: none; }

@@ -68,6 +68,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "@/i18n";
 import { useSocketStore } from "@/stores/socket";
 import dashboardActions, { type DownloadQueueItem, type UploadItem, type SeedItem } from "@/lib/dashboardActions";
+import { formatBytes as fmtBytes } from '@/utils/format'
 
 const { t } = useI18n();
 const socketStore = useSocketStore();
@@ -85,12 +86,6 @@ function apply(q: { downloads?: DownloadQueueItem[]; uploads?: UploadItem[]; see
   seeding.value = q.seeding || [];
 }
 
-function fmtBytes(n: number): string {
-  if (!n) return "0 B";
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
-  return (n / Math.pow(1024, i)).toFixed(i ? 1 : 0) + " " + u[i];
-}
 function fmtEta(sec: number): string {
   if (!sec || sec < 0) return "-";
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;

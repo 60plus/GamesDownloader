@@ -264,7 +264,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import client from '@/services/api/client'
 import { useDialog } from '@/composables/useDialog'
@@ -391,7 +391,7 @@ async function setCoverType(ct: string) {
     actionMsg.value = `Cover preset set to ${ct} - re-scrape to apply`
     setTimeout(() => { actionMsg.value = '' }, 3500)
   } catch (e: any) {
-    actionMsg.value = e?.response?.data?.detail || 'Failed to save preset'
+    actionMsg.value = e?.response?.data?.detail || t('roms.preset_save_failed')
   }
 }
 
@@ -450,24 +450,44 @@ function prevPage() {
 
 // ── Admin actions ─────────────────────────────────────────────────────────────
 
+let scanPoll: ReturnType<typeof setInterval> | null = null
+function stopScanPoll() {
+  if (scanPoll) clearInterval(scanPoll)
+  scanPoll = null
+}
+
+onUnmounted(stopScanPoll)
+
 async function triggerScan() {
   scanning.value = true; actionMsg.value = ''
   try {
     await client.post('/roms/scan')
-    actionMsg.value = 'Scanning ROMs…'
-    const poll = setInterval(async () => {
+    actionMsg.value = t('roms.scanning')
+    // See EmulationHome: a local handle cleared only on success left a poll
+    // running after the component was gone, and an endpoint that kept failing
+    // left the button stuck on "Scanning...".
+    stopScanPoll()
+    let misses = 0
+    scanPoll = setInterval(async () => {
       try {
         const { data } = await client.get('/roms/scan/status')
+        misses = 0
         if (!data.running) {
-          clearInterval(poll)
+          stopScanPoll()
           await fetchPlatform(); await fetchRoms()
           actionMsg.value = ''
           scanning.value = false
         }
-      } catch { /* ignore */ }
+      } catch {
+        if (++misses >= 5) {
+          stopScanPoll()
+          actionMsg.value = t('common.scan_failed')
+          scanning.value = false
+        }
+      }
     }, 2000)
   } catch (e: any) {
-    actionMsg.value = e?.response?.data?.detail || 'Scan failed'
+    actionMsg.value = e?.response?.data?.detail || t('common.scan_failed')
     scanning.value = false
   }
 }
@@ -479,7 +499,7 @@ async function triggerScrape() {
     actionMsg.value = `Scraping ${data.queued} ROMs in background…`
     setTimeout(() => { actionMsg.value = '' }, 4000)
   } catch (e: any) {
-    actionMsg.value = e?.response?.data?.detail || 'Scrape failed'
+    actionMsg.value = e?.response?.data?.detail || t('common.scrape_failed')
   } finally {
     scraping.value = false
   }
@@ -489,10 +509,10 @@ async function fetchPlatformInfo() {
   fetchingInfo.value = true; actionMsg.value = ''
   try {
     await client.post(`/roms/platforms/${platformSlug.value}/scrape-platform`)
-    actionMsg.value = 'Fetching platform info in background… reload in a few seconds.'
+    actionMsg.value = t('roms.platform_bg')
     setTimeout(async () => { await fetchPlatform(); actionMsg.value = '' }, 5000)
   } catch (e: any) {
-    actionMsg.value = e?.response?.data?.detail || 'Fetch failed'
+    actionMsg.value = e?.response?.data?.detail || t('common.fetch_failed')
   } finally {
     fetchingInfo.value = false
   }
@@ -507,7 +527,7 @@ async function onClearPlatformMetadata() {
     await fetchRoms()
     setTimeout(() => { actionMsg.value = '' }, 4000)
   } catch (e: any) {
-    actionMsg.value = e?.response?.data?.detail || 'Clear failed'
+    actionMsg.value = e?.response?.data?.detail || t('common.clear_failed')
   } finally {
     clearingAll.value = false
   }
@@ -914,7 +934,7 @@ onMounted(async () => {
   border: 2px solid rgba(255,255,255,.15); border-top-color: var(--pl-light);
   animation: spin .8s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+
 .spin { animation: spin .8s linear infinite; }
 
 /* ── Mobile ────────────────────────────────────────────────────────────────── */

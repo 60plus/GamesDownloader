@@ -305,6 +305,8 @@ import GameSavesPanel from "@/components/GameSavesPanel.vue";
 import DashRequests from "@/components/DashRequests.vue";
 import DashCoverStrip from "@/components/DashCoverStrip.vue";
 import DashDownloadQueue from "@/components/DashDownloadQueue.vue";
+import { formatBytes as fmtBytes, formatDateShort } from '@/utils/format'
+const fmtDate = (iso: string | null | undefined) => formatDateShort(iso, "")
 
 interface Card { id: string; title: string; value?: unknown; subtitle?: string; icon?: string; link?: string; }
 type PeriodKey = "24h" | "7d" | "30d" | "custom";
@@ -453,18 +455,7 @@ const avClass = computed(() => {
   return a.running ? "ok" : "warn";
 });
 
-function fmtBytes(n: number): string {
-  if (!n) return "0 B";
-  const u = ["B", "KB", "MB", "GB", "TB", "PB"];
-  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
-  return (n / Math.pow(1024, i)).toFixed(i ? 1 : 0) + " " + u[i];
-}
 function fmtSpeed(bps: number): string { return fmtBytes(bps) + "/s"; }
-function fmtDate(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? "" : d.toLocaleDateString();
-}
 function pct(v: number, max: number): string { return (max > 0 ? Math.max(3, Math.round((v / max) * 100)) : 0) + "%"; }
 function seriesTotal(s: DaySample[]): number { return s.reduce((a, d) => a + (d.count || 0), 0); }
 function seriesBytes(s: DaySample[]): number { return s.reduce((a, d) => a + (d.bytes || 0), 0); }

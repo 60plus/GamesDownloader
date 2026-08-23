@@ -10,6 +10,10 @@
 
 import { reactive } from 'vue'
 
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
+
 export interface DialogOptions {
   title?:       string
   danger?:      boolean   // red confirm button
@@ -52,11 +56,11 @@ export function useDialog() {
     return new Promise(resolve => {
       dialogState.visible     = true
       dialogState.type        = 'confirm'
-      dialogState.title       = opts.title       ?? 'Confirm'
+      dialogState.title       = opts.title       ?? t('common.confirm')
       dialogState.message     = message
       dialogState.danger      = opts.danger      ?? false
-      dialogState.confirmText = opts.confirmText ?? 'Confirm'
-      dialogState.cancelText  = opts.cancelText  ?? 'Cancel'
+      dialogState.confirmText = opts.confirmText ?? t('common.confirm')
+      dialogState.cancelText  = opts.cancelText  ?? t('common.cancel')
       // Always assigned, never left as it was: the state is a singleton, so a
       // picture from an earlier dialog would otherwise sit above an unrelated
       // question.
@@ -69,10 +73,10 @@ export function useDialog() {
     return new Promise(resolve => {
       dialogState.visible     = true
       dialogState.type        = 'alert'
-      dialogState.title       = opts.title       ?? 'Notice'
+      dialogState.title       = opts.title       ?? t('common.notice')
       dialogState.message     = message
       dialogState.danger      = opts.danger      ?? false
-      dialogState.confirmText = opts.confirmText ?? 'OK'
+      dialogState.confirmText = opts.confirmText ?? t('common.ok')
       dialogState.cancelText  = ''
       dialogState.image       = opts.image       ?? ''
       dialogState.resolve     = (v) => resolve()

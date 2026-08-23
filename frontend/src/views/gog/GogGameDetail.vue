@@ -50,7 +50,6 @@
               :style="{ transform: coverTilt, willChange: 'transform' }"
               @mousemove="onCoverMove"
               @mouseleave="onCoverLeave"
-              @mouseenter="onCoverEnter"
             >
               <img
                 v-if="!coverFailed && (game.cover_path || game.cover_url)"
@@ -68,7 +67,7 @@
               <div class="gd-cover-sheen" :style="sheenStyle" />
               <div v-if="game.is_downloaded" class="gd-owned-chip">
                 <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                OWNED
+                {{ t('library.owned') }}
               </div>
             </div>
           </div>
@@ -210,7 +209,7 @@
                     class="gd-btn-publish"
                     :disabled="publishLoading"
                     @click="() => publishToLibrary()"
-                    title="Re-sync files from disk into the Games Library"
+                    :title="t('detail.resync_hint')"
                   >
                     <svg v-if="publishLoading" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin">
                       <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
@@ -225,13 +224,13 @@
                     class="gd-btn-unpublish"
                     :disabled="publishLoading"
                     @click="unpublishFromLibrary"
-                    title="Remove this game from the Games Library"
+                    :title="t('detail.remove_from_library_hint')"
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                       <polyline points="3 6 5 6 21 6"/>
                       <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
                     </svg>
-                    Unpublish
+                    {{ t('detail.unpublish') }}
                   </button>
                   <!-- Beside Unpublish rather than instead of it: unpublishing
                        takes the copy out of the library and leaves what was
@@ -257,7 +256,7 @@
                   class="gd-btn-publish"
                   :disabled="publishLoading"
                   @click="() => publishToLibrary()"
-                  title="Publish this game to the Games Library"
+                  :title="t('detail.publish_hint')"
                 >
                   <svg v-if="publishLoading" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin">
                     <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
@@ -331,7 +330,7 @@
               >
                 <!-- Video slide: YouTube thumbnail + play button -->
                 <template v-if="slide.type === 'video'">
-                  <img :src="slide.src" class="gd-slide-video-thumb" alt="Trailer" loading="lazy"
+                  <img :src="slide.src" class="gd-slide-video-thumb" :alt="t('detail.trailer')" loading="lazy"
                     @error="(e) => ((e.target as HTMLImageElement).src = `https://img.youtube.com/vi/${slide.videoId}/hqdefault.jpg`)" />
                   <div class="gd-slide-play">
                     <svg width="26" height="26" viewBox="0 0 24 24" fill="white"><polygon points="5,3 19,12 5,21"/></svg>
@@ -458,7 +457,7 @@
                 </div>
               </template>
               <template v-if="(game.extras || []).length">
-                <span class="gd-dk">Extras</span>
+                <span class="gd-dk">{{ t('detail.type_extras') }}</span>
                 <div class="gd-dv">
                   <div v-for="ex in extrasVisible" :key="ex.name" class="gd-extra-row">
                     <span class="gd-extra-name">{{ ex.name }}</span>
@@ -470,7 +469,7 @@
                 </div>
               </template>
               <template v-if="game.hltb_main_s || game.hltb_complete_s">
-                <span class="gd-dk">Time to Beat</span>
+                <span class="gd-dk">{{ t('detail.time_to_beat') }}</span>
                 <span class="gd-dv" style="display:flex;flex-direction:column;gap:1px">
                   <span v-if="game.hltb_main_s">Main: {{ fmtHltb(game.hltb_main_s) }}</span>
                   <span v-if="game.hltb_complete_s">100%: {{ fmtHltb(game.hltb_complete_s) }}</span>
@@ -498,10 +497,8 @@
                 <template v-if="game.requirements?.minimum">
                   <div v-if="filterReqEntries(game.requirements.minimum).length" class="gd-req-card">
                     <div class="gd-req-card-title">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" class="gd-req-os-icon gd-req-os-icon--win">
-                        <path d="M3,12V6.75L9,5.43V11.91L3,12M20,3V11.76L11,12.97V5.38L20,3M3,13L9,13.18V19.83L3,18.35V13M20,13.21V21.72L11,20.5V13.12L20,13.21Z"/>
-                      </svg>
-                      Minimum
+                      <OsIcon os="win" />
+                      {{ t('meta.minimum') }}
                     </div>
                     <div class="gd-dlist">
                       <template v-for="[k, v] in filterReqEntries(game.requirements.minimum)" :key="k">
@@ -516,20 +513,12 @@
                   <template v-for="(osReq, idx) in game.requirements.per_os" :key="idx">
                     <div v-if="hasPerOsContent(osReq)" class="gd-req-card">
                       <div class="gd-req-card-title">
-                        <img v-if="reqOsType(osReq.type || osReq.system || '') === 'linux'"
-                          src="/icons/os-linux.svg" width="14" height="14" alt="Linux" class="gd-req-os-icon" />
-                        <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor" class="gd-req-os-icon"
-                          :class="reqOsType(osReq.type || osReq.system || '') === 'mac' ? 'gd-req-os-icon--mac' : 'gd-req-os-icon--win'"
-                        >
-                          <path v-if="reqOsType(osReq.type || osReq.system || '') === 'mac'"
-                            d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
-                          <path v-else d="M3,12V6.75L9,5.43V11.91L3,12M20,3V11.76L11,12.97V5.38L20,3M3,13L9,13.18V19.83L3,18.35V13M20,13.21V21.72L11,20.5V13.12L20,13.21Z"/>
-                        </svg>
-                        {{ (osReq.type || osReq.system || ('Platform ' + (idx + 1))) }}
+                        <OsIcon :os="reqOsType(osReq.type || osReq.system || '')" />
+                        {{ (osReq.type || osReq.system || (t('gogdl.platform') + ' ' + (idx + 1))) }}
                       </div>
                       <template v-if="osReq.minimum">
                         <template v-if="Array.isArray(osReq.minimum) && filterReqRequirements(osReq.minimum).length">
-                          <div class="gd-req-sub">Minimum</div>
+                          <div class="gd-req-sub">{{ t('meta.minimum') }}</div>
                           <div class="gd-dlist">
                             <template v-for="r in filterReqRequirements(osReq.minimum)" :key="r.id || r.name">
                               <span class="gd-dk">{{ formatReqKey(r.id || r.name) }}</span><span class="gd-dv">{{ r.description || r.value }}</span>
@@ -537,7 +526,7 @@
                           </div>
                         </template>
                         <template v-else-if="!Array.isArray(osReq.minimum) && filterReqEntries(osReq.minimum).length">
-                          <div class="gd-req-sub">Minimum</div>
+                          <div class="gd-req-sub">{{ t('meta.minimum') }}</div>
                           <div class="gd-dlist">
                             <template v-for="[k, v] in filterReqEntries(osReq.minimum)" :key="k">
                               <span class="gd-dk">{{ formatReqKey(k) }}</span><span class="gd-dv">{{ v }}</span>
@@ -565,19 +554,11 @@
                   <template v-for="(osReqs, osName) in game.requirements" :key="osName">
                     <div v-if="typeof osReqs === 'object' && hasOsReqContent(osReqs)" class="gd-req-card">
                       <div class="gd-req-card-title">
-                        <img v-if="reqOsType(String(osName)) === 'linux'"
-                          src="/icons/os-linux.svg" width="14" height="14" alt="Linux" class="gd-req-os-icon" />
-                        <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor" class="gd-req-os-icon"
-                          :class="reqOsType(String(osName)) === 'mac' ? 'gd-req-os-icon--mac' : 'gd-req-os-icon--win'"
-                        >
-                          <path v-if="reqOsType(String(osName)) === 'mac'"
-                            d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
-                          <path v-else d="M3,12V6.75L9,5.43V11.91L3,12M20,3V11.76L11,12.97V5.38L20,3M3,13L9,13.18V19.83L3,18.35V13M20,13.21V21.72L11,20.5V13.12L20,13.21Z"/>
-                        </svg>
+                        <OsIcon :os="reqOsType(String(osName))" />
                         {{ osName }}
                       </div>
                       <template v-if="osReqs.minimum && filterReqEntries(osReqs.minimum).length">
-                        <div class="gd-req-sub">Minimum</div>
+                        <div class="gd-req-sub">{{ t('meta.minimum') }}</div>
                         <div class="gd-dlist">
                           <template v-for="[k, v] in filterReqEntries(osReqs.minimum)" :key="k">
                             <span class="gd-dk">{{ formatReqKey(k) }}</span><span class="gd-dv">{{ v }}</span>
@@ -668,14 +649,11 @@
               <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
           </div>
-          <div class="gd-confirm-title">Refresh Metadata</div>
-          <div class="gd-confirm-body">
-            This game has ratings from external sources (RAWG / IGDB).<br/>
-            Do you also want to refresh them, or refresh GOG data only?
-          </div>
+          <div class="gd-confirm-title">{{ t('detail.refresh_metadata') }}</div>
+          <div class="gd-confirm-body">{{ t('detail.refresh_meta_body') }}</div>
           <div class="gd-confirm-actions">
-            <button class="gd-confirm-btn gd-confirm-btn--ghost" @click="scrapeGame(true)">GOG data only</button>
-            <button class="gd-confirm-btn gd-confirm-btn--primary" @click="scrapeGame(false)">Refresh everything</button>
+            <button class="gd-confirm-btn gd-confirm-btn--ghost" @click="scrapeGame(true)">{{ t('detail.gog_only') }}</button>
+            <button class="gd-confirm-btn gd-confirm-btn--primary" @click="scrapeGame(false)">{{ t('detail.refresh_all') }}</button>
           </div>
         </div>
       </div>
@@ -691,14 +669,14 @@
               <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
             </svg>
           </div>
-          <div class="gd-confirm-title">Clear Metadata?</div>
+          <div class="gd-confirm-title">{{ t('detail.clear_meta_title') }}</div>
           <div class="gd-confirm-body">
-            This will remove all scraped data for <strong>{{ game?.title }}</strong> - descriptions, covers, ratings, screenshots, system requirements and more.<br/>
-            The game will remain in your library. This cannot be undone.
+            {{ t('detail.clear_meta_body').split('{title}')[0] }}<strong>{{ game?.title }}</strong>{{ t('detail.clear_meta_body').split('{title}')[1] }}<br/>
+            {{ t('detail.clear_meta_warn') }}
           </div>
           <div class="gd-confirm-actions">
-            <button class="gd-confirm-btn gd-confirm-btn--ghost" @click="showClearDialog = false">Cancel</button>
-            <button class="gd-confirm-btn gd-confirm-btn--danger" @click="clearMetadata">Clear Metadata</button>
+            <button class="gd-confirm-btn gd-confirm-btn--ghost" @click="showClearDialog = false">{{ t('common.cancel') }}</button>
+            <button class="gd-confirm-btn gd-confirm-btn--danger" @click="clearMetadata">{{ t('detail.clear_metadata') }}</button>
           </div>
         </div>
       </div>
@@ -721,9 +699,13 @@ import { useNotifications } from '@/composables/useNotifications'
 import { useAuthStore } from '@/stores/auth'
 import { sanitizeHtml } from '@/utils/sanitize'
 import { ratingVal } from '@/utils/rating'
+import { formatDate } from '@/utils/format'
 import HeroBackground from '@/components/common/HeroBackground.vue'
+import OsIcon from '@/components/common/OsIcon.vue'
 import { useI18n } from '@/i18n'
 import { useDialog } from '@/composables/useDialog'
+import { useCoverTilt } from '@/composables/useCoverTilt'
+const { coverTilt, sheenStyle, onCoverMove, onCoverLeave } = useCoverTilt()
 
 const { t } = useI18n()
 const { gdConfirm } = useDialog()
@@ -849,7 +831,7 @@ async function publishToLibrary(pendingDownload = false) {
     const { data } = await client.post(`/library/games/publish/${game.value.id}`)
     publishedId.value = data.id
     if (pendingDownload) {
-      publishMsg.value = 'Added to library - files will sync after download'
+      publishMsg.value = t('detail.added_to_library')
     } else {
       publishMsg.value = data._scanned > 0
         ? `Re-synced - ${data._scanned} file(s) added`
@@ -857,7 +839,7 @@ async function publishToLibrary(pendingDownload = false) {
     }
     setTimeout(() => publishMsg.value = '', 6000)
   } catch (e: any) {
-    publishMsg.value = e?.response?.data?.detail || 'Publish failed'
+    publishMsg.value = e?.response?.data?.detail || t('detail.publish_failed')
   } finally {
     publishLoading.value = false
   }
@@ -898,10 +880,10 @@ async function unpublishFromLibrary() {
   try {
     await client.post(`/library/games/unpublish/${game.value.id}`)
     publishedId.value = null
-    publishMsg.value = 'Removed from library'
+    publishMsg.value = t('detail.removed_from_library')
     setTimeout(() => publishMsg.value = '', 4000)
   } catch (e: any) {
-    publishMsg.value = e?.response?.data?.detail || 'Unpublish failed'
+    publishMsg.value = e?.response?.data?.detail || t('detail.unpublish_failed')
   } finally {
     publishLoading.value = false
   }
@@ -978,33 +960,7 @@ const LANG_MAP: Record<string, { flag: string; name: string }> = {
 }
 
 // ── 3D tilt effect ────────────────────────────────────────────────────────────
-const coverTilt  = ref('perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)')
-const sheenStyle = ref('')
-const tiltActive = ref(false)
 
-function onCoverEnter() {
-  tiltActive.value = true
-}
-function onCoverMove(e: MouseEvent) {
-  const el = e.currentTarget as HTMLElement
-  const rect = el.getBoundingClientRect()
-  const cx = rect.width / 2
-  const cy = rect.height / 2
-  const dx = e.clientX - rect.left - cx
-  const dy = e.clientY - rect.top - cy
-  const rotY =  (dx / cx) * 10   // max ±10°
-  const rotX = -(dy / cy) *  7   // max ±7°
-  coverTilt.value = `perspective(800px) rotateX(${rotX}deg) rotateY(${rotY}deg) scale3d(1.03,1.03,1.03)`
-  // Specular sheen - follows mouse position
-  const mx = ((e.clientX - rect.left) / rect.width  * 100).toFixed(1)
-  const my = ((e.clientY - rect.top)  / rect.height * 100).toFixed(1)
-  sheenStyle.value = `opacity:1; background: radial-gradient(ellipse at ${mx}% ${my}%, rgba(255,255,255,0.22) 0%, transparent 65%);`
-}
-function onCoverLeave() {
-  tiltActive.value = false
-  coverTilt.value  = 'perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)'
-  sheenStyle.value = 'opacity:0;'
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1320,7 +1276,17 @@ function parseReqString(s: string): [string, any][] {
     .filter(([, v]) => v !== '')
 }
 
-const REQ_SHOW_KEYS = new Set(['processor', 'cpu', 'memory', 'ram', 'graphics', 'gpu', 'video'])
+/* Same categories the other detail views show, minus the operating system:
+   this view draws one card per OS, so an "OS" row would repeat the heading.
+   Storage and DirectX used to be filtered out here even though formatReqKey
+   already had labels ready for them. */
+const REQ_SHOW_KEYS = new Set([
+  'processor', 'cpu',
+  'memory', 'ram',
+  'graphics', 'gpu', 'video', 'video card',
+  'storage', 'disk_space', 'hard drive', 'hard disk',
+  'directx',
+])
 
 function filterReqEntries(obj: any): [string, any][] {
   if (!obj) return []
@@ -1402,16 +1368,6 @@ function fmtHltb(s: number): string {
   return `${m}m`
 }
 
-function formatDate(raw: string): string {
-  // Handle ISO strings, date-only strings, and garbage
-  const d = new Date(raw)
-  if (!isNaN(d.getTime())) {
-    const loc = localStorage.getItem('gd3_locale') || navigator.language || 'en'
-    return d.toLocaleDateString(loc, { year: 'numeric', month: 'long', day: 'numeric' })
-  }
-  // Fallback: show raw if it looks like a date
-  return raw.length <= 10 ? raw : raw.slice(0, 10)
-}
 
 // sanitizeHtml imported from @/utils/sanitize (DOMPurify-based)
 
@@ -1538,7 +1494,6 @@ async function clearMetadata() {
 .sk-line--lg { width: 55%; }
 .sk-line--md { width: 42%; }
 .sk-line--sm { width: 28%; }
-@keyframes shimmer { to { background-position: -400% 0; } }
 
 /* ── Empty ────────────────────────────────────────────────────────────────── */
 .gd-empty {
@@ -2108,7 +2063,7 @@ async function clearMetadata() {
   display: flex; align-items: center; justify-content: center;
   animation: lb-in .15s ease;
 }
-@keyframes lb-in { from { opacity: 0; } to { opacity: 1; } }
+
 .gd-lb-img {
   max-width: 90vw; max-height: 86vh;
   border-radius: var(--radius-sm, 8px); box-shadow: 0 0 80px rgba(0,0,0,.9);
@@ -2133,7 +2088,6 @@ async function clearMetadata() {
 
 /* ── Spin ─────────────────────────────────────────────────────────────────── */
 .spin { animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Requirements ─────────────────────────────────────────────────────────── */
 .gd-reqs-section { display: flex; flex-direction: column; }

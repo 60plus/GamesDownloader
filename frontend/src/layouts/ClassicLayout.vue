@@ -195,7 +195,7 @@
               <span v-if="notifStore.hasBadge" class="user-chip-badge" @click.stop="menuOpen = !menuOpen">{{ notifStore.totalCount }}</span>
             </div>
             <div class="user-info">
-              <span class="user-name">{{ (authStore.user?.username as string) || 'Guest' }}</span>
+              <span class="user-name">{{ (authStore.user?.username as string) || t('common.guest') }}</span>
               <span class="user-role">{{ userRole }}</span>
             </div>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
@@ -211,7 +211,7 @@
                   <span v-else>{{ initials }}</span>
                 </div>
                 <div class="menu-header-info">
-                  <span class="menu-header-name">{{ (authStore.user?.username as string) || 'Guest' }}</span>
+                  <span class="menu-header-name">{{ (authStore.user?.username as string) || t('common.guest') }}</span>
                   <span class="menu-header-role">{{ userRole }}</span>
                 </div>
               </div>
@@ -287,7 +287,7 @@
 
       <!-- Mobile top bar (hamburger) -->
       <div class="mobile-topbar">
-        <button class="hamburger-btn" @click="sidebarOpen = !sidebarOpen" aria-label="Menu">
+        <button class="hamburger-btn" @click="sidebarOpen = !sidebarOpen" :aria-label="t('nav.menu')">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
             <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
           </svg>
@@ -477,7 +477,7 @@
         <div class="cl-modal-body">
           <div class="cl-field">
             <label class="cl-label">{{ t('upload.game_title') }}</label>
-            <input v-model="uForm.title" type="text" class="cl-input" placeholder="e.g. Half-Life 2" />
+            <input v-model="uForm.title" type="text" class="cl-input" :placeholder="t('common.title_example')" />
           </div>
           <div class="cl-field-row">
             <div class="cl-field">
@@ -492,9 +492,9 @@
             <div class="cl-field">
               <label class="cl-label">{{ t('upload.file_type') }}</label>
               <select v-model="uForm.file_type" class="cl-input">
-                <option value="game">Game</option>
+                <option value="game">{{ t('upload.type_game') }}</option>
                 <option value="dlc">DLC</option>
-                <option value="extra">Extra</option>
+                <option value="extra">{{ t('upload.type_extra') }}</option>
               </select>
             </div>
           </div>
@@ -545,7 +545,7 @@
             <div class="cl-field-row">
               <div class="cl-field">
                 <label class="cl-label">{{ t('torrent.game_title') }}</label>
-                <input v-model="tForm.title" type="text" class="cl-input" placeholder="e.g. Half-Life 2" />
+                <input v-model="tForm.title" type="text" class="cl-input" :placeholder="t('common.title_example')" />
               </div>
               <div class="cl-field" style="max-width:130px">
                 <label class="cl-label">{{ t('upload.platform') }}</label>
@@ -964,20 +964,33 @@ async function fetchKnownPlatforms() {
   } catch { knownPlatforms.value = [] }
 }
 
+// Which fetch is the current one. Clicking GOG (an unpaginated, multi-megabyte
+// listing) and then Emulation before it lands used to let the late GOG response
+// overwrite games.value while activeLib already said roms: clicking a row then
+// pushed emulation-detail with a GOG id and the detail pane 404'd, and the
+// stale run also wrote its own count over the ROM library's. Same pattern as
+// RomSourceList.
+let fetchSeq = 0
+
 async function fetchGames() {
+  const seq = ++fetchSeq
+  const isStale = () => seq !== fetchSeq
   // The route watcher runs before onMounted has fetched the registry, so on a
   // cold load nothing here knew a library was a store yet and it fell through
   // to listing games - which is why a refresh landed back on the two titles
   // already pulled instead of the catalogue.
   if (!libs.loaded) await libs.fetch()
+  if (isStale()) return
   if (activeLibIsCollections.value) { await fetchCollectionsList(); return }
   collectionsLoadedFor.value = ''   // leaving collections - the list now holds games
   loading.value = true
   try {
     if (activeLib.value === 'roms') {
       if (!romPlatforms.value.length) await fetchRomPlatforms()
+      if (isStale()) return
       if (!activePlatformSlug.value) { games.value = []; loading.value = false; return }
       const { data } = await client.get('/roms', { params: { platform_slug: activePlatformSlug.value, limit: 999 } })
+      if (isStale()) return
       games.value = (data.items as any[]).map((g: any) => ({
         id:           g.id,
         title:        g.name || g.fs_name_no_ext,
@@ -995,6 +1008,7 @@ async function fetchGames() {
     }
     if (activeLib.value === 'gog') {
       const { data } = await client.get('/gog/library/games')
+      if (isStale()) return
       games.value = (data as any[]).map(g => ({
         id: g.id,
         title: g.title,
@@ -1013,6 +1027,7 @@ async function fetchGames() {
     // they do in a real library.
     if (activeLibIsStore.value) {
       const entries = await catalogActions.listEntries(libs.bySlug(activeLib.value)!.catalog_id!)
+      if (isStale()) return
       games.value = entries.map((e: any) => ({
         id:           e.id,
         title:        e.title,
@@ -1031,6 +1046,7 @@ async function fetchGames() {
     const params: Record<string, any> = { limit: 500 }
     if (activeLib.value !== 'games') params.library = activeLib.value
     const { data } = await client.get('/library/games', { params })
+    if (isStale()) return
     games.value = (data.items as any[]).map((g: any) => ({
       id:           g.id,
       title:        g.title,
@@ -1045,9 +1061,13 @@ async function fetchGames() {
   } catch (e) {
     console.error('Failed to fetch games', e)
   } finally {
-    loading.value = false
-    // In finally so it also runs after the gog/roms early-returns inside the try.
-    maybeAutoSelectFirst()
+    // A superseded run must not clear the spinner or auto-select a row out of
+    // the list the newer one is still filling. The newer run owns both.
+    if (!isStale()) {
+      loading.value = false
+      // In finally so it also runs after the gog/roms early-returns inside the try.
+      maybeAutoSelectFirst()
+    }
   }
 }
 
@@ -1335,7 +1355,7 @@ async function submitCreateCollection() {
       router.push({ name: 'collection-detail', params: { lib: activeLib.value, slug } })
     }
   } catch (e: any) {
-    createCollError.value = e?.response?.data?.detail || 'Failed to create collection'
+    createCollError.value = e?.response?.data?.detail || t('collections.create_failed')
   } finally {
     creatingColl.value = false
   }
@@ -1427,7 +1447,7 @@ async function submitAddRoms() {
     await fetchRomPlatforms()
     await fetchGames()
   } catch (e: any) {
-    addRomsError.value = e?.response?.data?.detail || 'Upload failed'
+    addRomsError.value = e?.response?.data?.detail || t('upload.failed')
     addRomsUploading.value = false
   }
 }
@@ -1529,7 +1549,7 @@ async function submitUpload() {
     await fetchGames()
     setTimeout(() => { uploadModal.value = false }, 2000)
   } catch (e: any) {
-    uError.value = e?.response?.data?.detail || 'Upload failed.'
+    uError.value = e?.response?.data?.detail || t('upload.failed')
   } finally {
     uUploading.value = false
   }
@@ -1584,7 +1604,7 @@ function _onTorrentComplete(data: any) {
 function _onTorrentError(data: any) {
   if (data.id !== tDownloadId.value) return
   _stopTorrentListeners()
-  tError.value = data.error || 'Download failed.'
+  tError.value = data.error || t('detail.download_failed')
   tDownloadId.value = null
 }
 
@@ -1626,7 +1646,7 @@ async function submitTorrent() {
     socketStore.socket?.on('torrent:download_complete', _onTorrentComplete)
     socketStore.socket?.on('torrent:download_error',    _onTorrentError)
   } catch (e: any) {
-    tError.value = e?.response?.data?.detail || 'Failed to add torrent.'
+    tError.value = e?.response?.data?.detail || t('detail.torrent_failed')
   } finally {
     tAdding.value = false
   }
@@ -1643,13 +1663,24 @@ function onClickOutside(e: MouseEvent) {
 function calcTitleOverflows() {
   nextTick(() => {
     if (!gameListRef.value) return
-    gameListRef.value.querySelectorAll<HTMLElement>('.gi-title-scroll').forEach(el => {
+    const els = gameListRef.value.querySelectorAll<HTMLElement>('.gi-title-scroll')
+    // Read every width first, then write every style. Interleaving them made
+    // each write invalidate the layout for the next read, so a list of up to
+    // 999 rows forced up to 999 synchronous reflows - on every keystroke in an
+    // undebounced search box. Both measurements belong in the read pass:
+    // clientWidth forces layout just as scrollWidth does.
+    const measured: Array<{ el: HTMLElement; overflow: number }> = []
+    els.forEach(el => {
       const parent = el.parentElement
       if (!parent) return
-      const overflow = el.scrollWidth - parent.clientWidth
+      measured.push({ el, overflow: el.scrollWidth - parent.clientWidth })
+    })
+    // Same tick as the reads on purpose: deferring this to another frame would
+    // let a re-render invalidate the element references in between.
+    for (const { el, overflow } of measured) {
       if (overflow > 2) el.style.setProperty('--gi-overflow', `-${overflow + 4}px`)
       else el.style.removeProperty('--gi-overflow')
-    })
+    }
   })
 }
 
@@ -2620,14 +2651,7 @@ onUnmounted(() => { _unregHomeSections?.() })
   animation: chip-shake 3s ease-in-out infinite;
   cursor: pointer; z-index: 2;
 }
-@keyframes chip-shake {
-  0%, 88%, 100% { transform: none; }
-  90% { transform: rotate(-10deg) scale(1.15); }
-  92% { transform: rotate(10deg) scale(1.15); }
-  94% { transform: rotate(-6deg); }
-  96% { transform: rotate(6deg); }
-  98% { transform: rotate(0); }
-}
+
 .notif-item { display: flex; flex-direction: column; gap: var(--space-1, 4px); padding: 8px 12px; font-size: 11px; color: var(--text); }
 .notif-header { display: flex; align-items: center; gap: 6px; }
 .notif-dot { width: 6px; height: 6px; border-radius: 50%; background: #ef4444; flex-shrink: 0; }

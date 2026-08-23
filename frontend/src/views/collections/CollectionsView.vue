@@ -84,6 +84,10 @@
     </div>
 
     <!-- ── Empty ───────────────────────────────────────────────────────────── -->
+    <div v-else-if="missing" class="state-empty">
+      <p>{{ t('collections.not_found') }}</p>
+    </div>
+
     <div v-else-if="!items.length" class="state-empty">
       <p>{{ mode === 'detail' ? t('collections.no_games') : t('collections.empty') }}</p>
     </div>
@@ -233,6 +237,10 @@ const container = computed(() => String(route.params.lib || ''))
 const collections = ref<any[]>([])
 const detail = ref<any | null>(null)
 const loading = ref(false)
+// A slug that names nothing. Distinct from a collection that exists and has no
+// games yet: both left `detail` null, so the page told the reader "this
+// collection has no games yet" about a collection that was never there.
+const missing = ref(false)
 const activeLetter = ref('')
 const gridScrollEl = ref<HTMLElement>()
 
@@ -390,6 +398,19 @@ function openMember(g: any) {
 
 async function loadGrid() {
   loading.value = true
+  missing.value = false
+  // The router's visibility guard catches /lib/<unknown> and sends it to the
+  // games library; it does not watch /collections/, which is why a typo here
+  // used to be drawn as a heading above an empty shelf. Give the same answer as
+  // the neighbouring route rather than inventing a second way of saying no.
+  // Fail open while the registry is silent: an empty shelf is a better guess
+  // than telling someone their own library is gone.
+  if (!libs.loaded) await libs.fetch()
+  if (libs.libraries.length > 0 && !libs.has(container.value)) {
+    loading.value = false
+    router.replace({ name: 'games-library' })
+    return
+  }
   try {
     const { data } = await client.get('/collections', { params: { library: container.value } })
     collections.value = Array.isArray(data) ? data : []
@@ -398,11 +419,17 @@ async function loadGrid() {
 
 async function loadDetail() {
   loading.value = true
+  missing.value = false
   detail.value = null
   try {
     const { data } = await client.get('/collections/' + route.params.slug)
     detail.value = data
-  } catch { detail.value = null } finally { loading.value = false }
+  } catch (e: any) {
+    detail.value = null
+    // Only a 404 means the slug names nothing. A dropped connection or a 500 is
+    // not the reader's typo and must not be reported as one.
+    missing.value = e?.response?.status === 404
+  } finally { loading.value = false }
 }
 
 function reload() {
@@ -573,7 +600,6 @@ watch(() => route.fullPath, () => { if (route.name === 'collections-lib' || rout
 
 .state-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--muted); font-size: 14px; }
 .spin { animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Main + grid (mirrors GamesLibrary) ───────────────────────────────────── */
 .library-main { flex: 1; display: flex; overflow: hidden; min-height: 0; }

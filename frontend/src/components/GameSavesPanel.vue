@@ -69,7 +69,40 @@
       </div>
 
       <!-- One line per game; unfolds into the full card -->
-      <div v-for="g in games" :key="g.romId" class="gsp-game" :class="{ 'gsp-game--open': open === g.romId }">
+      <!-- One platform per strip, in the art the rest of the app uses. The
+           games inside keep their own accordion; this is a second one around
+           it, because a flat list gets a row longer every time anyone saves. -->
+      <div v-for="grp in groups" :key="grp.key" class="gsp-plat" :class="{ 'gsp-plat--open': openPlat.has(grp.key) }">
+        <div
+          class="gsp-plat-row"
+          role="button"
+          tabindex="0"
+          :aria-expanded="openPlat.has(grp.key)"
+          @click="togglePlat(grp.key)"
+          @keydown.enter.prevent="togglePlat(grp.key)"
+          @keydown.space.prevent="togglePlat(grp.key)"
+        >
+          <i class="mdi gsp-chev" :class="openPlat.has(grp.key) ? 'mdi-chevron-down' : 'mdi-chevron-right'"></i>
+          <img v-if="grp.fsSlug" :src="`/platforms/icons/${grp.fsSlug}.png`" class="gsp-plat-icon" :alt="grp.name" @error="hideImg" />
+          <div class="gsp-plat-id">
+            <img
+              v-if="grp.fsSlug && !logoFailed.has(grp.fsSlug)"
+              :src="`/platforms/names/${grp.fsSlug}.svg`"
+              class="gsp-plat-logo"
+              :alt="grp.name"
+              @error="grp.fsSlug && logoFailed.add(grp.fsSlug)"
+            />
+            <span v-else class="gsp-plat-name">{{ grp.name }}</span>
+          </div>
+          <div class="gsp-plat-meta">
+            <span>{{ gamesLabel(grp.games.length) }}</span>
+            <span class="gsp-sep">·</span>
+            <span>{{ fmtBytes(grp.bytes) }}</span>
+          </div>
+        </div>
+
+        <template v-if="openPlat.has(grp.key)">
+      <div v-for="g in grp.games" :key="g.romId" class="gsp-game" :class="{ 'gsp-game--open': open === g.romId }">
         <div
           class="gsp-row"
           role="button"
@@ -93,9 +126,10 @@
               class="gsp-game-name"
               @click.stop
             >{{ g.name }}</component>
+            <!-- No platform here any more: the strip above the row already
+                 says it, and repeating it four times down an Amiga group was
+                 the noise this grouping set out to remove. -->
             <div class="gsp-game-sub">
-              <span v-if="g.platformName">{{ g.platformName }}</span>
-              <span class="gsp-sep">·</span>
               <span>{{ fmtBytes(g.bytes) }}</span>
             </div>
           </div>
@@ -275,6 +309,8 @@
           </div>
         </div>
       </div>
+        </template>
+      </div>
     </template>
 
     <!-- Screenshot at full size: a 148px tile is too small to tell where you
@@ -292,11 +328,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "@/i18n";
 import { useDialog } from "@/composables/useDialog";
 import dashboardActions, { type SavesData, type GameSaveItem } from "@/lib/dashboardActions";
+import { formatBytes as fmtBytes, formatDateTime } from '@/utils/format'
+const fmtDate = (iso: string | null | undefined) => formatDateTime(iso, "")
 
 const { t } = useI18n();
 const { gdConfirm } = useDialog();
@@ -327,6 +365,7 @@ interface GameSaves {
   support: string | null;   // cartridge/disc art - the battery tile's picture
   platformName: string | null;
   platformSlug: string | null;
+  platformFsSlug: string | null;   // artwork key, not the routable one
   slots: Record<number, GameSaveItem | undefined>;
   legacy: GameSaveItem[];
   battery: GameSaveItem[];
@@ -351,6 +390,7 @@ const games = computed<GameSaves[]>(() => {
         support: it.rom_support || null,
         platformName: it.platform_name || null,
         platformSlug: it.platform_slug || null,
+        platformFsSlug: it.platform_fs_slug || null,
         slots: {}, legacy: [], battery: [], bytes: 0, latest: 0,
       };
       byRom.set(it.rom_id, g);
@@ -371,6 +411,72 @@ const games = computed<GameSaves[]>(() => {
   return sort.value === "largest"
     ? list.sort((a, b) => b.bytes - a.bytes)
     : list.sort((a, b) => b.latest - a.latest);
+});
+
+// ── Platform groups ──────────────────────────────────────────────────────────
+// `games` is already sorted, so the games inside a group inherit whichever
+// order the reader chose; the groups are then sorted by the same measure.
+interface PlatGroup {
+  key: string;
+  name: string;
+  fsSlug: string | null;
+  games: GameSaves[];
+  bytes: number;
+  latest: number;
+}
+
+const openPlat = ref<Set<string>>(new Set());
+const logoFailed = ref<Set<string>>(new Set());
+
+const groups = computed<PlatGroup[]>(() => {
+  const byPlat = new Map<string, PlatGroup>();
+  for (const g of games.value) {
+    const key = g.platformSlug || "_none";
+    let grp = byPlat.get(key);
+    if (!grp) {
+      grp = {
+        key,
+        name: g.platformName || t("profile.saves_other_platform", "Other"),
+        fsSlug: g.platformFsSlug,
+        games: [], bytes: 0, latest: 0,
+      };
+      byPlat.set(key, grp);
+    }
+    grp.games.push(g);
+    grp.bytes += g.bytes;
+    grp.latest = Math.max(grp.latest, g.latest);
+  }
+  const list = [...byPlat.values()];
+  return sort.value === "largest"
+    ? list.sort((a, b) => b.bytes - a.bytes)
+    : list.sort((a, b) => b.latest - a.latest);
+});
+
+// Polish and Russian give 2-4 an ending of their own, which the app's
+// two-form helper cannot express. Everywhere else the "few" string is simply
+// the plural, so this costs those languages nothing.
+function gamesLabel(n: number): string {
+  const few = n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20);
+  const key = n === 1 ? "profile.saves_games"
+    : few ? "profile.saves_games_few"
+    : "profile.saves_games_plural";
+  return t(key, { count: n });
+}
+
+function togglePlat(key: string): void {
+  const next = new Set(openPlat.value);
+  next.has(key) ? next.delete(key) : next.add(key);
+  openPlat.value = next;
+}
+
+function hideImg(e: Event): void {
+  (e.target as HTMLImageElement).style.display = "none";
+}
+
+// Open the first group once the list arrives, so the panel is not a row of
+// closed strips with nothing to look at.
+watch(groups, (list) => {
+  if (list.length && !openPlat.value.size) openPlat.value = new Set([list[0].key]);
 });
 
 function toggle(romId: number): void {
@@ -475,12 +581,6 @@ function onKey(e: KeyboardEvent): void {
 onMounted(() => window.addEventListener("keydown", onKey));
 onUnmounted(() => window.removeEventListener("keydown", onKey));
 
-function fmtBytes(n: number): string {
-  if (!n) return "0 B";
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
-  return (n / Math.pow(1024, i)).toFixed(i ? 1 : 0) + " " + u[i];
-}
 function stripExt(f: string): string { return f.replace(/\.(state|srm)$/, ""); }
 
 // A slot keeps its created_at when re-saved, so the date the user cares about -
@@ -489,11 +589,6 @@ function savedAt(s: GameSaveItem): string | null { return s.updated_at || s.crea
 function savedAtMs(s: GameSaveItem): number {
   const d = new Date(savedAt(s) || 0).getTime();
   return isNaN(d) ? 0 : d;
-}
-function fmtDate(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? "" : d.toLocaleDateString() + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function recalcUsed(): void {
@@ -714,9 +809,9 @@ onMounted(async () => {
 .gsp-chev { font-size: 18px; opacity: 0.5; flex: 0 0 auto; }
 /* Height is fixed, width follows the cover's own aspect-ratio (inline, from the
    API) - a hardcoded portrait box crops the 4/3 art SNES and friends ship. */
-.gsp-game-cover { height: 38px; flex: 0 0 auto; border-radius: 5px; overflow: hidden; background: rgba(255,255,255,0.06); display: flex; align-items: center; justify-content: center; }
+.gsp-game-cover { height: 80px; flex: 0 0 auto; border-radius: 5px; overflow: hidden; background: rgba(255,255,255,0.06); display: flex; align-items: center; justify-content: center; }
 .gsp-game-cover-img { width: 100%; height: 100%; object-fit: contain; }
-.gsp-game-cover-ph { font-size: 16px; opacity: 0.35; }
+.gsp-game-cover-ph { font-size: 30px; opacity: 0.35; }
 .gsp-game-info { flex: 1; min-width: 0; }
 .gsp-game-name { font-size: 13.5px; font-weight: 600; color: var(--text, #eee); text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 a.gsp-game-name:hover { color: var(--accent, #38d3db); }
@@ -789,5 +884,53 @@ a.gsp-game-name:hover { color: var(--accent, #38d3db); }
   .gsp-row { flex-wrap: wrap; }
   .gsp-game-info { flex: 1 1 60%; }
   .gsp-rail { flex: 1 0 100%; padding-left: 28px; }
+}
+/* ── Platform strip ───────────────────────────────────────────────────────── */
+.gsp-plat { border-radius: var(--radius-sm, 8px); overflow: hidden; }
+.gsp-plat + .gsp-plat { margin-top: 6px; }
+.gsp-plat-row {
+  position: relative; display: flex; align-items: center; gap: 12px;
+  padding: 13px 14px; cursor: pointer; overflow: hidden;
+  border: 1px solid var(--glass-border); border-radius: var(--radius-sm, 8px);
+  background: var(--glass-bg); transition: border-color var(--transition);
+}
+.gsp-plat-row:hover { border-color: color-mix(in srgb, var(--pl) 45%, transparent); }
+.gsp-plat--open .gsp-plat-row { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+/* The icons are drawn to no common shape - at this width their natural height
+   runs from 16px to 177px - so the height is capped. `contain` then letterboxes
+   the tall ones instead of squashing them, and every strip stays the same. */
+.gsp-plat-icon {
+  width: 63px; height: auto; max-height: 46px;
+  object-fit: contain; flex-shrink: 0;
+}
+/* Out of the flex flow, so the logo sits on the middle of the strip itself and
+   not on the middle of whatever room the counters on the right leave over -
+   otherwise every strip would park its logo a few pixels off its neighbour. */
+.gsp-plat-id {
+  position: absolute; top: 0; bottom: 0; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; justify-content: center;
+  /* A width, not a max-width: out of the flow the box would size itself to the
+     logo, while the logo sizes itself to the box, and that circle resolves to
+     nothing at all. */
+  width: min(44%, 260px); pointer-events: none;
+}
+.gsp-plat-meta { margin-left: auto; }
+.gsp-plat-logo { max-height: 26px; max-width: 100%; object-fit: contain; }
+.gsp-plat-name { font-size: var(--fs-md, 14px); font-weight: 700; color: var(--text); }
+.gsp-plat-meta {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+  font-size: var(--fs-sm, 12px); color: var(--muted);
+}
+.gsp-plat--open .gsp-game:last-child { border-bottom-left-radius: var(--radius-sm, 8px); border-bottom-right-radius: var(--radius-sm, 8px); }
+@media (max-width: 600px) {
+  /* Too narrow to centre anything against: taken out of the flow the logo
+     would come down on top of the counters, so here it rejoins the row. */
+  .gsp-plat-id {
+    position: static; transform: none; width: auto;
+    flex: 1; min-width: 0; justify-content: flex-start;
+  }
+  .gsp-plat-meta { margin-left: 0; }
+  .gsp-plat-logo { max-width: 120px; max-height: 20px; }
+  .gsp-plat-icon { width: 46px; max-height: 34px; }
 }
 </style>

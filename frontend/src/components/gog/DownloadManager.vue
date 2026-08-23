@@ -7,7 +7,7 @@
       <div class="dm-header-left">
         <!-- Animated icon when downloading -->
         <div class="dm-status-dot" :class="dotClass" />
-        <span class="dm-header-title">Downloads</span>
+        <span class="dm-header-title">{{ t('download.downloads') }}</span>
         <span class="dm-badge">{{ jobs.length + packagingList.length + urlList.length + romList.length }}</span>
       </div>
 
@@ -17,7 +17,7 @@
         <span class="dm-quick-pct">{{ activeJob.progress_pct.toFixed(0) }}%</span>
       </div>
 
-      <button class="dm-toggle" :title="expanded ? 'Collapse' : 'Expand'">
+      <button class="dm-toggle" :title="expanded ? t('common.collapse') : t('common.expand')">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <polyline :points="expanded ? '18 15 12 9 6 15' : '6 9 12 15 18 9'" />
         </svg>
@@ -99,6 +99,53 @@
                 <span class="dm-job-file">{{ r.platform }}</span>
               </template>
             </div>
+            <!-- The same controls the GOG jobs below have had all along. A ROM
+                 can be several gigabytes, so being unable to stop one, or having
+                 to fetch it from the start after a dropped connection, was the
+                 difference between a download manager and a progress bar. -->
+            <div class="dm-job-actions">
+              <button
+                v-if="r.status === 'downloading'"
+                class="dm-action-btn"
+                :title="t('download.pause')"
+                @click.stop="romPause(r.id)"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+                </svg>
+              </button>
+              <button
+                v-else-if="r.status === 'paused'"
+                class="dm-action-btn dm-action-btn--resume"
+                :title="t('download.resume')"
+                @click.stop="romResume(r.id)"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="5,3 19,12 5,21"/>
+                </svg>
+              </button>
+              <button
+                v-if="['failed', 'cancelled'].includes(r.status)"
+                class="dm-action-btn dm-action-btn--resume"
+                :title="t('download.retry')"
+                @click.stop="romRetry(r.id)"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polyline points="23 4 23 10 17 10"/>
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                </svg>
+              </button>
+              <button
+                class="dm-action-btn dm-action-btn--cancel"
+                :title="['downloading', 'queued', 'paused'].includes(r.status)
+                  ? t('download.cancel') : t('download.remove')"
+                @click.stop="romCancel(r.id)"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
           </div>
           <div class="dm-progress-track">
             <div
@@ -132,7 +179,7 @@
               <button
                 v-if="job.status === 'downloading'"
                 class="dm-action-btn"
-                title="Pause"
+                :title="t('download.pause')"
                 @click.stop="pauseJob(job.id)"
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
@@ -143,7 +190,7 @@
               <button
                 v-else-if="job.status === 'paused'"
                 class="dm-action-btn dm-action-btn--resume"
-                title="Resume"
+                :title="t('download.resume')"
                 @click.stop="resumeJob(job.id)"
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
@@ -154,7 +201,7 @@
               <button
                 v-if="['downloading', 'queued', 'paused'].includes(job.status)"
                 class="dm-action-btn dm-action-btn--cancel"
-                title="Cancel"
+                :title="t('download.cancel')"
                 @click.stop="cancelJob(job.id)"
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -165,7 +212,7 @@
               <button
                 v-if="['completed', 'failed', 'cancelled'].includes(job.status)"
                 class="dm-action-btn dm-action-btn--cancel"
-                title="Remove"
+                :title="t('download.remove')"
                 @click.stop="deleteJob(job.id)"
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -221,7 +268,7 @@
 
         <!-- Clear finished button -->
         <div v-if="hasFinished" class="dm-footer">
-          <button class="dm-clear-btn" @click="clearFinished">Clear finished</button>
+          <button class="dm-clear-btn" @click="clearFinished">{{ t('download.clear_finished') }}</button>
         </div>
 
       </div>
@@ -235,6 +282,8 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import client from '@/services/api/client'
 import { useSocketStore } from '@/stores/socket'
 import { useI18n } from '@/i18n'
+import { formatBytes } from '@/utils/format'
+import romSources from '@/lib/romSourceActions'
 
 const { t } = useI18n()
 
@@ -283,7 +332,12 @@ const packagingList = computed(() => Object.values(packagingItems))
 const pkTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function pkClass(status: string): string {
-  return status === 'failed' ? 'failed' : status === 'completed' ? 'completed' : 'downloading'
+  // Paused and cancelled arrived with the ROM download controls; packaging and
+  // URL rows never reach either, so they are unaffected.
+  if (status === 'failed' || status === 'cancelled') return 'failed'
+  if (status === 'completed') return 'completed'
+  if (status === 'paused') return 'paused'
+  return 'downloading'
 }
 
 // URL / catalogue downloads: a socket-fed, self-clearing section separate from
@@ -496,7 +550,23 @@ function handleRomSource(kind: string, data: Record<string, unknown>) {
       received: cur?.received ?? 0, total: cur?.total ?? 0,
       speed: 0, progress_pct: cur?.progress_pct ?? 0, error: String(data.error ?? ''),
     }
-    scheduleRomClear(id, 8000)
+    // A failed row used to vanish after eight seconds. Now that it can be
+    // retried it stays until someone decides, one way or the other.
+    cancelRomClear(id)
+  } else if (kind === 'state') {
+    // Paused, resumed or cancelled: a state change, no bytes attached. The
+    // watchdog has to go with it - a paused download is silent on purpose.
+    const status = String(data.status ?? '')
+    const pct = Number(data.percent)
+    romItems[id] = {
+      id, file_name: fileName, platform, status,
+      received: Number(data.received ?? cur?.received ?? 0),
+      total: Number(data.total ?? cur?.total ?? 0),
+      speed: 0, progress_pct: pct >= 0 ? pct : (cur?.progress_pct ?? 0),
+      error: String(data.error ?? ''),
+    }
+    cancelRomClear(id)
+    if (status === 'completed') scheduleRomClear(id, 5000)
   } else {
     const pct = Number(data.percent)
     romItems[id] = {
@@ -510,6 +580,36 @@ function handleRomSource(kind: string, data: Record<string, unknown>) {
     // no terminal event is coming - drop the row so it does not hang "downloading".
     scheduleRomClear(id, 90000)
   }
+}
+
+function cancelRomClear(id: string) {
+  const ex = romTimers.get(id)
+  if (ex) { clearTimeout(ex); romTimers.delete(id) }
+}
+
+// The id the panel keys on is prefixed so it cannot collide with a GOG job;
+// the server only knows the number.
+function romJobId(id: string): number { return Number(id.replace(/^rom:/, '')) }
+
+async function romPause(id: string) {
+  try { await romSources.pauseJob(romJobId(id)) } catch { /* the row keeps its state */ }
+}
+async function romResume(id: string) {
+  const cur = romItems[id]
+  if (cur) romItems[id] = { ...cur, status: 'downloading' }
+  try { await romSources.resumeJob(romJobId(id)) } catch { /* progress will correct it */ }
+}
+async function romRetry(id: string) {
+  const cur = romItems[id]
+  if (cur) romItems[id] = { ...cur, status: 'queued', error: '' }
+  try { await romSources.retryJob(romJobId(id)) } catch { /* progress will correct it */ }
+}
+async function romCancel(id: string) {
+  const cur = romItems[id]
+  const live = cur && ['downloading', 'queued', 'paused'].includes(cur.status)
+  try { await romSources.cancelJob(romJobId(id)) } catch { /* fall through */ }
+  // Stopping leaves the row so it can be retried; a second press clears it.
+  if (!live) { cancelRomClear(id); delete romItems[id] }
 }
 
 function scheduleRomClear(id: string, ms: number) {
@@ -527,9 +627,32 @@ function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
 
+async function fetchRomJobs() {
+  // A paused ROM download makes no noise, so without this a refreshed page
+  // would show nothing and the file would look abandoned.
+  try {
+    for (const j of await romSources.listJobs()) {
+      const id = 'rom:' + String(j.id ?? '')
+      const total = Number(j.total ?? 0)
+      const received = Number(j.received ?? 0)
+      const pct = Number(j.percent)
+      romItems[id] = {
+        id,
+        file_name: String(j.filename ?? ''),
+        platform: String(j.fs_slug ?? ''),
+        status: String(j.status ?? ''),
+        received, total, speed: 0,
+        progress_pct: pct >= 0 ? pct : 0,
+        error: String(j.error ?? ''),
+      }
+    }
+  } catch { /* not an admin, or the endpoint is not there yet */ }
+}
+
 onMounted(() => {
   fetchJobs()
   fetchActivePackaging()   // restore packaging progress after a refresh
+  fetchRomJobs()           // and the ROM downloads, paused ones included
   // WebSocket: real-time updates per job
   try {
     const socketStore = useSocketStore()
@@ -604,13 +727,6 @@ function progressWidth(job: DownloadJob): string {
   return `${Math.min(job.progress_pct, 100)}%`
 }
 
-function formatBytes(bytes: number | null): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let v = bytes, u = 0
-  while (v >= 1024 && u < units.length - 1) { v /= 1024; u++ }
-  return `${v.toFixed(u > 0 ? 1 : 0)} ${units[u]}`
-}
 
 function formatSpeed(bps: number): string {
   return `${formatBytes(bps)}/s`

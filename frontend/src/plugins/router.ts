@@ -163,6 +163,14 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "Login", public: true },
   },
   {
+    // Invite links point here (/register?code=…). Public: whoever follows one
+    // has no account yet, so the auth guard must let them through.
+    path: "/register",
+    name: "register",
+    component: () => import("@/views/Register.vue"),
+    meta: { title: "Create Account", public: true },
+  },
+  {
     path: "/reset-password",
     name: "reset-password",
     component: () => import("@/views/ResetPassword.vue"),
@@ -174,7 +182,39 @@ const routes: RouteRecordRaw[] = [
     component: () => import("@/views/setup/SetupWizard.vue"),
     meta: { title: "Setup", public: true },
   },
+  // Anything else. Without this the server hands index.html to any path it does
+  // not know, the app boots, nothing matches, and <router-view /> draws an empty
+  // dark screen that reads as a crash.
+  //
+  // A redirect rather than a page of its own: a stale bookmark or a mistyped
+  // address is not worth a screen, and a static redirect is applied while the
+  // route resolves, BEFORE the navigation guard runs - so the guard only ever
+  // sees "/" and cannot mistake, say, /emulationXYZ for the emulation library
+  // by its path prefix. Deliberately no meta.public: a stranger on a bad URL
+  // should still be sent to the login page.
+  {
+    path: "/:pathMatch(.*)*",
+    name: "not-found",
+    redirect: (to) => {
+      // Plugin pages are grafted on only once /api/plugins/frontend/routes has
+      // answered, which is after the first navigation has already resolved. A
+      // deep link to one lands here purely because it arrived early, so keep it
+      // and let main.ts retry the moment those routes exist.
+      if (to.path.startsWith("/x/")) missedPluginPath = to.fullPath;
+      return { name: "home" };
+    },
+  },
 ];
+
+/** A /x/... deep link that resolved before the plugin routes were registered. */
+let missedPluginPath: string | null = null;
+
+/** Hand back that deep link once, for whoever is ready to retry it. */
+export function takeMissedPluginPath(): string | null {
+  const path = missedPluginPath;
+  missedPluginPath = null;
+  return path;
+}
 
 export function createAppRouter() {
   const router = createRouter({

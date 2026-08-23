@@ -191,7 +191,7 @@
                    where it came from. -->
               <div v-if="game.catalog_origin" class="badge badge--src badge--custom" style="top:auto;bottom:6px;">{{ game.catalog_origin.toUpperCase() }}</div>
               <div v-else-if="game.source === 'gog'" class="badge badge--src badge--gog" style="top:auto;bottom:6px;">GOG</div>
-              <div v-else-if="game.source === 'custom'" class="badge badge--src badge--custom" style="top:auto;bottom:6px;">CUSTOM</div>
+              <div v-else-if="game.source === 'custom'" class="badge badge--src badge--custom" style="top:auto;bottom:6px;">{{ t('library.source_custom') }}</div>
 
               <!-- Hover overlay -->
               <div class="cover-overlay">
@@ -202,11 +202,11 @@
             <div class="cover-title">{{ game.title }}</div>
             <div v-if="game.subtitle" class="cover-subtitle">{{ game.subtitle }}</div>
             <div class="cover-scores">
-              <div v-if="game.rating_agg" class="cover-score" title="Rating">
+              <div v-if="game.rating_agg" class="cover-score" :title="t('library.rating')">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style="color:#facc15"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
                 {{ ratingVal(game.rating_agg).toFixed(1) }}
               </div>
-              <div v-if="game.meta_ratings?.rawg" class="cover-score" title="RAWG Rating">
+              <div v-if="game.meta_ratings?.rawg" class="cover-score" :title="t('meta.rawg_rating')">
                 <img src="/icons/RAWG.ico" width="11" height="11" alt="RAWG" class="score-ico" />
                 {{ (game.meta_ratings.rawg).toFixed(1) }}
               </div>
@@ -265,7 +265,7 @@
             <div class="gl-field-row">
               <div class="gl-field">
                 <label class="gl-label">{{ t('torrent.game_title') }}</label>
-                <input v-model="tForm.title" type="text" class="gl-input" placeholder="e.g. Half-Life 2" />
+                <input v-model="tForm.title" type="text" class="gl-input" :placeholder="t('common.title_example')" />
               </div>
               <div class="gl-field gl-field--sm">
                 <label class="gl-label">{{ t('upload.platform') }}</label>
@@ -348,7 +348,7 @@
         <div class="gl-modal-body">
           <div class="gl-field">
             <label class="gl-label">{{ t('upload.game_title') }}</label>
-            <input v-model="uForm.title" type="text" class="gl-input" placeholder="e.g. Half-Life 2" />
+            <input v-model="uForm.title" type="text" class="gl-input" :placeholder="t('common.title_example')" />
           </div>
           <div class="gl-field-row">
             <div class="gl-field gl-field--sm">
@@ -363,9 +363,9 @@
             <div class="gl-field gl-field--sm">
               <label class="gl-label">{{ t('upload.file_type') }}</label>
               <select v-model="uForm.file_type" class="gl-input">
-                <option value="game">Game</option>
+                <option value="game">{{ t('upload.type_game') }}</option>
                 <option value="dlc">DLC</option>
-                <option value="extra">Extra</option>
+                <option value="extra">{{ t('upload.type_extra') }}</option>
               </select>
             </div>
           </div>
@@ -424,6 +424,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useI18n } from '@/i18n'
 import { ratingVal } from '@/utils/rating'
+import { formatBytes as fmtBytes } from '@/utils/format'
 import { useSocketStore } from '@/stores/socket'
 
 const { t } = useI18n()
@@ -530,13 +531,20 @@ const coverSizeMap: Record<string, number> = { xs: 115, s: 145, m: 175, l: 215, 
 
 // ── Fetch ───────────────────────────────────────────────────────────────────
 
+// Typing in the search box and switching library both call this, so several
+// runs can be in the air at once and they do not come back in order. Only the
+// newest one may write the list.
+let fetchSeq = 0
+
 async function fetchGames() {
+  const seq = ++fetchSeq
   loading.value = true
   try {
     const params: Record<string, string> = { limit: '500' }
     if (searchQuery.value.trim()) params.search = searchQuery.value.trim()
     if (librarySlug.value) params.library = librarySlug.value
     const { data } = await client.get('/library/games', { params })
+    if (seq !== fetchSeq) return
     // Keep the WHOLE API object (languages, files, logo, etc.) so the shared
     // GameListRow renders the same facts here as in the GOG library and in
     // collections; just add the derived available-file count.
@@ -547,7 +555,7 @@ async function fetchGames() {
   } catch (e) {
     console.error('Failed to fetch library games', e)
   } finally {
-    loading.value = false
+    if (seq === fetchSeq) loading.value = false
   }
 }
 
@@ -582,7 +590,7 @@ async function scanLibrary() {
     await fetchGames()
     setTimeout(() => { scanMsg.value = '' }, 5000)
   } catch (e: any) {
-    scanMsg.value = e?.response?.data?.detail || 'Scan failed'
+    scanMsg.value = e?.response?.data?.detail || t('common.scan_failed')
   } finally {
     scanning.value = false
   }
@@ -649,18 +657,28 @@ function onCardEnter(e: MouseEvent) {
 }
 
 function onCardMove(e: MouseEvent) {
-  if (!themeStore.cardTilt && !themeStore.cardShine) return
+  if (!themeStore.cardTilt && !themeStore.cardShine && !themeStore.cardLift && !themeStore.cardZoom) return
   const el = e.currentTarget as HTMLElement
   const imgWrap = el.querySelector<HTMLElement>('.cover-img-wrap')
   if (!imgWrap) return
   const rect = imgWrap.getBoundingClientRect()
+
+  // Fall through tilt -> lift -> zoom, the ladder the GOG and Emulation
+  // libraries already use. Without it Card lift did nothing here at all, and
+  // Card zoom only worked while Card tilt happened to be on as well.
+  let transform = ''
   if (themeStore.cardTilt) {
     const cx = rect.width / 2, cy = rect.height / 2
     const dx = e.clientX - rect.left - cx, dy = e.clientY - rect.top - cy
     const ry = (dx / cx) * 8, rx = -(dy / cy) * 5
-    const zoom = themeStore.cardZoom ? 'scale3d(1.03,1.03,1.03)' : ''
-    imgWrap.style.transform = `perspective(600px) rotateX(${rx}deg) rotateY(${ry}deg) ${zoom}`
+    const scale = themeStore.cardZoom ? 1.04 : (themeStore.cardLift ? 1.01 : 1)
+    transform = `perspective(600px) rotateX(${rx}deg) rotateY(${ry}deg) scale3d(${scale},${scale},${scale})`
+  } else if (themeStore.cardLift) {
+    transform = 'translateY(-2px) scale(1.04)'
+  } else if (themeStore.cardZoom) {
+    transform = 'scale(1.04)'
   }
+  if (transform) imgWrap.style.transform = transform
   const sheen = imgWrap.querySelector<HTMLElement>('.cover-sheen')
   if (sheen && themeStore.cardShine) {
     const mx = ((e.clientX - rect.left) / rect.width * 100).toFixed(1)
@@ -765,7 +783,7 @@ function _onTorrentComplete(data: any) {
 function _onTorrentError(data: any) {
   if (data.id !== tDownloadId.value) return
   _stopTorrentListeners()
-  tError.value = data.error || 'Download failed.'
+  tError.value = data.error || t('detail.download_failed')
   tDownloadId.value = null
 }
 
@@ -815,7 +833,7 @@ async function submitTorrent() {
     socketStore.socket?.on('torrent:download_complete', _onTorrentComplete)
     socketStore.socket?.on('torrent:download_error',    _onTorrentError)
   } catch (e: any) {
-    tError.value = e?.response?.data?.detail || 'Failed to add torrent.'
+    tError.value = e?.response?.data?.detail || t('detail.torrent_failed')
   } finally {
     tAdding.value = false
   }
@@ -887,11 +905,6 @@ function _onUrlUploadError(data: any) {
   uProgress.value = null
 }
 
-function fmtBytes(b: number): string {
-  if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB'
-  if (b >= 1048576)    return (b / 1048576).toFixed(0) + ' MB'
-  return (b / 1024).toFixed(0) + ' KB'
-}
 
 function onUploadFileChange(e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0] ?? null
@@ -1042,7 +1055,6 @@ onBeforeUnmount(() => {
 .sync-btn--running { border-color: #14b8a6; color: #2dd4bf; }
 .sync-msg { font-size: var(--fs-sm, 12px); color: var(--muted); }
 .spin { animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Sort / filter ──────────────────────────────────────────────────────────── */
 .sort-select {
@@ -1146,7 +1158,7 @@ onBeforeUnmount(() => {
 .badge--owned { background: rgba(74,222,128,.15); color: #4ade80; border: 1px solid rgba(74,222,128,.3); }
 .badge--src { right: auto; left: 6px; }
 .badge--gog { background: rgba(124,58,237,.15); color: #a78bfa; border: 1px solid rgba(124,58,237,.25); }
-.badge--custom { background: rgba(20,184,166,.12); color: #2dd4bf; border: 1px solid rgba(20,184,166,.3); }
+.badge--custom { text-transform: uppercase; background: rgba(20,184,166,.12); color: #2dd4bf; border: 1px solid rgba(20,184,166,.3); }
 
 .cover-overlay {
   position: absolute; inset: 0; z-index: 5;
@@ -1256,20 +1268,7 @@ onBeforeUnmount(() => {
 .list-hero-img--pulse {
   animation: list-pulse calc(10s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite;
 }
-@keyframes list-kb {
-  0%   { transform: scale(1.05) translateX(0); }
-  50%  { transform: scale(1.12) translateX(-3%); }
-  100% { transform: scale(1.05) translateX(0); }
-}
-@keyframes list-drift {
-  0%   { transform: translateX(0) scale(1.04); }
-  50%  { transform: translateX(-4%) scale(1.04); }
-  100% { transform: translateX(0) scale(1.04); }
-}
-@keyframes list-pulse {
-  0%,100% { transform: scale(1.02); }
-  50%     { transform: scale(1.08); }
-}
+
 [data-animations="false"] .list-hero-img--kenburns,
 [data-animations="false"] .list-hero-img--drift,
 [data-animations="false"] .list-hero-img--pulse { animation: none; }

@@ -52,7 +52,7 @@
               <button
                 v-if="p.config_schema && Object.keys(p.config_schema).length"
                 class="sp-icon-btn"
-                title="Configure"
+                :title="t('common.configure')"
                 @click="toggleConfig(p.plugin_id)"
                 @mouseenter="setHint(t('plugins.phint_settings_title'), t('plugins.phint_settings_body'))"
                 @mouseleave="clearHint"
@@ -79,7 +79,7 @@
               <button
                 v-if="confirmDeleteId !== p.plugin_id"
                 class="sp-icon-btn sp-icon-btn--danger"
-                title="Delete plugin"
+                :title="t('plugins.delete_plugin')"
                 @click="confirmDeleteId = p.plugin_id"
                 @mouseenter="setHint(t('plugins.phint_delete_title'), t('plugins.phint_delete_body'))"
                 @mouseleave="clearHint"
@@ -89,11 +89,11 @@
                 </svg>
               </button>
               <div v-else class="sp-confirm-delete">
-                <span class="sp-confirm-label">Delete?</span>
+                <span class="sp-confirm-label">{{ t('security.delete_confirm') }}</span>
                 <button class="sp-btn sp-btn--danger-sm" :disabled="deleting[p.plugin_id]" @click="deletePlugin(p.plugin_id)">
-                  {{ deleting[p.plugin_id] ? 'Deleting...' : 'Yes' }}
+                  {{ deleting[p.plugin_id] ? t('detail.deleting') : t('common.yes') }}
                 </button>
-                <button class="sp-btn sp-btn--ghost-sm" @click="confirmDeleteId = null">No</button>
+                <button class="sp-btn sp-btn--ghost-sm" @click="confirmDeleteId = null">{{ t('common.no') }}</button>
               </div>
             </div>
           </div>
@@ -152,7 +152,7 @@
               </div>
 
               <div class="sp-config-actions">
-                <button class="sp-btn sp-btn--primary" :disabled="savingConfig[p.plugin_id]" @click="saveConfig(p.plugin_id)">
+                <button class="sp-btn sp-btn--primary btn-save-action" :disabled="savingConfig[p.plugin_id]" @click="saveConfig(p.plugin_id)">
                   {{ savingConfig[p.plugin_id] ? t('plugins.saving', 'Saving...') : t('plugins.save_config', 'Save Config') }}
                 </button>
                 <!-- For a catalogue plugin (e.g. PC Ports), the first sync that
@@ -322,7 +322,7 @@ async function loadPlugins() {
     const { data } = await client.get('/plugins')
     plugins.value = data
   } catch (e: any) {
-    listMsg.value = e?.response?.data?.detail || 'Failed to load plugins.'
+    listMsg.value = e?.response?.data?.detail || t('plugins.load_failed')
     listOk.value = false
   } finally {
     loading.value = false
@@ -385,7 +385,7 @@ async function deletePlugin(id: string) {
     plugins.value = plugins.value.filter(p => p.plugin_id !== id)
     confirmDeleteId.value = null
   } catch (e: any) {
-    listMsg.value = e?.response?.data?.detail || 'Failed to delete plugin.'
+    listMsg.value = e?.response?.data?.detail || t('plugins.delete_failed')
     listOk.value = false
     setTimeout(() => { listMsg.value = '' }, 4000)
   } finally {

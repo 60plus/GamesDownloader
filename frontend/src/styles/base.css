@@ -145,6 +145,46 @@ html, body {
   to { opacity: 1; transform: translateX(0); }
 }
 
+
+/* Shared by several components, which each used to declare their own
+   identical copy. Vue only renames a keyframe for the block that declares
+   it, so a component referring to one of these now resolves to here. */
+@keyframes card-in {from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); }}
+@keyframes cd-drift {0% { transform: scale(1.1) translateX(0%); } 50% { transform: scale(1.1) translateX(-5%); } 100% { transform: scale(1.1) translateX(0%); }}
+@keyframes cd-kenburns {0% { transform: scale(1.06) translate(0%, 0% ); } 20% { transform: scale(1.12) translate(-2.5%, 1% ); } 45% { transform: scale(1.09) translate( 1.5%, -1.5%); } 70% { transform: scale(1.14) translate(-1%, 2% ); } 100% { transform: scale(1.06) translate(0%, 0% ); }}
+@keyframes cd-pulse {0% { transform: scale(1.04); } 50% { transform: scale(1.11); } 100% { transform: scale(1.04); }}
+@keyframes cd-spin-anim {to { transform: rotate(360deg); }}
+@keyframes chip-shake {0%, 88%, 100% { transform: none; } 90% { transform: rotate(-10deg) scale(1.15); } 92% { transform: rotate(10deg) scale(1.15); } 94% { transform: rotate(-6deg); } 96% { transform: rotate(6deg); } 98% { transform: rotate(0); }}
+@keyframes cov-spin {to { transform: rotate(360deg); }}
+@keyframes gd-spin {to { transform: rotate(360deg); }}
+@keyframes lb-in {from { opacity: 0; } to { opacity: 1; }}
+@keyframes list-drift {0% { transform: translateX(0) scale(1.04); } 50% { transform: translateX(-4%) scale(1.04); } 100% { transform: translateX(0) scale(1.04); }}
+@keyframes list-kb {0% { transform: scale(1.05) translateX(0); } 50% { transform: scale(1.12) translateX(-3%); } 100% { transform: scale(1.05) translateX(0); }}
+@keyframes list-pulse {0%,100% { transform: scale(1.02); } 50% { transform: scale(1.08); }}
+@keyframes logo-pulse {0%,100% { filter: drop-shadow(0 0 10px var(--pglow)) drop-shadow(0 0 22px var(--pglow2)); } 50% { filter: drop-shadow(0 0 20px var(--pglow)) drop-shadow(0 0 48px var(--pglow2)); }}
+@keyframes shimmer {to { background-position: -400% 0; }}
+
+/* ── Saving announces itself ──────────────────────────────────────────────────
+ * Saving rewrites a lot at once - covers, descriptions, media, whole settings
+ * pages - so the button that does it should not look like every other primary
+ * action. Amber, not red: the collection panel spends red on "delete
+ * collection" in the same footer, and two reds of equal weight next to each
+ * other stop warning and start confusing. Red stays for irreversible.
+ *
+ * Every one of these buttons already derives its colours from the accent
+ * variables, so redefining those five HERE, on the button, is enough: its own
+ * background, border, text, hover and glow all resolve against amber without a
+ * single one of their rules being touched, and without fighting scoped CSS
+ * over specificity.
+ */
+.btn-save-action {
+  --pl:        #d97706;
+  --pl-light:  #fbbf24;
+  --pl-dim:    rgba(217, 119, 6, 0.12);
+  --pglow:     rgba(217, 119, 6, 0.5);
+  --pglow2:    rgba(217, 119, 6, 0.25);
+}
+
 /* ── Vue transitions ─────────────────────────────────────────────────────── */
 .fade-enter-active, .fade-leave-active { transition: opacity 0.15s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }

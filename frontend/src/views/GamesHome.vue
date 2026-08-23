@@ -270,7 +270,7 @@
             <div class="home-lib-card-cover-overlay" />
             <div class="home-lib-card-info">
               <div class="home-lib-card-icon" :style="{ borderColor: cont.color || '#8b5cf6' }">
-                <LibraryIcon :icon="cont.icon || 'builtin:layers'" :color="cont.color || '#8b5cf6'" :size="16" alt="Collections" />
+                <LibraryIcon :icon="cont.icon || 'builtin:layers'" :color="cont.color || '#8b5cf6'" :size="16" :alt="t('nav.collections')" />
               </div>
               <span class="home-lib-card-name">{{ libs.label(cont) }}</span>
               <span class="home-lib-card-count">{{ (collSummary[cont.slug]?.count || 0) === 1 ? t('collections.count', { count: collSummary[cont.slug]?.count || 0 }) : t('collections.count_plural', { count: collSummary[cont.slug]?.count || 0 }) }}</span>

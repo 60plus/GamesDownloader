@@ -91,7 +91,7 @@
                     <span class="grd-selected-meta">{{ selectedGame.year }}{{ selectedGame.developer ? ' · ' + selectedGame.developer : '' }}</span>
                     <span class="grd-selected-src">via {{ selectedGame.source }}</span>
                   </div>
-                  <button type="button" class="grd-selected-clear" @click="clearSelection" title="Choose different">
+                  <button type="button" class="grd-selected-clear" @click="clearSelection" :title="t('requests.choose_different')">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                       <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                     </svg>
@@ -261,10 +261,10 @@
                 <!-- Admin -->
                 <div v-if="isAdmin" class="grd-admin-col">
                   <select class="grd-status-select" :value="r.status" @change="patchStatus(r, ($event.target as HTMLSelectElement).value)">
-                    <option value="pending">pending</option>
-                    <option value="approved">approved</option>
-                    <option value="rejected">rejected</option>
-                    <option value="done">done</option>
+                    <option value="pending">{{ t('requests.status_pending') }}</option>
+                    <option value="approved">{{ t('requests.status_approved') }}</option>
+                    <option value="rejected">{{ t('requests.status_rejected') }}</option>
+                    <option value="done">{{ t('requests.status_done') }}</option>
                   </select>
                   <button class="grd-note-btn" @click="openNoteEdit(r)">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -283,7 +283,7 @@
                 <textarea v-model="noteEditText" class="grd-textarea" rows="3" :placeholder="t('requests.note_placeholder')" autofocus />
                 <div class="grd-note-actions">
                   <button class="grd-btn grd-btn--ghost" @click="noteEditId = null">{{ t('common.cancel') }}</button>
-                  <button class="grd-btn grd-btn--primary" @click="saveNote">{{ t('common.save') }}</button>
+                  <button class="grd-btn grd-btn--primary btn-save-action" @click="saveNote">{{ t('common.save') }}</button>
                 </div>
               </div>
             </div>
@@ -302,6 +302,8 @@ import client from '@/services/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useRequestNotify } from '@/composables/useRequestNotify'
 import { useDialog } from '@/composables/useDialog'
+import { formatDate as _formatDate } from '@/utils/format'
+const formatDate = (iso: string | null | undefined): string => _formatDate(iso, '')
 
 const { t } = useI18n()
 const { gdConfirm } = useDialog()
@@ -511,7 +513,7 @@ async function submitRequest() {
     resetForm()
     setTimeout(() => { tab.value = 'list'; submitOk.value = false }, 1400)
   } catch (e: any) {
-    submitError.value = e?.response?.data?.detail || 'Failed to submit'
+    submitError.value = e?.response?.data?.detail || t('requests.submit_failed')
   } finally { submitting.value = false }
 }
 
@@ -572,12 +574,6 @@ async function deleteReq(r: GameReq) {
   try { await client.delete(`/requests/${r.id}`); requests.value = requests.value.filter(x => x.id !== r.id) } catch { /* ignore */ }
 }
 
-function formatDate(iso: string) {
-  try {
-    const lang = localStorage.getItem('gd-lang') || 'en'
-    return new Date(iso).toLocaleDateString(lang === 'pl' ? 'pl-PL' : 'en-US')
-  } catch { return '' }
-}
 </script>
 
 <style scoped>

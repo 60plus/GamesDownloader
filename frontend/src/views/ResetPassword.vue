@@ -16,7 +16,7 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        <span>Invalid reset link. No token was provided.</span>
+        <span>{{ t('reset.invalid_link') }}</span>
       </div>
 
       <!-- Success state -->
@@ -25,23 +25,23 @@
           <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
         </svg>
         <div>
-          <div class="success-title">Password reset successfully!</div>
-          <div class="success-sub">Redirecting to login...</div>
+          <div class="success-title">{{ t('reset.success') }}</div>
+          <div class="success-sub">{{ t('reset.redirecting') }}</div>
         </div>
       </div>
 
       <!-- Reset form -->
       <form v-else class="reset-form" @submit.prevent="doReset">
-        <p class="reset-intro">Enter your new password below.</p>
+        <p class="reset-intro">{{ t('reset.intro') }}</p>
 
         <div class="field">
-          <label class="field-label">New Password</label>
+          <label class="field-label">{{ t('reset.new_password') }}</label>
           <div class="field-password">
             <input
               v-model="newPassword"
               :type="showPwd ? 'text' : 'password'"
               class="field-input"
-              placeholder="New password"
+              :placeholder="t('reset.new_password')"
               autocomplete="new-password"
               ref="passwordRef"
             />
@@ -59,13 +59,13 @@
         </div>
 
         <div class="field">
-          <label class="field-label">Confirm Password</label>
+          <label class="field-label">{{ t('reset.confirm_password') }}</label>
           <div class="field-password">
             <input
               v-model="confirmPassword"
               :type="showPwd2 ? 'text' : 'password'"
               class="field-input"
-              placeholder="Confirm password"
+              :placeholder="t('reset.confirm_password')"
               autocomplete="new-password"
             />
             <button type="button" class="pwd-toggle" @click="showPwd2 = !showPwd2" tabindex="-1">
@@ -96,12 +96,12 @@
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
             <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
           </svg>
-          {{ loading ? 'Resetting...' : 'Reset Password' }}
+          {{ loading ? t('reset.resetting') : t('login.reset_password') }}
         </button>
       </form>
 
       <div class="back-row">
-        <router-link to="/login" class="back-link">Back to login</router-link>
+        <router-link to="/login" class="back-link">{{ t('login.back_to_login') }}</router-link>
       </div>
     </div>
   </div>
@@ -112,6 +112,10 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AmbientBackground from '@/components/common/AmbientBackground.vue'
 import client from '@/services/api/client'
+import { useI18n } from '@/i18n'
+import { isPasswordOk } from '@/utils/password'
+
+const { t } = useI18n()
 
 const route  = useRoute()
 const router = useRouter()
@@ -137,15 +141,15 @@ async function doReset() {
   error.value = ''
 
   if (!newPassword.value) {
-    error.value = 'Password is required'
+    error.value = t('auth.password_required')
     return
   }
-  if (newPassword.value.length < 4) {
-    error.value = 'Password must be at least 4 characters'
+  if (!isPasswordOk(newPassword.value)) {
+    error.value = t('auth.password_rule')
     return
   }
   if (newPassword.value !== confirmPassword.value) {
-    error.value = 'Passwords do not match'
+    error.value = t('reset.mismatch')
     return
   }
 
@@ -158,7 +162,7 @@ async function doReset() {
     success.value = true
     setTimeout(() => router.push('/login'), 2500)
   } catch (e: any) {
-    error.value = e?.response?.data?.detail || 'Invalid or expired reset link'
+    error.value = e?.response?.data?.detail || t('reset.invalid_or_expired')
   } finally {
     loading.value = false
   }
@@ -190,10 +194,6 @@ async function doReset() {
   box-shadow: 0 32px 80px rgba(0,0,0,.5);
   animation: card-in .35s ease;
 }
-@keyframes card-in {
-  from { opacity: 0; transform: translateY(18px) scale(.97); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
 
 /* Brand */
 .reset-brand {
@@ -215,10 +215,6 @@ async function doReset() {
     drop-shadow(0 0 12px var(--pglow, rgba(124,77,255,.7)))
     drop-shadow(0 0 28px var(--pglow2, rgba(91,33,182,.5)));
   animation: logo-pulse 3.5s ease-in-out infinite;
-}
-@keyframes logo-pulse {
-  0%,100% { filter: drop-shadow(0 0 10px var(--pglow)) drop-shadow(0 0 22px var(--pglow2)); }
-  50%     { filter: drop-shadow(0 0 20px var(--pglow)) drop-shadow(0 0 48px var(--pglow2)); }
 }
 
 .brand-name {
@@ -312,7 +308,6 @@ async function doReset() {
   border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
   animation: spin .7s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* Error / success boxes */
 .reset-error-box {

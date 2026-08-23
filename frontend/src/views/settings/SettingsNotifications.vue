@@ -44,7 +44,7 @@
             </div>
             <div class="field-group field-group--grow">
               <label class="field-label">{{ t('notif.password') }}</label>
-              <input v-model="smtp.password" class="field-input" type="password" placeholder="SMTP password" autocomplete="new-password" />
+              <input v-model="smtp.password" class="field-input" type="password" :placeholder="t('notif.password')" autocomplete="new-password" />
             </div>
           </div>
 
@@ -171,24 +171,12 @@
                 {{ t('notif.html_hint') }}
               </div>
 
-              <div class="sn-tpl-section">
-                <div class="sn-tpl-section-hdr">{{ t('notif.recently_added') }}</div>
-                <div class="sn-tpl-group">
-                  <div class="sn-tpl-label">{{ t('notif.subject') }}</div>
-                  <input v-model="smtp.email_tpl_added_subject" class="field-input field-input--sm" placeholder="Added to the library: {title}" />
-                </div>
-                <div class="sn-tpl-group">
-                  <div class="sn-tpl-label">{{ t('notif.body') }}</div>
-                  <textarea v-model="smtp.email_tpl_added_body" class="sn-tpl-textarea" placeholder="<p><strong>{title}</strong> was recently added to your library.</p>"></textarea>
-                </div>
-                <div class="sn-tpl-preview" style="background:#1a1a2e">
-                  <div class="sn-tpl-preview-bar" style="background:#8E44AD;width:3px" />
-                  <div class="sn-tpl-preview-body">
-                    <div class="sn-tpl-preview-title">Subject: {{ tplPreview(smtp.email_tpl_added_subject, 'Added to the library: {title}', sampleAdded) }}</div>
-                    <div class="sn-tpl-preview-text" v-html="tplPreviewHtml(smtp.email_tpl_added_body, '&lt;p&gt;&lt;strong&gt;{title}&lt;/strong&gt; was recently added to your library.&lt;/p&gt;', sampleAdded)"></div>
-                  </div>
-                </div>
-              </div>
+              <!-- No "recently added" template pair here: that mail is a
+                   rendered card (cover, stars, genre, link) built server-side,
+                   not a subject and body. The fields that used to sit here had
+                   a working live preview and saved without error, and nothing
+                   ever read what they saved. Its delivery switch is the
+                   Recently added mode above. -->
 
               <div class="sn-tpl-section">
                 <div class="sn-tpl-section-hdr">{{ t('notif.download_complete') }}</div>
@@ -203,7 +191,7 @@
                 <div class="sn-tpl-preview" style="background:#1a1a2e">
                   <div class="sn-tpl-preview-bar" style="background:#7C3AED;width:3px" />
                   <div class="sn-tpl-preview-body">
-                    <div class="sn-tpl-preview-title">Subject: {{ tplPreview(smtp.email_tpl_download_subject, 'Download Complete: {title}', sampleDl) }}</div>
+                    <div class="sn-tpl-preview-title">{{ t('notif.subject_prefix') }} {{ tplPreview(smtp.email_tpl_download_subject, 'Download Complete: {title}', sampleDl) }}</div>
                     <div class="sn-tpl-preview-text" v-html="tplPreviewHtml(smtp.email_tpl_download_body, '&lt;p&gt;&lt;strong&gt;{title}&lt;/strong&gt; has finished downloading and is ready to play.&lt;/p&gt;', sampleDl)"></div>
                   </div>
                 </div>
@@ -222,7 +210,7 @@
                 <div class="sn-tpl-preview" style="background:#1a1a2e">
                   <div class="sn-tpl-preview-bar" style="background:#7C3AED;width:3px" />
                   <div class="sn-tpl-preview-body">
-                    <div class="sn-tpl-preview-title">Subject: {{ tplPreview(smtp.email_tpl_sync_subject, 'GOG Library Synced', sampleSync) }}</div>
+                    <div class="sn-tpl-preview-title">{{ t('notif.subject_prefix') }} {{ tplPreview(smtp.email_tpl_sync_subject, 'GOG Library Synced', sampleSync) }}</div>
                     <div class="sn-tpl-preview-text" v-html="tplPreviewHtml(smtp.email_tpl_sync_body, '&lt;p&gt;Your GOG library has been synchronized successfully.&lt;/p&gt;', sampleSync)"></div>
                   </div>
                 </div>
@@ -241,7 +229,7 @@
                 <div class="sn-tpl-preview" style="background:#1a1a2e">
                   <div class="sn-tpl-preview-bar" style="background:#3B82F6;width:3px" />
                   <div class="sn-tpl-preview-body">
-                    <div class="sn-tpl-preview-title">Subject: {{ tplPreview(smtp.email_tpl_request_new_subject, 'New Game Request: {title}', sampleReqNew) }}</div>
+                    <div class="sn-tpl-preview-title">{{ t('notif.subject_prefix') }} {{ tplPreview(smtp.email_tpl_request_new_subject, 'New Game Request: {title}', sampleReqNew) }}</div>
                     <div class="sn-tpl-preview-text" v-html="tplPreviewHtml(smtp.email_tpl_request_new_body, '&lt;p&gt;&lt;strong&gt;{username}&lt;/strong&gt; requested &lt;strong&gt;{title}&lt;/strong&gt;.&lt;/p&gt;&lt;p&gt;{description}&lt;/p&gt;', sampleReqNew)"></div>
                   </div>
                 </div>
@@ -260,7 +248,7 @@
                 <div class="sn-tpl-preview" style="background:#1a1a2e">
                   <div class="sn-tpl-preview-bar" :style="{ background: st.color, width: '3px' }" />
                   <div class="sn-tpl-preview-body">
-                    <div class="sn-tpl-preview-title">Subject: {{ tplPreview((smtp as any)['email_tpl_request_' + st.key + '_subject'] || '', st.defaultSubject, st.sample) }}</div>
+                    <div class="sn-tpl-preview-title">{{ t('notif.subject_prefix') }} {{ tplPreview((smtp as any)['email_tpl_request_' + st.key + '_subject'] || '', st.defaultSubject, st.sample) }}</div>
                     <div class="sn-tpl-preview-text" v-html="tplPreviewHtml((smtp as any)['email_tpl_request_' + st.key + '_body'] || '', st.defaultBody, st.sample)"></div>
                   </div>
                 </div>
@@ -282,7 +270,7 @@
               <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
               {{ smtpTesting ? t('notif.sending') : t('notif.send_test_email') }}
             </button>
-            <button class="action-btn action-btn--primary" :disabled="smtpSaving" @click="saveSmtp">
+            <button class="action-btn action-btn--primary btn-save-action" :disabled="smtpSaving" @click="saveSmtp">
               <span v-if="smtpSaving" class="spinner" />
               <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
               {{ t('notif.save_smtp') }}
@@ -562,7 +550,7 @@
               <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
               {{ whTesting ? t('notif.sending') : t('notif.send_test') }}
             </button>
-            <button class="action-btn action-btn--primary" :disabled="whSaving" @click="saveWebhook" type="button">
+            <button class="action-btn action-btn--primary btn-save-action" :disabled="whSaving" @click="saveWebhook" type="button">
               <span v-if="whSaving" class="spinner" />
               <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
               {{ t('notif.save_webhook') }}
@@ -599,12 +587,9 @@ const smtp = reactive({
   email_notify_download: true,
   email_notify_sync: true,
   email_notify_request: true,
-  email_notify_added: false,
   recently_added_mode: 'off',
   recently_added_time: '09:00',
   recently_added_weekday: 0,
-  email_tpl_added_subject: '',
-  email_tpl_added_body: '',
   email_tpl_download_subject: '',
   email_tpl_download_body: '',
   email_tpl_sync_subject: '',
@@ -930,7 +915,6 @@ async function saveWebhook() {
   border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
   animation: spin .7s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* Advanced templates */
 .sn-advanced-toggle {

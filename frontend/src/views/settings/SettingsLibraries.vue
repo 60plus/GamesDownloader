@@ -123,7 +123,7 @@
           <div v-if="editError" class="ls-error">{{ editError }}</div>
           <div class="ls-ed-actions">
             <button class="ls-ed-cancel" @click="cancelEdit">{{ t('common.cancel') }}</button>
-            <button class="ls-ed-save" :disabled="editSaving" @click="saveEdit(lib)">{{ editSaving ? t('common.loading') : t('common.save') }}</button>
+            <button class="ls-ed-save btn-save-action" :disabled="editSaving" @click="saveEdit(lib)">{{ editSaving ? t('common.loading') : t('common.save') }}</button>
           </div>
         </div>
       </div>

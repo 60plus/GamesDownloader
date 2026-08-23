@@ -73,7 +73,7 @@
         </svg>
       </button>
       <button
-        class="wizard-btn wizard-btn--primary"
+        class="wizard-btn wizard-btn--primary btn-save-action"
         :disabled="!hasAnyKey || saving"
         @click="save"
       >
@@ -244,5 +244,5 @@ async function save() {
   animation: spin .7s linear infinite; display: inline-block;
 }
 .spinner--sm { width: 10px; height: 10px; }
-@keyframes spin { to { transform: rotate(360deg); } }
+
 </style>

@@ -48,7 +48,7 @@
             v-model="form.password"
             class="field-input"
             :type="showPass ? 'text' : 'password'"
-            :placeholder="t('setup.admin.placeholder.password')"
+            :placeholder="t('auth.password_hint')"
             autocomplete="new-password"
             :class="{ 'field-input--error': errors.password }"
           />
@@ -97,6 +97,7 @@
 import { ref, reactive } from 'vue'
 import client from '@/services/api/client'
 import { useI18n } from '@/i18n'
+import { isPasswordOk } from '@/utils/password'
 
 const { t } = useI18n()
 const emit = defineEmits<{ next: [] }>()
@@ -116,10 +117,7 @@ function validate() {
   let ok = true
   if (!form.username.trim()) { errors.username = t('setup.admin.error.username_required'); ok = false }
   if (!form.email.trim()) { errors.email = t('setup.admin.error.email_required'); ok = false }
-  if (form.password.length < 8) { errors.password = t('setup.admin.error.password_min'); ok = false }
-  else if (!/[a-zA-Z]/.test(form.password) || !/[0-9]/.test(form.password)) {
-    errors.password = t('setup.admin.error.password_strength'); ok = false
-  }
+  if (!isPasswordOk(form.password)) { errors.password = t('auth.password_rule'); ok = false }
   if (form.password !== form.confirm) { errors.confirm = t('setup.admin.error.password_mismatch'); ok = false }
   return ok
 }
@@ -205,5 +203,5 @@ async function submit() {
   border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
   animation: spin .7s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+
 </style>

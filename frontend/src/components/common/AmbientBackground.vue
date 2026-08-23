@@ -1,13 +1,8 @@
 <template>
-  <div
-    v-if="theme.ambient"
-    class="ambient-bg"
-    :data-pattern="orbPattern"
-  >
+  <div v-if="theme.ambient" class="ambient-bg" :data-pattern="orbPattern">
     <div class="ambient-orb orb-1" :class="{ 'orb--static': !orbMotion }" />
     <div v-if="orbCount >= 2" class="ambient-orb orb-2" :class="{ 'orb--static': !orbMotion }" />
     <div v-if="orbCount >= 3" class="ambient-orb orb-3" :class="{ 'orb--static': !orbMotion }" />
-    <div v-if="theme.grid" class="grid-pattern" />
   </div>
 </template>
 
@@ -199,14 +194,4 @@ const orbPattern = computed(() => String(theme.getThemeSettingValue('orbPattern'
 }
 
 /* ── Grid overlay ─────────────────────────────────────────────────────────── */
-.grid-pattern {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px);
-  background-size: 52px 52px;
-  mask-image: radial-gradient(ellipse 90% 80% at 50% 40%, #000 40%, transparent 80%);
-  -webkit-mask-image: radial-gradient(ellipse 90% 80% at 50% 40%, #000 40%, transparent 80%);
-}
 </style>

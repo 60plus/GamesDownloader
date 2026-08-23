@@ -24,7 +24,7 @@
           <!-- Cover -->
           <div class="mep-label">{{ t('meta.tab_cover') }}</div>
           <div class="mep-cover-current" @click="switchTab('cover')" style="cursor:pointer">
-            <img v-if="selectedCover || rom.cover_path" :src="selectedCover || rom.cover_path || ''" alt="Cover" class="mep-cover-img" />
+            <img v-if="selectedCover || rom.cover_path" :src="selectedCover || rom.cover_path || ''" :alt="t('meta.tab_cover')" class="mep-cover-img" />
             <div v-else class="mep-cover-empty">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><rect x="2" y="6" width="20" height="12" rx="2"/></svg>
             </div>
@@ -33,7 +33,7 @@
           <!-- Hero -->
           <div class="mep-label" style="margin-top:12px">{{ t('meta.tab_hero') }}</div>
           <div class="mep-cover-current mep-cover-current--wide" @click="switchTab('hero')" style="cursor:pointer">
-            <img v-if="selectedHero" :src="selectedHero" alt="Hero" class="mep-cover-img" />
+            <img v-if="selectedHero" :src="selectedHero" :alt="t('meta.tab_hero')" class="mep-cover-img" />
             <div v-else class="mep-cover-empty">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><rect x="1" y="5" width="22" height="14" rx="2"/></svg>
             </div>
@@ -42,7 +42,7 @@
           <!-- Support -->
           <div class="mep-label" style="margin-top:12px">{{ t('meta.tab_support') }}</div>
           <div class="mep-cover-current" @click="switchTab('support')" style="cursor:pointer">
-            <img v-if="selectedSupport" :src="selectedSupport" alt="Support" class="mep-cover-img" />
+            <img v-if="selectedSupport" :src="selectedSupport" :alt="t('meta.tab_support')" class="mep-cover-img" />
             <div v-else class="mep-cover-empty">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><circle cx="12" cy="12" r="9"/></svg>
             </div>
@@ -51,7 +51,7 @@
           <!-- Wheel -->
           <div class="mep-label" style="margin-top:12px">{{ t('meta.tab_wheel') }}</div>
           <div class="mep-cover-current mep-cover-current--wide" @click="switchTab('wheel')" style="cursor:pointer">
-            <img v-if="selectedWheel" :src="selectedWheel" alt="Wheel" style="width:100%;height:100%;object-fit:contain;padding:4px" />
+            <img v-if="selectedWheel" :src="selectedWheel" :alt="t('meta.tab_wheel')" style="width:100%;height:100%;object-fit:contain;padding:4px" />
             <div v-else class="mep-cover-empty">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
             </div>
@@ -88,7 +88,7 @@
                 <span class="mep-source-name">{{ t('meta.search_ss_igdb_lb') }}</span>
               </div>
               <div class="mep-search-row">
-                <input v-model="ssQuery" class="mep-search-input" placeholder="Search games…" @keydown.enter="searchGames" />
+                <input v-model="ssQuery" class="mep-search-input" :placeholder="t('meta.search_games_ph')" @keydown.enter="searchGames" />
                 <button class="mep-search-btn" :disabled="ssLoading" @click="searchGames">
                   <div v-if="ssLoading" class="mep-spinner mep-spinner--sm" />
                   <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
@@ -664,7 +664,7 @@
             <div class="mep-source-section">
               <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.search_ss_igdb_lb') }}</span></div>
               <div class="mep-search-row">
-                <input v-model="ssQuery" class="mep-search-input" placeholder="Search games…" @keydown.enter="searchGames" />
+                <input v-model="ssQuery" class="mep-search-input" :placeholder="t('meta.search_games_ph')" @keydown.enter="searchGames" />
                 <button class="mep-search-btn" :disabled="ssLoading" @click="searchGames">
                   <div v-if="ssLoading" class="mep-spinner mep-spinner--sm" />
                   {{ t('meta.search') }}
@@ -706,7 +706,7 @@
             <div class="mep-form" style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,.07)">
               <div class="mep-field">
                 <label class="mep-field-label">{{ t('meta.summary_desc') }} <TranslateButton :text="editFields.summary || ''" @translated="tr => editFields.summary = tr" /></label>
-                <textarea v-model="editFields.summary" class="mep-textarea" rows="8" placeholder="Game summary or description..." />
+                <textarea v-model="editFields.summary" class="mep-textarea" rows="8" :placeholder="t('meta.summary_desc')" />
               </div>
             </div>
 
@@ -719,7 +719,7 @@
 
             <div v-if="!selectedSsId && !selectedIgdbId && !selectedLaunchboxId" class="mep-empty-state-sm">{{ t('meta.select_game_first') }}</div>
             <div v-else-if="mediaLoading" class="mep-loading"><div class="mep-spinner" /> {{ t('meta.loading_media') }}</div>
-            <div v-else-if="!allMedia.detail_sources?.length" class="mep-empty-state-sm">{{ t('meta.no_detail_results', 'No details found') }}</div>
+            <div v-else-if="!allMedia.detail_sources?.length" class="mep-empty-state-sm">{{ t('meta.no_detail_results', t('meta.no_details')) }}</div>
             <div v-else class="mep-detail-sources">
               <div v-for="src in allMedia.detail_sources" :key="src.source" class="mep-detail-source">
                 <div class="mep-desc-source-header">
@@ -749,17 +749,17 @@
 
               <div class="mep-field">
                 <label class="mep-field-label">{{ t('meta.display_name') }}</label>
-                <input v-model="editFields.name" class="mep-input" placeholder="Display name" />
+                <input v-model="editFields.name" class="mep-input" :placeholder="t('meta.display_name')" />
               </div>
 
               <div class="mep-form-row">
                 <div class="mep-field">
                   <label class="mep-field-label">{{ t('meta.developer') }}</label>
-                  <input v-model="editFields.developer" class="mep-input" placeholder="Studio" />
+                  <input v-model="editFields.developer" class="mep-input" :placeholder="t('meta.developer')" />
                 </div>
                 <div class="mep-field">
                   <label class="mep-field-label">{{ t('meta.publisher') }}</label>
-                  <input v-model="editFields.publisher" class="mep-input" placeholder="Publisher" />
+                  <input v-model="editFields.publisher" class="mep-input" :placeholder="t('meta.publisher')" />
                 </div>
               </div>
 
@@ -874,7 +874,7 @@
             {{ t('meta.resend_notification') }}
           </button>
           <button class="mep-btn-cancel" @click="$emit('close')">{{ t('meta.cancel') }}</button>
-          <button class="mep-btn-save" :disabled="saving || !hasChanges" @click="save">
+          <button class="mep-btn-save btn-save-action" :disabled="saving || !hasChanges" @click="save">
             <div v-if="saving" class="mep-spinner mep-spinner--sm" />
             {{ saving ? t('meta.saving') : t('meta.save_changes') }}
           </button>
@@ -1225,6 +1225,9 @@ function switchTab(id: TabId) { activeTab.value = id }
 
 // ── Search ─────────────────────────────────────────────────────────────────────
 async function searchGames() {
+  // Enter fires this too, and that input is not disabled while a search
+  // runs. Two runs race and the slower one writes last.
+  if (ssLoading.value) return
   ssLoading.value = true; ssSearched.value = false; ssResults.value = []; searchFilter.value = 'all'
   try {
     const { data } = await client.get('/roms/search', {
@@ -1359,7 +1362,7 @@ async function onMediaFile(kind: string, e: Event) {
     if (kind === 'screenshot') editScreenshots.value.push(data.path)
     else setSelected(kind, data.path)
   } catch (err: any) {
-    saveError.value = err?.response?.data?.detail || 'Upload failed'
+    saveError.value = err?.response?.data?.detail || t('upload.failed')
   } finally {
     uploadingKind.value = ''
   }
@@ -1457,7 +1460,7 @@ async function save() {
     emit('saved')
     setTimeout(() => emit('close'), 700)
   } catch (err: any) {
-    saveError.value = err?.response?.data?.detail || 'Save failed'
+    saveError.value = err?.response?.data?.detail || t('common.save_failed')
   } finally {
     saving.value = false
   }
@@ -1480,9 +1483,12 @@ async function resendNotification() {
 <style scoped>
 /* ── Overlay & Panel ────────────────────────────────────────────────────────── */
 .mep-overlay {
-  position: fixed; inset: 0; z-index: 1200;
+  position: fixed; inset: 0; z-index: 8000;
   background: rgba(0,0,0,.72); backdrop-filter: blur(8px);
   display: flex; align-items: center; justify-content: center;
+  /* Keyframes live in styles/metadata-panel.css, which is global. This panel
+     keeps its own look but had no entrance at all, so it simply appeared. */
+  animation: mep-fade-in .18s ease;
 }
 .mep-panel {
   width: 92vw; max-width: 1260px; height: 88vh;
@@ -1494,6 +1500,7 @@ async function resendNotification() {
               0 24px 60px rgba(0,0,0,.6),
               0 0 40px color-mix(in srgb, var(--pl) 8%, transparent);
   display: flex; flex-direction: column; overflow: hidden;
+  animation: mep-slide-up .2s cubic-bezier(.23,1,.32,1);
 }
 
 /* ── Header ─────────────────────────────────────────────────────────────────── */
@@ -1543,7 +1550,7 @@ async function resendNotification() {
   cursor: pointer; transition: all .15s; white-space: nowrap;
 }
 .mep-tab:hover  { color: rgba(255,255,255,.7); background: rgba(255,255,255,.05); }
-.mep-tab.active { color: #fff; background: rgba(255,255,255,.09); border-bottom: 2px solid #6366f1; }
+.mep-tab.active { color: #fff; background: rgba(255,255,255,.09); border-bottom: 2px solid var(--pl); }
 .mep-tab-content { flex: 1; overflow-y: auto; padding: 14px; }
 
 /* ── Source sections ────────────────────────────────────────────────────────── */
@@ -1649,14 +1656,14 @@ async function resendNotification() {
   color: #fff; padding: 7px 10px; border-radius: 6px; font-size: .8rem; outline: none;
   transition: border-color .15s;
 }
-.mep-search-input:focus { border-color: rgba(99,102,241,.5); }
+.mep-search-input:focus { border-color: color-mix(in srgb, var(--pl) 50%, transparent); }
 .mep-search-btn {
   display: flex; align-items: center; gap: 5px;
-  background: rgba(99,102,241,.2); border: 1px solid rgba(99,102,241,.3);
+  background: color-mix(in srgb, var(--pl) 20%, transparent); border: 1px solid color-mix(in srgb, var(--pl) 30%, transparent);
   color: rgba(255,255,255,.8); padding: 7px 12px; border-radius: 6px;
   font-size: .78rem; cursor: pointer; transition: all .15s; white-space: nowrap;
 }
-.mep-search-btn:hover:not(:disabled) { background: rgba(99,102,241,.35); }
+.mep-search-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--pl) 35%, transparent); }
 .mep-search-btn:disabled { opacity: .4; cursor: default; }
 
 /* ── Cover grid ─────────────────────────────────────────────────────────────── */
@@ -1664,7 +1671,7 @@ async function resendNotification() {
 .mep-covers-grid--wide { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 .mep-cover-option { cursor: pointer; border-radius: 6px; overflow: hidden; position: relative; }
 .mep-cover-option:hover .mep-cover-option-img { opacity: .8; }
-.mep-cover-option.selected .mep-cover-option-img { outline: 2px solid #6366f1; }
+.mep-cover-option.selected .mep-cover-option-img { outline: 2px solid var(--pl); }
 .mep-cover-option-img { background: rgba(255,255,255,.04); position: relative; overflow: hidden; aspect-ratio: 3/4; }
 .mep-cover-option-img.ar-spine  { aspect-ratio: 1/3; }
 .mep-cover-option-img.ar-back   { aspect-ratio: 4/3; }
@@ -1677,7 +1684,7 @@ async function resendNotification() {
 .mep-cover-author { font-size: .62rem; opacity: .35; padding: 0 3px 3px; text-align: center; }
 .mep-selected-check {
   position: absolute; bottom: 4px; right: 4px;
-  background: #6366f1; border-radius: 50%; width: 20px; height: 20px;
+  background: var(--pl); border-radius: 50%; width: 20px; height: 20px;
   display: flex; align-items: center; justify-content: center;
 }
 
@@ -1710,11 +1717,11 @@ async function resendNotification() {
 .mep-desc-source-icon img { border-radius: 2px; }
 .mep-desc-source-name { flex: 1; font-size: .78rem; font-weight: 600; color: rgba(255,255,255,.7); }
 .mep-desc-apply-btn {
-  background: rgba(99,102,241,.2); border: 1px solid rgba(99,102,241,.35);
-  color: #a5b4fc; font-size: .72rem; padding: 3px 9px;
+  background: color-mix(in srgb, var(--pl) 20%, transparent); border: 1px solid color-mix(in srgb, var(--pl) 35%, transparent);
+  color: var(--pl-light); font-size: .72rem; padding: 3px 9px;
   border-radius: var(--radius-xs, 4px); cursor: pointer; white-space: nowrap; transition: background .15s; margin-left: auto;
 }
-.mep-desc-apply-btn:hover { background: rgba(99,102,241,.35); }
+.mep-desc-apply-btn:hover { background: color-mix(in srgb, var(--pl) 35%, transparent); }
 .mep-desc-preview { font-size: .73rem; color: rgba(255,255,255,.45); line-height: 1.5; max-height: 72px; overflow: hidden; }
 
 /* ── Detail chips ───────────────────────────────────────────────────────────── */
@@ -1737,20 +1744,20 @@ async function resendNotification() {
   color: #fff; padding: 7px 10px; border-radius: 6px; font-size: .8rem;
   outline: none; transition: border-color .15s; flex: 1;
 }
-.mep-input:focus { border-color: rgba(99,102,241,.5); }
+.mep-input:focus { border-color: color-mix(in srgb, var(--pl) 50%, transparent); }
 .mep-textarea {
   background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
   color: #fff; padding: 8px 10px; border-radius: 6px; font-size: .8rem;
   outline: none; resize: vertical; font-family: inherit; line-height: 1.5;
   transition: border-color .15s;
 }
-.mep-textarea:focus { border-color: rgba(99,102,241,.5); }
+.mep-textarea:focus { border-color: color-mix(in srgb, var(--pl) 50%, transparent); }
 .mep-apply-btn {
-  background: rgba(99,102,241,.18); border: 1px solid rgba(99,102,241,.3);
-  color: #a5b4fc; padding: 6px 12px; border-radius: 5px; font-size: .76rem;
+  background: color-mix(in srgb, var(--pl) 18%, transparent); border: 1px solid color-mix(in srgb, var(--pl) 30%, transparent);
+  color: var(--pl-light); padding: 6px 12px; border-radius: 5px; font-size: .76rem;
   cursor: pointer; transition: all .15s; white-space: nowrap; flex-shrink: 0;
 }
-.mep-apply-btn:hover:not(:disabled) { background: rgba(99,102,241,.3); }
+.mep-apply-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--pl) 30%, transparent); }
 .mep-apply-btn:disabled { opacity: .35; cursor: default; }
 
 /* ── Footer ─────────────────────────────────────────────────────────────────── */
@@ -1779,7 +1786,7 @@ async function resendNotification() {
 }
 .mep-btn-cancel:hover { border-color: rgba(255,255,255,.3); color: #fff; }
 .mep-btn-save {
-  background: #6366f1; border: none; color: #fff;
+  background: var(--pl); border: none; color: #fff;
   padding: 7px 20px; border-radius: 7px; font-size: .82rem;
   cursor: pointer; display: flex; align-items: center; gap: 6px;
   transition: background .15s;
@@ -1799,22 +1806,20 @@ async function resendNotification() {
 }
 .mep-filter-btn img { border-radius: 2px; flex-shrink: 0; }
 .mep-filter-btn:hover { border-color: rgba(255,255,255,.25); color: #fff; }
-.mep-filter-btn.active { background: rgba(99,102,241,.25); border-color: rgba(99,102,241,.5); color: #a5b4fc; }
+.mep-filter-btn.active { background: color-mix(in srgb, var(--pl) 25%, transparent); border-color: color-mix(in srgb, var(--pl) 50%, transparent); color: var(--pl-light); }
 .mep-filter-count {
   background: rgba(255,255,255,.1); color: rgba(255,255,255,.5);
   border-radius: 10px; padding: 0 5px; font-size: .72rem; min-width: 18px; text-align: center;
 }
-.mep-filter-btn.active .mep-filter-count { background: rgba(99,102,241,.3); color: #a5b4fc; }
-
+.mep-filter-btn.active .mep-filter-count { background: color-mix(in srgb, var(--pl) 30%, transparent); color: var(--pl-light); }
 
 /* ── Spinner ────────────────────────────────────────────────────────────────── */
 .mep-spinner {
   width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.2);
-  border-top-color: #6366f1; border-radius: 50%; animation: spin .7s linear infinite;
+  border-top-color: var(--pl); border-radius: 50%; animation: spin .7s linear infinite;
   flex-shrink: 0;
 }
 .mep-spinner--sm { width: 12px; height: 12px; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Mobile ────────────────────────────────────────────────────────────────── */
 @media (max-width: 640px) {

@@ -57,7 +57,7 @@
       </div>
 
       <div class="sr-actions">
-        <button class="sr-btn sr-btn--primary" @click="save" :disabled="saving">{{ saving ? t('roms.saving') : t('common.save') }}</button>
+        <button class="sr-btn sr-btn--primary btn-save-action" @click="save" :disabled="saving">{{ saving ? t('roms.saving') : t('common.save') }}</button>
         <span v-if="savedMsg" class="sr-saved-msg">{{ savedMsg }}</span>
       </div>
     </section>
@@ -129,7 +129,7 @@
           <h2 class="sr-section-title">{{ t('roms.presets') }}</h2>
           <p class="sr-section-sub">{{ t('roms.presets_desc') }}</p>
         </div>
-        <button class="sr-btn sr-btn--primary" @click="savePresets" :disabled="savingPresets" style="flex-shrink:0">
+        <button class="sr-btn sr-btn--primary btn-save-action" @click="savePresets" :disabled="savingPresets" style="flex-shrink:0">
           {{ savingPresets ? t('roms.saving') : t('roms.save_presets') }}
         </button>
       </div>

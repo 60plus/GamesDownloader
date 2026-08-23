@@ -499,7 +499,6 @@ watch(() => [slug.value, catalogId.value].join('|'), () => load())
 .sync-btn:disabled { opacity: .6; cursor: not-allowed; }
 .sync-btn--running { border-color: var(--pl); color: var(--pl-light); }
 .spin { animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .clear-meta-btn {
   display: inline-flex; align-items: center; gap: 6px;

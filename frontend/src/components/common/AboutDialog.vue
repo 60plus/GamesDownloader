@@ -17,7 +17,7 @@
           </a>
 
           <div class="about-sep" />
-          <div class="about-created">created by</div>
+          <div class="about-created">{{ t('about.created_by') }}</div>
           <img src="/about/60plus.png" class="about-author" alt="60plus" />
           <div class="about-year">&copy; 2026</div>
         </div>

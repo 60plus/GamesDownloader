@@ -16,7 +16,7 @@
             v-if="status.avatar_url"
             :src="status.avatar_url"
             class="sg-avatar"
-            alt="GOG avatar"
+            :alt="t('gog.avatar')"
             @error="status.avatar_url = ''"
           />
           <div v-else class="sg-avatar-placeholder">
@@ -174,6 +174,8 @@ import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import client from '@/services/api/client'
 import { useI18n } from '@/i18n'
 import { useDialog } from '@/composables/useDialog'
+import { formatDate as _formatDate, uiLocale } from '@/utils/format'
+const formatDate = (iso: string | null | undefined): string => _formatDate(iso, '-')
 
 const { t } = useI18n()
 const { gdConfirm } = useDialog()
@@ -225,29 +227,16 @@ async function loadStatus() {
   }
 }
 
-function getLocale(): string {
-  return localStorage.getItem('gd3_locale') || navigator.language || 'en'
-}
-
 function formatExpiry(iso?: string): string {
   if (!iso) return '-'
   try {
     const d = new Date(iso)
-    return d.toLocaleString(getLocale(), { dateStyle: 'medium', timeStyle: 'short' })
+    return d.toLocaleString(uiLocale(), { dateStyle: 'medium', timeStyle: 'short' })
   } catch {
     return iso
   }
 }
 
-function formatDate(iso?: string): string {
-  if (!iso) return '-'
-  try {
-    const d = new Date(iso)
-    return d.toLocaleDateString(getLocale(), { year: 'numeric', month: 'long', day: 'numeric' })
-  } catch {
-    return iso
-  }
-}
 
 async function disconnect() {
   const ok = await gdConfirm(t('gog.disconnect_confirm', 'Disconnect your GOG account? You will need to reconnect to access your GOG library.'), { title: t('gog.disconnect', 'Disconnect'), danger: true, confirmText: t('gog.disconnect', 'Disconnect') })
@@ -289,7 +278,7 @@ async function linkAccount() {
     const { data } = await client.post('/gog/auth/callback', { code: codeInput.value.trim() })
     Object.assign(status, {
       authenticated: true,
-      username:  data.username || 'GOG User',  // fallback display name
+      username:  data.username || t('gog.default_user'),  // fallback display name
       avatar_url: data.avatar_url || '',
     })
     codeInput.value = ''
@@ -542,5 +531,5 @@ async function triggerSync() {
   animation: spin .7s linear infinite; display: inline-block;
 }
 .spinner--sm { width: 10px; height: 10px; }
-@keyframes spin { to { transform: rotate(360deg); } }
+
 </style>

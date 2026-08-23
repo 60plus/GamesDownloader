@@ -238,10 +238,43 @@ export function platformArt(fsSlug: string): { icon: string; name: string; fanar
   };
 }
 
+/** Drop a source's cached listings so the next one is fetched again. */
+export async function refreshSource(sourceId: string): Promise<{ refreshed: boolean; reason?: string }> {
+  const { data } = await client.post(`/rom-sources/${encodeURIComponent(sourceId)}/refresh`);
+  return data as { refreshed: boolean; reason?: string };
+}
+
+/** Stop writing but keep what is on disk; resume() carries on from there. */
+export async function pauseJob(jobId: number): Promise<void> {
+  await client.post(`/rom-sources/downloads/${jobId}/pause`);
+}
+
+/** Carry on from the end of the .part file. */
+export async function resumeJob(jobId: number): Promise<void> {
+  await client.post(`/rom-sources/downloads/${jobId}/resume`);
+}
+
+/** Run a failed or cancelled download again. */
+export async function retryJob(jobId: number): Promise<void> {
+  await client.post(`/rom-sources/downloads/${jobId}/retry`);
+}
+
+/** Stop and delete a running download, or drop a finished one from the list. */
+export async function cancelJob(jobId: number): Promise<void> {
+  await client.delete(`/rom-sources/downloads/${jobId}`);
+}
+
+/** Jobs the server still knows about, so a reloaded page finds them again. */
+export async function listJobs(): Promise<Array<Record<string, unknown>>> {
+  const { data } = await client.get("/rom-sources/downloads");
+  return (data?.jobs || []) as Array<Record<string, unknown>>;
+}
+
 /** The `window.__GD__.roms` namespace (general ROM primitives). */
 export const romActions = { import: importRom };
 
 export default {
   list, platforms, listRoms, download, route, platformArt,
   previewEntry, previewKey,
+  pauseJob, resumeJob, retryJob, cancelJob, listJobs, refreshSource,
 };

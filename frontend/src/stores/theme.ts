@@ -6,7 +6,6 @@
  *  - data-skin        → color palette
  *  - data-animations  → enable/disable animations
  *  - data-ambient     → ambient background orbs
- *  - data-grid        → grid overlay pattern
  *
  * Per-theme settings are stored as CSS custom properties on :root,
  * overriding the skin defaults. Each theme declares its own settings
@@ -21,7 +20,6 @@ const LS_THEME          = "gd3_theme";
 const LS_SKIN           = "gd3_skin";
 const LS_ANIMATIONS     = "gd3_animations";
 const LS_AMBIENT        = "gd3_ambient";
-const LS_GRID           = "gd3_grid";
 const LS_ORB_MOTION     = "gd3_orb_motion";
 const LS_THEME_SETTINGS = "gd3_theme_settings";
 const LS_HIDDEN_LIBS    = "gd3_hidden_libraries";
@@ -53,7 +51,6 @@ export const useThemeStore = defineStore("theme", () => {
   const skinId     = ref(localStorage.getItem(LS_SKIN)       || "purple");
   const animations = ref(localStorage.getItem(LS_ANIMATIONS) !== "false");
   const ambient    = ref(localStorage.getItem(LS_AMBIENT)    !== "false");
-  const grid       = ref(localStorage.getItem(LS_GRID)       !== "false");
   const orbMotion  = ref(localStorage.getItem(LS_ORB_MOTION) !== "false");
   // Card effects
   const cardTilt   = ref(localStorage.getItem(LS_CARD_TILT)  !== "false");
@@ -106,6 +103,18 @@ export const useThemeStore = defineStore("theme", () => {
     return themeSettings.value[themeId.value]?.[key] ?? setting.default;
   }
 
+  /**
+   * Does the theme in use actually draw this effect?
+   *
+   * A theme that lists nothing is taken to draw everything, which is what all
+   * of them meant before the list existed - so a plugin theme built against an
+   * older core keeps behaving exactly as it did.
+   */
+  function supportsEffect(id: string): boolean {
+    const declared = currentTheme.value?.effects;
+    return !Array.isArray(declared) || declared.includes(id as never);
+  }
+
   // ── Apply to DOM ───────────────────────────────────────────────────────
   function applyToDOM() {
     const root = document.documentElement;
@@ -113,7 +122,24 @@ export const useThemeStore = defineStore("theme", () => {
     root.setAttribute("data-skin",       skinId.value);
     root.setAttribute("data-animations", String(animations.value));
     root.setAttribute("data-ambient",    String(ambient.value));
-    root.setAttribute("data-grid",       String(grid.value));
+
+    // The card effects, for themes that draw them in CSS rather than in
+    // script. Vapor paints its accent ring and its light sweep entirely in
+    // stylesheets, so reading the store was never open to it - it needs the
+    // switch on the document, the same way it already reads data-animations.
+    root.setAttribute("data-card-tilt",  String(cardTilt.value));
+    root.setAttribute("data-card-shine", String(cardShine.value));
+    root.setAttribute("data-card-zoom",  String(cardZoom.value));
+    root.setAttribute("data-card-glow",  String(cardGlow.value));
+    root.setAttribute("data-card-lift",  String(cardLift.value));
+    // Same reason: a theme that animates its hero art in a stylesheet has no
+    // other way to hear about these. The core's own hero picks its motion with
+    // a class, which is no use to anyone outside this bundle.
+    root.setAttribute("data-hero-anim",       String(heroAnim.value));
+    root.setAttribute("data-hero-anim-style", heroAnimStyle.value);
+    // A theme with a backdrop of its own needs to hear about these two as
+    // well. data-ambient was already written but nothing ever read it.
+    root.setAttribute("data-orb-motion", String(orbMotion.value));
 
     // Apply per-theme settings as CSS custom properties
     const theme = currentTheme.value;
@@ -189,7 +215,6 @@ export const useThemeStore = defineStore("theme", () => {
 
   function toggleAnimations() { animations.value = !animations.value; }
   function toggleAmbient()    { ambient.value    = !ambient.value;    }
-  function toggleGrid()       { grid.value       = !grid.value;       }
   function toggleOrbMotion()  { orbMotion.value  = !orbMotion.value;  }
 
   function setThemeSettingValue(key: string, value: unknown) {
@@ -355,8 +380,13 @@ export const useThemeStore = defineStore("theme", () => {
   watch(skinId,     (v) => { localStorage.setItem(LS_SKIN,       v);          applyToDOM(); schedulePreferencesSave(); });
   watch(animations, (v) => { localStorage.setItem(LS_ANIMATIONS, String(v));  applyToDOM(); schedulePreferencesSave(); });
   watch(ambient,    (v) => { localStorage.setItem(LS_AMBIENT,    String(v));  applyToDOM(); schedulePreferencesSave(); });
-  watch(grid,       (v) => { localStorage.setItem(LS_GRID,       String(v));  applyToDOM(); schedulePreferencesSave(); });
   watch(orbMotion,  (v) => { localStorage.setItem(LS_ORB_MOTION, String(v));  applyToDOM(); schedulePreferencesSave(); });
+
+  // The card effects reach CSS-drawn themes as document attributes, so the
+  // document has to be told when one changes. Their toggles write localStorage
+  // themselves; this only refreshes what the stylesheets can see.
+  watch([cardTilt, cardShine, cardZoom, cardGlow, cardLift, heroAnim, heroAnimStyle],
+        () => { applyToDOM(); });
 
   // ── Card effect actions ────────────────────────────────────────────────
   function toggleClassicHero() { classicHero.value = !classicHero.value; localStorage.setItem(LS_CLASSIC_HERO, String(classicHero.value)); schedulePreferencesSave(); }
@@ -412,7 +442,6 @@ export const useThemeStore = defineStore("theme", () => {
     if (typeof prefs.skin       === "string")  { skinId.value        = prefs.skin;        localStorage.setItem(LS_SKIN, prefs.skin); }
     if (typeof prefs.animations === "boolean") { animations.value    = prefs.animations;  localStorage.setItem(LS_ANIMATIONS, String(prefs.animations)); }
     if (typeof prefs.ambient    === "boolean") { ambient.value       = prefs.ambient;     localStorage.setItem(LS_AMBIENT,    String(prefs.ambient)); }
-    if (typeof prefs.grid       === "boolean") { grid.value          = prefs.grid;        localStorage.setItem(LS_GRID,       String(prefs.grid)); }
     if (typeof prefs.orbMotion  === "boolean") { orbMotion.value     = prefs.orbMotion;   localStorage.setItem(LS_ORB_MOTION, String(prefs.orbMotion)); }
     if (typeof prefs.cardTilt   === "boolean") { cardTilt.value      = prefs.cardTilt;    localStorage.setItem(LS_CARD_TILT,  String(prefs.cardTilt)); }
     if (typeof prefs.cardShine  === "boolean") { cardShine.value     = prefs.cardShine;   localStorage.setItem(LS_CARD_SHINE, String(prefs.cardShine)); }
@@ -448,7 +477,7 @@ export const useThemeStore = defineStore("theme", () => {
     return {
       theme: themeId.value, skin: skinId.value,
       animations: animations.value, ambient: ambient.value,
-      grid: grid.value, orbMotion: orbMotion.value,
+      orbMotion: orbMotion.value,
       cardTilt: cardTilt.value, cardShine: cardShine.value,
       cardZoom: cardZoom.value, cardGlow: cardGlow.value,
       cardLift: cardLift.value, coverSize: coverSize.value,
@@ -487,10 +516,10 @@ export const useThemeStore = defineStore("theme", () => {
   applyToDOM();
 
   return {
-    themeId, skinId, animations, ambient, grid, orbMotion,
+    themeId, skinId, animations, ambient, orbMotion,
     currentTheme, currentLayout, currentSkins, themes,
-    setTheme, setSkin, toggleAnimations, toggleAmbient, toggleGrid, toggleOrbMotion,
-    getThemeSettingValue, setThemeSettingValue, resetThemeSettings,
+    setTheme, setSkin, toggleAnimations, toggleAmbient, toggleOrbMotion,
+    getThemeSettingValue, setThemeSettingValue, resetThemeSettings, supportsEffect,
     getRecentLibraries, setRecentLibraries,
     getHiddenHomeSections, isHomeSectionHidden, toggleHomeSection, setHomeSectionHidden,
     getHomeSectionOrder, setHomeSectionOrder, orderHomeSections,

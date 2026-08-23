@@ -75,7 +75,7 @@
         <div class="gr-content">
           <div class="gr-row1">
             <span class="gr-item-title">{{ r.title }}</span>
-            <span class="gr-badge gr-badge--status" :class="`gr-status--${r.status}`">{{ r.status }}</span>
+            <span class="gr-badge gr-badge--status" :class="`gr-status--${r.status}`">{{ t('requests.status_' + r.status, r.status) }}</span>
             <span class="gr-badge gr-badge--platform">{{ r.platform === 'roms' ? t('requests.platform_emulation') : t('requests.platform_games') }}</span>
           </div>
           <p v-if="r.description" class="gr-desc">{{ r.description }}</p>
@@ -93,10 +93,10 @@
         <!-- Admin -->
         <div v-if="isAdmin" class="gr-admin">
           <select class="gr-select" :value="r.status" @change="patchStatus(r, ($event.target as HTMLSelectElement).value)">
-            <option value="pending">pending</option>
-            <option value="approved">approved</option>
-            <option value="rejected">rejected</option>
-            <option value="done">done</option>
+            <option value="pending">{{ t('requests.status_pending') }}</option>
+            <option value="approved">{{ t('requests.status_approved') }}</option>
+            <option value="rejected">{{ t('requests.status_rejected') }}</option>
+            <option value="done">{{ t('requests.status_done') }}</option>
           </select>
           <button class="gr-icon-btn gr-icon-btn--note" @click="openNote(r)" :title="t('requests.note_title')">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
@@ -115,7 +115,7 @@
         <textarea v-model="noteText" class="gr-textarea" rows="3" :placeholder="t('requests.note_placeholder')" autofocus />
         <div class="gr-note-actions">
           <button class="gr-btn gr-btn--ghost" @click="noteId = null">{{ t('common.cancel') }}</button>
-          <button class="gr-btn gr-btn--primary" @click="saveNote">{{ t('common.save') }}</button>
+          <button class="gr-btn gr-btn--primary btn-save-action" @click="saveNote">{{ t('common.save') }}</button>
         </div>
       </div>
     </div>
@@ -128,11 +128,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from '@/i18n'
+import { useDialog } from '@/composables/useDialog'
 import client from '@/services/api/client'
 import { useAuthStore } from '@/stores/auth'
 import GameRequestDialog from '@/components/GameRequestDialog.vue'
+import { formatDate } from '@/utils/format'
+const fmtDate = (iso: string | null | undefined) => formatDate(iso, '')
 
 const { t } = useI18n()
+const { gdConfirm } = useDialog()
 const auth    = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin')
 
@@ -197,16 +201,10 @@ async function saveNote() {
 }
 
 async function del(r: Req) {
-  if (!confirm(t('requests.delete_request'))) return
+  if (!await gdConfirm(t('requests.delete_request'), { title: t('common.remove'), danger: true })) return
   try { await client.delete(`/requests/${r.id}`); requests.value = requests.value.filter(x => x.id !== r.id) } catch { /* ignore */ }
 }
 
-function fmtDate(iso: string) {
-  try {
-    const lang = localStorage.getItem('gd-lang') || 'en'
-    return new Date(iso).toLocaleDateString(lang === 'pl' ? 'pl-PL' : 'en-US')
-  } catch { return '' }
-}
 
 onMounted(loadRequests)
 </script>

@@ -3,7 +3,8 @@
  *
  * - Adds Bearer token from localStorage
  * - On 401: tries to refresh access token using refresh_token, then retries
- * - If refresh fails: clears tokens and redirects to /login
+ * - If refresh fails: clears tokens, and redirects to /login unless the visitor
+ *   is already on a page meant to work without a session
  * - Queues concurrent requests while refresh is in progress
  */
 
@@ -36,10 +37,28 @@ function processQueue(error: unknown, token: string | null = null) {
   failedQueue = [];
 }
 
+// Pages a visitor is meant to reach without a session. They mirror the routes
+// carrying `public: true` in the router.
+const PUBLIC_PATHS = [
+  "/login", "/register", "/reset-password", "/setup", "/sso-callback", "/dl/",
+];
+
+function onPublicPage(): boolean {
+  const path = window.location.pathname;
+  return PUBLIC_PATHS.some(base =>
+    path === base || path.startsWith(base.endsWith("/") ? base : `${base}/`));
+}
+
 function doLogout() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(REFRESH_KEY);
-  if (window.location.pathname !== "/login") {
+  // Only /login used to be spared, so a background 401 threw the visitor off
+  // every other public page. Boot-time calls like /api/libraries always 401
+  // without a session, which meant a reset-password or invite link bounced to
+  // /login before it could be used, and the token or code in the query was
+  // lost on the way. Nobody is signed in on these pages, so there is nothing
+  // to log out of.
+  if (!onPublicPage()) {
     window.location.href = "/login";
   }
 }

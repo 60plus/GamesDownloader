@@ -1,6 +1,6 @@
 <template>
   <!-- Fullscreen overlay -->
-  <div class="mep-overlay" @click.self="$emit('close')">
+  <div class="mep-overlay mep-std" @click.self="$emit('close')">
     <div class="mep-panel" @click.stop>
 
       <!-- ── Header ──────────────────────────────────────────────────────────── -->
@@ -24,7 +24,7 @@
           <!-- Cover -->
           <div class="mep-label">{{ t('meta.tab_cover') }}</div>
           <div class="mep-cover-current" @click="switchTab('cover')" style="cursor:pointer">
-            <img v-if="selectedCoverThumb || selectedCover" :src="selectedCoverThumb || selectedCover" alt="Cover" class="mep-cover-img" @error="onThumbError" />
+            <img v-if="selectedCoverThumb || selectedCover" :src="selectedCoverThumb || selectedCover" :alt="t('meta.tab_cover')" class="mep-cover-img" @error="onThumbError" />
             <div v-else class="mep-cover-empty">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><rect x="2" y="6" width="20" height="12" rx="2"/></svg>
             </div>
@@ -37,7 +37,7 @@
           <!-- Hero -->
           <div class="mep-label" style="margin-top:12px">{{ t('meta.tab_hero') }}</div>
           <div class="mep-cover-current mep-cover-current--wide" @click="switchTab('background')" style="cursor:pointer">
-            <img v-if="selectedBackground" :src="selectedBackground" alt="Hero" class="mep-cover-img" />
+            <img v-if="selectedBackground" :src="selectedBackground" :alt="t('meta.tab_hero')" class="mep-cover-img" />
             <div v-else class="mep-cover-empty">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><rect x="1" y="5" width="22" height="14" rx="2"/></svg>
             </div>
@@ -46,7 +46,7 @@
           <!-- Logo -->
           <div class="mep-label" style="margin-top:12px">{{ t('meta.tab_logo') }}</div>
           <div class="mep-cover-current mep-cover-current--logo" @click="switchTab('logo')" style="cursor:pointer">
-            <img v-if="selectedLogo" :src="selectedLogo" alt="Logo" style="width:100%;height:100%;object-fit:contain;padding:6px" />
+            <img v-if="selectedLogo" :src="selectedLogo" :alt="t('meta.tab_logo')" style="width:100%;height:100%;object-fit:contain;padding:6px" />
             <div v-else class="mep-cover-empty">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
             </div>
@@ -55,7 +55,7 @@
           <!-- Icon -->
           <div class="mep-label" style="margin-top:12px">{{ t('meta.tab_icon') }}</div>
           <div class="mep-cover-current mep-cover-current--icon" @click="switchTab('icon')" style="cursor:pointer">
-            <img v-if="selectedIcon" :src="selectedIcon" alt="Icon" style="width:100%;height:100%;object-fit:contain;padding:6px" />
+            <img v-if="selectedIcon" :src="selectedIcon" :alt="t('meta.tab_icon')" style="width:100%;height:100%;object-fit:contain;padding:6px" />
             <div v-else class="mep-cover-empty">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><rect x="3" y="3" width="18" height="18" rx="3"/></svg>
             </div>
@@ -310,16 +310,16 @@
                   <img :src="ss" class="mep-ss-item-thumb" loading="lazy"
                     @error="(e) => ((e.target as HTMLImageElement).style.opacity = '0.15')" />
                   <div class="mep-ss-order-col">
-                    <button class="mep-ss-ord-btn" :disabled="idx === 0" @click="moveScreenshot(idx, idx - 1)" title="Move up">▲</button>
+                    <button class="mep-ss-ord-btn" :disabled="idx === 0" @click="moveScreenshot(idx, idx - 1)" :title="t('common.move_up')">▲</button>
                     <span class="mep-ss-num">{{ idx + 1 }}</span>
-                    <button class="mep-ss-ord-btn" :disabled="idx === editScreenshots.length - 1" @click="moveScreenshot(idx, idx + 1)" title="Move down">▼</button>
+                    <button class="mep-ss-ord-btn" :disabled="idx === editScreenshots.length - 1" @click="moveScreenshot(idx, idx + 1)" :title="t('common.move_down')">▼</button>
                   </div>
-                  <button class="mep-ss-remove--list" @click="removeScreenshot(idx)" title="Remove">✕</button>
+                  <button class="mep-ss-remove--list" @click="removeScreenshot(idx)" :title="t('common.remove')">✕</button>
                 </div>
               </div>
               <!-- Manual URL add -->
               <div class="mep-search-row" style="margin-top:14px">
-                <input v-model="ssNewUrl" class="mep-search-input" placeholder="Paste screenshot URL…" @keydown.enter="addScreenshotUrl" />
+                <input v-model="ssNewUrl" class="mep-search-input" :placeholder="t('meta.screenshot_url_ph')" @keydown.enter="addScreenshotUrl" />
                 <button class="mep-search-btn" @click="addScreenshotUrl">{{ screenshotsMode === 'replace' ? t('meta.replace') : t('meta.add_url') }}</button>
               </div>
             </div>
@@ -384,7 +384,7 @@
                 <span class="mep-source-name">{{ t('meta.current_video') }}</span>
               </div>
               <div v-if="editVideoId" class="mep-video-preview">
-                <img :src="`https://img.youtube.com/vi/${editVideoId}/hqdefault.jpg`" class="mep-video-thumb" alt="Video thumbnail" />
+                <img :src="`https://img.youtube.com/vi/${editVideoId}/hqdefault.jpg`" class="mep-video-thumb" :alt="t('meta.video_thumb')" />
                 <div class="mep-video-info">
                   <span class="mep-video-yt-id">youtube.com/watch?v={{ editVideoId }}</span>
                   <a :href="`https://www.youtube.com/watch?v=${editVideoId}`" target="_blank" rel="noopener" class="mep-video-link">▶ {{ t('meta.open_youtube') }}</a>
@@ -394,7 +394,7 @@
               <div v-else class="mep-empty-state-sm">{{ t('meta.no_video') }}</div>
               <!-- Manual URL input -->
               <div class="mep-search-row" style="margin-top:14px">
-                <input v-model="editVideoUrl" class="mep-search-input" placeholder="YouTube URL or video ID (11 chars)…" @keydown.enter="applyVideo" />
+                <input v-model="editVideoUrl" class="mep-search-input" :placeholder="t('meta.video_url_ph')" @keydown.enter="applyVideo" />
                 <button class="mep-search-btn" @click="applyVideo">{{ t('meta.set') }}</button>
               </div>
             </div>
@@ -418,7 +418,7 @@
               <div v-else class="mep-empty-state-sm">{{ t('meta.no_local_video') }}</div>
               <div class="mep-search-row" style="margin-top:14px">
                 <select v-model="videoQuality" class="mep-search-input" style="flex:0 0 110px" :title="t('meta.video_quality')">
-                  <option value="best">Best</option>
+                  <option value="best">{{ t('meta.quality_best') }}</option>
                   <option value="2160">2160p</option>
                   <option value="1440">1440p</option>
                   <option value="1080">1080p</option>
@@ -433,6 +433,10 @@
                   <input type="file" accept="video/mp4,video/webm" style="display:none" :disabled="videoUploading" @change="onLocalVideoFile" />
                 </label>
               </div>
+              <!-- YouTube refuses plenty of trailers (age gates above all). The
+                   button used to sit on "Downloading" for five minutes and then
+                   go quiet, so say what happened. -->
+              <div v-if="videoError" class="mep-err" style="margin-top:10px">{{ videoError }}</div>
             </div>
 
             <!-- Unified video search -->
@@ -483,7 +487,7 @@
 
             <!-- Fetch row -->
             <div class="mep-search-row">
-              <input v-model="descQuery" class="mep-search-input" placeholder="Game title to search…" @keydown.enter="loadDescriptions(true)" />
+              <input v-model="descQuery" class="mep-search-input" :placeholder="t('meta.search_title_ph')" @keydown.enter="loadDescriptions(true)" />
               <button class="mep-search-btn" :disabled="descLoading" @click="loadDescriptions(true)">
                 <div v-if="descLoading" class="mep-spinner mep-spinner--sm" />
                 <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
@@ -524,11 +528,11 @@
             <div class="mep-form" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--glass-border)">
               <div class="mep-field">
                 <label class="mep-field-label">{{ t('meta.full_desc') }} <span class="mep-field-hint">({{ t('meta.html_hint') }})</span> <TranslateButton :text="editFields.description || ''" @translated="tr => editFields.description = tr" /></label>
-                <textarea v-model="editFields.description" class="mep-textarea" rows="7" placeholder="Full description…" />
+                <textarea v-model="editFields.description" class="mep-textarea" rows="7" :placeholder="t('meta.full_desc_ph')" />
               </div>
               <div class="mep-field" style="margin-top:10px">
                 <label class="mep-field-label">{{ t('meta.short_desc') }} <TranslateButton :text="editFields.description_short || ''" @translated="tr => editFields.description_short = tr" /></label>
-                <textarea v-model="editFields.description_short" class="mep-textarea" rows="3" placeholder="Short tagline or summary…" />
+                <textarea v-model="editFields.description_short" class="mep-textarea" rows="3" :placeholder="t('meta.short_desc_ph')" />
               </div>
             </div>
           </div>
@@ -540,7 +544,7 @@
 
             <!-- Search & Fill section -->
             <div class="mep-search-row">
-              <input v-model="detailQuery" class="mep-search-input" placeholder="Game title to search…" @keydown.enter="loadDetails(true)" />
+              <input v-model="detailQuery" class="mep-search-input" :placeholder="t('meta.search_title_ph')" @keydown.enter="loadDetails(true)" />
               <button class="mep-search-btn" :disabled="detailLoading" @click="loadDetails(true)">
                 <div v-if="detailLoading" class="mep-spinner mep-spinner--sm" />
                 <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
@@ -568,9 +572,9 @@
                   <button class="mep-desc-apply-btn" @click="applyDetails(src)">{{ t('meta.apply') }}</button>
                 </div>
                 <div class="mep-detail-grid">
-                  <span v-if="src.developer" class="mep-detail-chip"><b>Dev:</b> {{ src.developer }}</span>
-                  <span v-if="src.publisher" class="mep-detail-chip"><b>Pub:</b> {{ src.publisher }}</span>
-                  <span v-if="src.release_date" class="mep-detail-chip"><b>Released:</b> {{ src.release_date }}</span>
+                  <span v-if="src.developer" class="mep-detail-chip"><b>{{ t('meta.developer') }}:</b> {{ src.developer }}</span>
+                  <span v-if="src.publisher" class="mep-detail-chip"><b>{{ t('meta.publisher') }}:</b> {{ src.publisher }}</span>
+                  <span v-if="src.release_date" class="mep-detail-chip"><b>{{ t('meta.release_date') }}:</b> {{ src.release_date }}</span>
                   <span v-if="src.source === 'gog'   && src.rating != null" class="mep-detail-chip"><b>GOG:</b> {{ src.rating.toFixed(1) }}/5</span>
                   <span v-if="src.source === 'rawg'  && src.rating != null" class="mep-detail-chip"><b>RAWG:</b> {{ (src.rating/2).toFixed(1) }}/5</span>
                   <span v-if="src.source === 'igdb'  && src.rating != null" class="mep-detail-chip"><b>IGDB:</b> {{ Math.round(src.rating) }}/100</span>
@@ -579,9 +583,9 @@
                     <b>OS:</b> {{ [src.os_windows && 'Win', src.os_mac && 'Mac', src.os_linux && 'Linux'].filter(Boolean).join(', ') }}
                   </span>
                   <span v-if="Object.keys(src.languages).length" class="mep-detail-chip">
-                    <b>Languages:</b> {{ Object.values(src.languages).slice(0, 5).join(', ') }}{{ Object.keys(src.languages).length > 5 ? '…' : '' }}
+                    <b>{{ t('meta.languages') }}:</b> {{ Object.values(src.languages).slice(0, 5).join(', ') }}{{ Object.keys(src.languages).length > 5 ? '…' : '' }}
                   </span>
-                  <span v-if="src.genres?.length" class="mep-detail-chip"><b>Genres:</b> {{ src.genres.slice(0,4).join(', ') }}</span>
+                  <span v-if="src.genres?.length" class="mep-detail-chip"><b>{{ t('meta.genres') }}:</b> {{ src.genres.slice(0,4).join(', ') }}</span>
                 </div>
               </div>
             </div>
@@ -602,14 +606,14 @@
               <div class="mep-field">
                 <label class="mep-field-label">{{ t('meta.hero_url') }}</label>
                 <div class="mep-field-row">
-                  <input v-model="selectedBackground" class="mep-input" placeholder="https://… (wide hero/background image)" />
+                  <input v-model="selectedBackground" class="mep-input" :placeholder="t('meta.hero_url_ph')" />
                 </div>
               </div>
 
               <div class="mep-field">
                 <label class="mep-field-label">{{ t('meta.logo_url') }}</label>
                 <div class="mep-field-row">
-                  <input v-model="selectedLogo" class="mep-input" placeholder="https://… (transparent logo)" />
+                  <input v-model="selectedLogo" class="mep-input" :placeholder="t('meta.logo_url_ph')" />
                 </div>
               </div>
 
@@ -618,11 +622,11 @@
               <div class="mep-form-row">
                 <div class="mep-field">
                   <label class="mep-field-label">{{ t('meta.developer') }}</label>
-                  <input v-model="editFields.developer" class="mep-input" placeholder="Studio name" />
+                  <input v-model="editFields.developer" class="mep-input" :placeholder="t('meta.developer_ph')" />
                 </div>
                 <div class="mep-field">
                   <label class="mep-field-label">{{ t('meta.publisher') }}</label>
-                  <input v-model="editFields.publisher" class="mep-input" placeholder="Publisher name" />
+                  <input v-model="editFields.publisher" class="mep-input" :placeholder="t('meta.publisher_ph')" />
                 </div>
               </div>
 
@@ -906,7 +910,7 @@
             {{ t('meta.resend_notification') }}
           </button>
           <button class="mep-btn-cancel" @click="$emit('close')">{{ t('meta.cancel') }}</button>
-          <button class="mep-btn-save" :disabled="saving || !hasChanges" @click="save">
+          <button class="mep-btn-save btn-save-action" :disabled="saving || !hasChanges" @click="save">
             <div v-if="saving" class="mep-spinner mep-spinner--sm" />
             {{ saving ? t('meta.saving') : t('meta.save_changes') }}
           </button>
@@ -1293,6 +1297,7 @@ const localVideoPath   = ref<string>(props.game.video_path || '')
 const videoDownloading = ref(false)
 const videoUploading   = ref(false)
 const videoQuality     = ref('1080')
+const videoError       = ref('')
 let _videoPoll: ReturnType<typeof setInterval> | null = null
 
 function _stopVideoPoll() {
@@ -1301,29 +1306,54 @@ function _stopVideoPoll() {
   videoDownloading.value = false
 }
 
+// The server reports why a fetch failed as a stable code rather than yt-dlp's
+// own text, which is three lines of links about exporting browser cookies.
+function _videoErrorText(code: string): string {
+  const known = [
+    'age_restricted', 'private', 'unavailable', 'geo_blocked',
+    'no_format', 'bot_check', 'network', 'no_file',
+  ]
+  return known.includes(code)
+    ? t(`meta.video_err_${code}`)
+    : t('meta.video_err_failed')
+}
+
 async function downloadLocalVideo() {
   if (!editVideoId.value || videoDownloading.value) return
   videoDownloading.value = true
+  videoError.value = ''
   try {
     await client.post(`${baseApi.value}/${props.game.id}/video/download`, { video_id: editVideoId.value, quality: videoQuality.value })
-  } catch {
+  } catch (e: any) {
     videoDownloading.value = false
+    videoError.value = e?.response?.data?.detail || t('meta.video_err_failed')
     return
   }
-  // yt-dlp runs server-side in the background - poll until video_path shows up
+  // yt-dlp runs server-side in a background task, so the outcome comes back
+  // from the status endpoint. Polling the game detail for a video_path could
+  // only ever see success: a refusal looked exactly like "still working".
   let tries = 0
   _videoPoll = setInterval(async () => {
     tries++
     try {
-      const r = await client.get(`${baseApi.value}/${props.game.id}`)
-      const vp = r.data?.video_path
-      if (vp && vp !== props.game.video_path) {
-        localVideoPath.value = vp
+      const r = await client.get(`${baseApi.value}/${props.game.id}/video/status`)
+      const st = r.data?.state
+      if (st === 'done' && r.data?.url) {
+        localVideoPath.value = r.data.url
         _stopVideoPoll()
-        emit('saved', { video_path: vp })
+        emit('saved', { video_path: r.data.url })
+        return
+      }
+      if (st === 'failed') {
+        videoError.value = _videoErrorText(String(r.data?.error || ''))
+        _stopVideoPoll()
+        return
       }
     } catch { /* transient */ }
-    if (tries > 60) _stopVideoPoll()   // give up after ~5 min
+    if (tries > 60) {                    // give up after ~5 min
+      videoError.value = t('meta.video_err_timeout')
+      _stopVideoPoll()
+    }
   }, 5000)
 }
 
@@ -1333,6 +1363,7 @@ async function onLocalVideoFile(e: Event) {
   input.value = ''
   if (!file || videoUploading.value) return
   videoUploading.value = true
+  videoError.value = ''
   try {
     const fd = new FormData()
     fd.append('file', file)
@@ -1341,7 +1372,12 @@ async function onLocalVideoFile(e: Event) {
       localVideoPath.value = r.data.video_path
       emit('saved', { video_path: r.data.video_path })
     }
-  } catch { /* size / format rejected */ }
+  } catch (e: any) {
+    // The server rejects the wrong format with a 400 and anything over a
+    // gigabyte with a 413, and both used to vanish: the file picker closed and
+    // nothing at all happened on screen.
+    videoError.value = e?.response?.data?.detail || t('meta.video_upload_failed')
+  }
   videoUploading.value = false
 }
 
@@ -1798,6 +1834,9 @@ function setSgdbCoverAnimated(val: typeof sgdbCoverAnimated.value) {
 
 /** Unified cover search - queries GOG + IGDB + SteamGridDB in parallel. */
 async function searchAllCovers() {
+  // Enter fires this too, and that input is not disabled while a search
+  // runs. Two runs race and the slower one writes last.
+  if (coverSearching.value) return
   coverSearching.value = true
   coverSearchDone.value = false
   allCoverResults.value = []
@@ -1845,6 +1884,9 @@ async function searchAllCovers() {
 
 /** Unified hero search - queries GOG bg + RAWG + SteamGridDB heroes in parallel. */
 async function searchAllHeroes() {
+  // Enter fires this too, and that input is not disabled while a search
+  // runs. Two runs race and the slower one writes last.
+  if (heroSearching.value) return
   heroSearching.value = true
   heroSearchDone.value = false
   allHeroResults.value = []
@@ -1887,6 +1929,9 @@ async function searchAllHeroes() {
 
 /** Unified logo search - GOG + SteamGridDB logos + LaunchBox Clear Logo + plugins. */
 async function searchAllLogos() {
+  // Enter fires this too, and that input is not disabled while a search
+  // runs. Two runs race and the slower one writes last.
+  if (logoSearching.value) return
   logoSearching.value = true
   logoSearchDone.value = false
   allLogoResults.value = []
@@ -1929,6 +1974,9 @@ async function searchAllLogos() {
 
 /** Unified video search - GOG + IGDB via source=all. */
 async function searchAllVideos() {
+  // Enter fires this too, and that input is not disabled while a search
+  // runs. Two runs race and the slower one writes last.
+  if (vidAllSearching.value) return
   vidAllSearching.value = true
   vidAllSearchDone.value = false
   vidAllResults.value = []
@@ -1944,6 +1992,9 @@ async function searchAllVideos() {
 
 /** Unified screenshot search - all sources via source=all. */
 async function searchAllScreenshots() {
+  // Enter fires this too, and that input is not disabled while a search
+  // runs. Two runs race and the slower one writes last.
+  if (ssAllSearching.value) return
   ssAllSearching.value = true
   ssAllSearchDone.value = false
   ssAllResults.value = []
@@ -1959,6 +2010,9 @@ async function searchAllScreenshots() {
 
 /** Unified icon search - GOG + SteamGridDB icons + plugins. */
 async function searchAllIcons() {
+  // Enter fires this too, and that input is not disabled while a search
+  // runs. Two runs race and the slower one writes last.
+  if (iconSearching.value) return
   iconSearching.value = true
   iconSearchDone.value = false
   allIconResults.value = []
@@ -2135,7 +2189,7 @@ async function fetchSteamReqs() {
       recommended: filterReqKeys(entry?.recommended ?? {}),
     }
   } catch (e: any) {
-    steamReqError.value = e?.response?.data?.detail || 'Steam fetch failed'
+    steamReqError.value = e?.response?.data?.detail || t('meta.steam_fetch_failed')
   } finally {
     steamReqLoading.value = false
   }
@@ -2149,7 +2203,7 @@ async function srlSearch() {
     srlMatches.value = data.matches || []
     if (!srlMatches.value.length) srlError.value = t('meta.no_srl_matches')
   } catch (e: any) {
-    srlError.value = e?.response?.data?.detail || 'Search failed'
+    srlError.value = e?.response?.data?.detail || t('common.search_failed')
   } finally {
     srlSearching.value = false
   }
@@ -2163,7 +2217,7 @@ async function srlFetchUrl(url: string) {
     const { data } = await client.get('/gog/srl/fetch', { params: { url } })
     srlPreview.value = { minimum: filterReqKeys(data?.minimum ?? {}), recommended: {} }
   } catch (e: any) {
-    srlError.value = e?.response?.data?.detail || 'Fetch failed'
+    srlError.value = e?.response?.data?.detail || t('common.fetch_failed')
   } finally {
     srlFetching.value = false
   }
@@ -2329,7 +2383,7 @@ async function save() {
     emit('saved', payload)
     setTimeout(() => emit('close'), 800)
   } catch (err: any) {
-    saveError.value = err?.response?.data?.detail || 'Save failed'
+    saveError.value = err?.response?.data?.detail || t('common.save_failed')
   } finally {
     saving.value = false
   }
@@ -2365,335 +2419,11 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* ── Overlay ──────────────────────────────────────────────────────────────── */
-.mep-overlay {
-  position: fixed; inset: 0; z-index: 8000;
-  background: rgba(0,0,0,.72); backdrop-filter: blur(8px);
-  display: flex; align-items: center; justify-content: center;
-  animation: mep-fade-in .18s ease;
-}
-@keyframes mep-fade-in { from { opacity: 0; } to { opacity: 1; } }
-
-/* ── Panel ────────────────────────────────────────────────────────────────── */
-.mep-panel {
-  width: 92vw; max-width: 1180px; height: 88vh;
-  background: var(--glass-bg, rgba(15,10,30,.85));
-  border: 1px solid var(--glass-border, rgba(255,255,255,.1));
-  border-radius: 16px;
-  backdrop-filter: blur(var(--glass-blur-px, 22px)) saturate(var(--glass-sat, 180%));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pl) 15%, transparent),
-              0 24px 60px rgba(0,0,0,.6),
-              0 0 40px color-mix(in srgb, var(--pl) 8%, transparent);
-  display: flex; flex-direction: column; overflow: hidden;
-  animation: mep-slide-up .2s cubic-bezier(.23,1,.32,1);
-}
-@keyframes mep-slide-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
-
-/* ── Header ───────────────────────────────────────────────────────────────── */
-.mep-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 18px 22px; border-bottom: 1px solid var(--glass-border); flex-shrink: 0;
-}
-.mep-header-left {
-  display: flex; align-items: center; gap: var(--space-2, 8px);
-  font-size: var(--fs-md, 14px); font-weight: 700; color: var(--text);
-}
-.mep-game-name { color: var(--muted); font-weight: 500; }
-.mep-close {
-  width: 32px; height: 32px; border-radius: var(--radius-sm, 8px);
-  background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
-  color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center;
-  transition: all .15s;
-}
-.mep-close:hover { background: rgba(255,255,255,.12); color: var(--text); }
-
-/* ── Body ─────────────────────────────────────────────────────────────────── */
-.mep-body { display: flex; flex: 1; overflow: hidden; }
-
-/* ── Left sidebar ─────────────────────────────────────────────────────────── */
-.mep-left {
-  width: 200px; flex-shrink: 0;
-  padding: 18px; border-right: 1px solid var(--glass-border);
-  overflow-y: auto; background: rgba(255,255,255,.02);
-}
-.mep-label {
-  font-size: var(--fs-xs, 10px); font-weight: 700; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px;
-}
-.mep-cover-current, .mep-cover-selected-wrap {
-  position: relative; width: 100%; aspect-ratio: 3/4;
-  border-radius: 10px; overflow: hidden;
-  background: var(--bg3); border: 1px solid var(--glass-border);
-}
-.mep-cover-current--wide { aspect-ratio: 16/9; }
-.mep-cover-current--logo { aspect-ratio: 16/9; background: rgba(0,0,0,.35); }
-.mep-cover-current--icon { width: 60px; height: 60px; aspect-ratio: 1/1; background: rgba(0,0,0,.25); }
-.mep-cover-selected-wrap--wide { aspect-ratio: 16/9; }
-.mep-cover-selected-wrap--logo { aspect-ratio: 16/9; background: rgba(0,0,0,.35); }
-.mep-cover-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.mep-cover-empty {
-  width: 100%; height: 100%;
-  display: flex; align-items: center; justify-content: center;
-}
-.mep-anim-badge {
-  position: absolute; bottom: 6px; left: 6px;
-  display: flex; align-items: center; gap: 3px;
-  padding: 2px 7px; border-radius: var(--radius-xs, 4px);
-  background: color-mix(in srgb, var(--pl-light) 85%, transparent); color: #fff;
-  font-size: 9px; font-weight: 700; letter-spacing: .5px;
-}
-.mep-selected-info { margin-top: 2px; }
-.mep-clear-btn {
-  margin-top: 6px; font-size: 11px; color: var(--muted);
-  background: none; border: none; cursor: pointer; padding: 0; font-family: inherit;
-}
-.mep-clear-btn:hover { color: var(--text); }
-
-/* ── Right content ────────────────────────────────────────────────────────── */
-.mep-right { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-
-/* Tabs */
-.mep-tabs {
-  display: flex; border-bottom: 1px solid var(--glass-border);
-  flex-shrink: 0; padding: 0 20px;
-}
-.mep-tab {
-  padding: 14px 16px; font-size: 13px; font-weight: 600;
-  color: var(--muted); border: none; background: none;
-  cursor: pointer; border-bottom: 2px solid transparent;
-  margin-bottom: -1px; font-family: inherit;
-  transition: color .15s, border-color .15s;
-}
-.mep-tab:hover { color: var(--text); }
-.mep-tab.active { color: var(--pl-light); border-bottom-color: var(--pl); }
-
-/* Tab content */
-.mep-tab-content { flex: 1; overflow-y: auto; padding: 0 20px 20px; }
-
-/* ── Source sections ──────────────────────────────────────────────────────── */
-.mep-source-section {
-  padding: 18px 0 12px;
-  border-bottom: 1px solid var(--glass-border);
-}
-.mep-source-section:last-child { border-bottom: none; }
-.mep-source-header {
-  display: flex; align-items: center; gap: var(--space-2, 8px);
-  margin-bottom: 14px;
-}
-.mep-source-header > img { width: 28px; height: 28px; border-radius: var(--radius-xs, 4px); }
-.mep-source-name {
-  font-size: var(--fs-sm, 12px); font-weight: 700;
-  color: var(--text); text-transform: uppercase; letter-spacing: .8px;
-}
-
-/* ── Chip bar ────────────────────────────────────────────────────────────────*/
-.mep-chip-bar { display: flex; gap: 6px; flex-wrap: wrap; }
-.mep-chip-btn {
-  display: inline-flex; align-items: center; gap: var(--space-1, 4px);
-  padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600;
-  border: 1px solid var(--glass-border); background: rgba(255,255,255,.05);
-  color: var(--muted); cursor: pointer; font-family: inherit; transition: all .15s;
-}
-.mep-chip-btn:hover { border-color: var(--pl); color: var(--text); }
-.mep-chip-btn.active {
-  background: var(--pl-dim); border-color: var(--pl);
-  color: var(--pl-light); box-shadow: 0 0 8px var(--pglow2);
-}
-
-/* ── Cover grids ─────────────────────────────────────────────────────────── */
-.mep-covers-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: var(--space-3, 12px);
-}
-.mep-covers-grid--wide {
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-}
-.mep-cover-option { cursor: pointer; display: flex; flex-direction: column; gap: 5px; }
-.mep-cover-option-img {
-  position: relative; aspect-ratio: 3/4;
-  border-radius: var(--radius-sm, 8px); overflow: hidden;
-  border: 2px solid transparent; background: var(--bg3);
-  transition: border-color .15s, box-shadow .15s, transform .15s;
-}
-.mep-cover-option:hover .mep-cover-option-img {
-  border-color: rgba(255,255,255,.3);
-  box-shadow: 0 4px 20px rgba(0,0,0,.5);
-  transform: translateY(-2px);
-}
-.mep-cover-option.selected .mep-cover-option-img {
-  border-color: var(--pl); box-shadow: 0 0 18px var(--pglow2);
-}
-.mep-cover-option-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.mep-cover-option-img--hero { aspect-ratio: 32/10; }
-.mep-cover-option-img--logo { aspect-ratio: 16/9; background: rgba(0,0,0,.3); }
-.mep-cover-option-img--logo img { object-fit: contain; padding: var(--space-2, 8px); }
-.mep-cover-option-img--icon { aspect-ratio: 1/1; }
-.mep-cover-option-img--wide { aspect-ratio: 16/9; }
-.mep-anim-badge-grid {
-  position: absolute; top: 5px; left: 5px;
-  padding: 2px 6px; border-radius: var(--radius-xs, 4px);
-  background: color-mix(in srgb, var(--pl) 85%, transparent); color: #fff;
-  font-size: 9px; font-weight: 700; letter-spacing: .6px;
-  pointer-events: none;
-}
-.mep-selected-check {
-  position: absolute; top: 6px; right: 6px;
-  width: 22px; height: 22px; border-radius: 50%;
-  background: color-mix(in srgb, var(--pl) 25%, transparent); color: var(--pl-light);
-  display: flex; align-items: center; justify-content: center;
-}
-.mep-source-badge {
-  position: absolute; bottom: 4px; left: 4px;
-  width: 20px; height: 20px; border-radius: var(--radius-xs, 4px);
-  background: rgba(0,0,0,.65); backdrop-filter: blur(4px);
-  display: flex; align-items: center; justify-content: center;
-}
-.mep-source-badge img { border-radius: 2px; width: 12px !important; height: 12px !important; }
-.mep-source-badge--lg { width: 28px; height: 28px; border-radius: 5px; }
-.mep-source-badge--lg img { width: 32px !important; height: 32px !important; }
-
-.mep-cover-label {
-  font-size: 11px; color: var(--muted);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.mep-cover-author {
-  font-size: var(--fs-xs, 10px); color: rgba(255,255,255,.3);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-
-/* ── Search bar ───────────────────────────────────────────────────────────── */
-.mep-search-row { display: flex; gap: var(--space-2, 8px); margin-bottom: 14px; }
-.mep-search-input {
-  flex: 1; background: rgba(255,255,255,.06);
-  border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
-  color: var(--text); font-size: 13px; font-family: inherit;
-  padding: 8px 12px; outline: none; transition: border-color .15s;
-}
-.mep-search-input:focus { border-color: var(--pl); }
-.mep-search-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 16px; border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--pl) 20%, transparent); border: 1px solid color-mix(in srgb, var(--pl) 40%, transparent); color: var(--pl-light);
-  font-size: 13px; font-weight: 600; font-family: inherit;
-  cursor: pointer; transition: all .15s; white-space: nowrap;
-}
-.mep-search-btn:not(:disabled):hover { background: color-mix(in srgb, var(--pl) 30%, transparent); border-color: var(--pl); color: #fff; }
-.mep-search-btn:disabled { opacity: .55; cursor: not-allowed; }
-
-/* ── Loading / empty ─────────────────────────────────────────────────────── */
-.mep-loading {
-  display: flex; align-items: center; gap: 10px;
-  color: var(--muted); font-size: 13px; padding: 20px 0;
-}
-.mep-empty-state {
-  padding: 40px 0; text-align: center; color: var(--muted); font-size: var(--fs-md, 14px);
-}
-.mep-empty-state-sm {
-  font-size: var(--fs-sm, 12px); color: rgba(255,255,255,.3); padding: 8px 0 4px;
-}
-.mep-spinner {
-  width: 20px; height: 20px; border-radius: 50%;
-  border: 2px solid rgba(255,255,255,.1); border-top-color: var(--pl);
-  animation: mep-spin .7s linear infinite; flex-shrink: 0;
-}
-.mep-spinner--sm { width: 14px; height: 14px; }
-@keyframes mep-spin { to { transform: rotate(360deg); } }
-
-/* ── Description tab ─────────────────────────────────────────────────────── */
-.mep-desc-list { display: flex; flex-direction: column; gap: 14px; padding-top: 18px; }
-.mep-desc-source { border: 1px solid var(--glass-border); border-radius: var(--radius-sm); overflow: hidden; }
-.mep-desc-source-header {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 10px 14px; background: rgba(255,255,255,.04);
-  border-bottom: 1px solid var(--glass-border);
-}
-.mep-desc-source-name { font-size: 13px; font-weight: 700; color: var(--text); }
 .mep-desc-apply-btn {
   padding: 5px 14px; border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--pl) 20%, transparent); border: 1px solid color-mix(in srgb, var(--pl) 40%, transparent); color: var(--pl-light);
   font-size: var(--fs-sm, 12px); font-weight: 600; font-family: inherit;
   cursor: pointer; white-space: nowrap; transition: all .15s;
-}
-.mep-desc-apply-btn:hover { background: color-mix(in srgb, var(--pl) 30%, transparent); border-color: var(--pl); color: #fff; }
-.mep-desc-preview {
-  padding: 14px; font-size: 13px; color: rgba(255,255,255,.62); line-height: 1.7;
-}
-
-/* ── Details tab form ────────────────────────────────────────────────────── */
-/* ── Detail source cards ─────────────────────────────────────────────────── */
-.mep-detail-sources { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
-.mep-detail-source {
-  border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-.mep-detail-grid {
-  display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px;
-}
-.mep-detail-chip {
-  display: inline-block; font-size: var(--fs-sm, 12px); color: rgba(255,255,255,.7);
-  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08);
-  border-radius: 6px; padding: 4px 10px; line-height: 1.4;
-}
-.mep-detail-chip b { color: var(--pl-light); font-weight: 600; margin-right: 2px; }
-
-.mep-form { display: flex; flex-direction: column; gap: 14px; padding-top: 18px; }
-.mep-form-section-label {
-  font-size: var(--fs-xs, 10px); font-weight: 700; color: var(--pl-light);
-  text-transform: uppercase; letter-spacing: 1.2px;
-  padding-bottom: 4px; border-bottom: 1px solid var(--glass-border);
-}
-.mep-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.mep-field { display: flex; flex-direction: column; gap: 5px; }
-.mep-field-label {
-  font-size: 11px; font-weight: 700; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .8px;
-}
-.mep-field-row { display: flex; gap: var(--space-2, 8px); }
-.mep-input {
-  flex: 1; background: rgba(255,255,255,.06);
-  border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
-  color: var(--text); font-size: 13px; font-family: inherit;
-  padding: 9px 12px; outline: none; transition: border-color .15s;
-}
-.mep-input:focus { border-color: var(--pl); }
-.mep-textarea {
-  background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm); color: var(--text); font-size: 13px; font-family: inherit;
-  padding: 9px 12px; outline: none; resize: vertical; transition: border-color .15s; line-height: 1.6;
-}
-.mep-textarea:focus { border-color: var(--pl); }
-.mep-apply-btn {
-  padding: 9px 16px; border-radius: var(--radius-sm);
-  background: rgba(255,255,255,.08); border: 1px solid var(--glass-border);
-  color: var(--text); font-size: 13px; font-weight: 600; font-family: inherit;
-  cursor: pointer; white-space: nowrap; transition: all .15s;
-}
-.mep-apply-btn:not(:disabled):hover { background: rgba(255,255,255,.14); }
-.mep-apply-btn:disabled { opacity: .4; cursor: not-allowed; }
-
-/* Description tab - provider icon */
-.mep-desc-source-icon {
-  display: flex; align-items: center;
-  flex-shrink: 0;
-}
-.mep-desc-source-icon img { image-rendering: pixelated; border-radius: 3px; }
-
-/* Details tab - OS checkboxes */
-.mep-os-checks { display: flex; gap: 18px; flex-wrap: wrap; }
-.mep-os-check-label {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 13px; color: var(--text); cursor: pointer;
-}
-.mep-os-check-label input[type="checkbox"] {
-  width: 15px; height: 15px; cursor: pointer;
-  accent-color: var(--pl);
-}
-
-/* Details tab - field hint */
-.mep-field-hint {
-  font-size: var(--fs-xs, 10px); font-weight: 400; color: var(--muted);
-  text-transform: none; letter-spacing: 0;
 }
 
 /* File upload button (label wraps hidden input) */
@@ -2704,109 +2434,6 @@ onMounted(async () => {
   color: var(--muted); cursor: pointer; flex-shrink: 0;
   transition: all .15s;
 }
-.mep-upload-btn:hover { background: rgba(255,255,255,.12); color: var(--text); border-color: rgba(255,255,255,.25); }
-.mep-file-input { display: none; }
-
-/* ── Screenshots tab ─────────────────────────────────────────────────────── */
-.mep-cover-option--removable { position: relative; }
-.mep-ss-remove {
-  position: absolute; top: 4px; right: 4px;
-  width: 22px; height: 22px; border-radius: 50%;
-  background: rgba(239,68,68,.85); border: 1px solid rgba(239,68,68,.5);
-  color: #fff; font-size: 11px; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  opacity: 0; transition: opacity .15s;
-  z-index: 2;
-}
-.mep-cover-option--removable:hover .mep-ss-remove { opacity: 1; }
-
-/* ── Screenshot list (reorderable) ──────────────────────────────────────── */
-.mep-ss-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
-.mep-ss-item {
-  display: flex; align-items: center; gap: 10px;
-  background: rgba(255,255,255,.04); border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm, 8px); padding: 6px 8px; transition: background .15s;
-}
-.mep-ss-item:hover { background: rgba(255,255,255,.07); }
-.mep-ss-item-thumb {
-  width: 120px; height: 68px; object-fit: cover;
-  border-radius: 5px; flex-shrink: 0;
-}
-.mep-ss-order-col {
-  display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0;
-}
-.mep-ss-ord-btn {
-  width: 22px; height: 20px; background: rgba(255,255,255,.06);
-  border: 1px solid var(--glass-border); border-radius: var(--radius-xs, 4px);
-  color: var(--muted); cursor: pointer; font-size: 9px;
-  display: flex; align-items: center; justify-content: center; padding: 0;
-  transition: background .12s;
-}
-.mep-ss-ord-btn:hover:not(:disabled) { background: rgba(255,255,255,.14); color: var(--text); }
-.mep-ss-ord-btn:disabled { opacity: .3; cursor: default; }
-.mep-ss-num { font-size: var(--fs-xs, 10px); color: var(--muted); font-weight: 600; min-width: 16px; text-align: center; }
-.mep-ss-remove--list {
-  margin-left: auto; flex-shrink: 0;
-  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
-  background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
-  border-radius: 6px; color: var(--muted); cursor: pointer; font-size: var(--fs-sm, 12px);
-  transition: background .12s, color .12s;
-}
-.mep-ss-remove--list:hover { background: rgba(239,68,68,.15); color: #f87171; border-color: rgba(239,68,68,.3); }
-
-/* ── Video results list ───────────────────────────────────────────────────── */
-.mep-vid-results { display: flex; flex-direction: column; gap: var(--space-2, 8px); margin-top: 8px; }
-.mep-vid-option {
-  display: flex; align-items: center; gap: var(--space-3, 12px);
-  background: rgba(255,255,255,.04); border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm, 8px); padding: var(--space-2, 8px); cursor: pointer; transition: background .15s;
-}
-.mep-vid-option:hover { background: rgba(255,255,255,.08); }
-.mep-vid-option.selected { border-color: var(--pl); background: color-mix(in srgb, var(--pl) 8%, transparent); }
-.mep-vid-opt-thumb { width: 140px; height: 79px; object-fit: cover; border-radius: 5px; flex-shrink: 0; }
-.mep-vid-opt-info { flex: 1; min-width: 0; }
-.mep-vid-opt-label { font-size: 13px; font-weight: 600; color: var(--text); }
-.mep-vid-opt-author { font-size: 11px; color: var(--muted); margin-top: 2px; }
-.mep-vid-selected-check {
-  width: 22px; height: 22px; border-radius: 50%;
-  background: color-mix(in srgb, var(--pl) 25%, transparent); color: var(--pl-light); flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-}
-
-/* ── Video tab ────────────────────────────────────────────────────────────── */
-.mep-video-preview {
-  display: flex; align-items: flex-start; gap: var(--space-4, 16px);
-  padding: 14px; border-radius: var(--radius-sm);
-  background: rgba(255,255,255,.04); border: 1px solid var(--glass-border);
-  margin-bottom: 14px;
-}
-.mep-video-thumb {
-  width: 180px; aspect-ratio: 16/9; object-fit: cover;
-  border-radius: 6px; flex-shrink: 0;
-  border: 1px solid var(--glass-border);
-}
-.mep-video-info { display: flex; flex-direction: column; gap: var(--space-2, 8px); }
-.mep-video-yt-id { font-size: var(--fs-sm, 12px); color: var(--muted); font-family: monospace; word-break: break-all; }
-.mep-video-link { font-size: var(--fs-sm, 12px); color: var(--pl-light); text-decoration: none; }
-.mep-video-link:hover { text-decoration: underline; }
-
-/* ── Icon preview in sidebar ─────────────────────────────────────────────── */
-.mep-cover-selected-wrap--icon {
-  width: 80px; height: 80px; aspect-ratio: 1/1;
-  border-radius: 10px; background: rgba(0,0,0,.35);
-  border: 1px solid var(--glass-border);
-}
-
-/* ── Footer ───────────────────────────────────────────────────────────────── */
-.mep-footer {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 22px; border-top: 1px solid var(--glass-border);
-  flex-shrink: 0; background: rgba(255,255,255,.02);
-}
-.mep-save-status { font-size: 13px; }
-.mep-ok  { color: #4ade80; }
-.mep-err { color: #f87171; }
-.mep-footer-actions { display: flex; gap: 10px; }
 .mep-btn-notify {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 9px 16px; border-radius: var(--radius-sm);
@@ -2817,141 +2444,4 @@ onMounted(async () => {
 }
 .mep-btn-notify:not(:disabled):hover { background: color-mix(in srgb, var(--pl) 22%, transparent); border-color: color-mix(in srgb, var(--pl) 45%, transparent); color: #fff; }
 .mep-btn-notify:disabled { opacity: .5; cursor: not-allowed; }
-.mep-btn-cancel {
-  padding: 9px 20px; border-radius: var(--radius-sm);
-  background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
-  color: var(--muted); font-size: 13px; font-weight: 600; font-family: inherit;
-  cursor: pointer; transition: all .15s;
-}
-.mep-btn-cancel:hover { background: rgba(255,255,255,.12); color: var(--text); }
-.mep-btn-save {
-  display: inline-flex; align-items: center; gap: var(--space-2, 8px);
-  padding: 9px 22px; border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--pl) 20%, transparent); border: 1px solid color-mix(in srgb, var(--pl) 50%, transparent); color: var(--pl-light);
-  font-size: 13px; font-weight: 700; font-family: inherit;
-  cursor: pointer; transition: all .15s;
-  box-shadow: 0 2px 12px var(--pglow2);
-}
-.mep-btn-save:not(:disabled):hover { background: color-mix(in srgb, var(--pl) 30%, transparent); border-color: var(--pl); color: #fff; }
-.mep-btn-save:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
-
-/* ── SRL Requirements tab ────────────────────────────────────────────────────── */
-.srl-search-row {
-  display: flex; gap: 6px; margin-bottom: 8px;
-}
-.srl-search-row .mep-input { flex: 1; }
-
-.srl-error {
-  font-size: 11px; color: #f87171;
-  margin-bottom: 6px;
-}
-
-.srl-no-data {
-  font-size: var(--fs-sm, 12px); color: rgba(255,255,255,.35); font-style: italic;
-}
-
-.srl-matches {
-  display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px;
-}
-
-.srl-match-row {
-  display: flex; align-items: center; gap: var(--space-2, 8px);
-  padding: 5px 8px; border-radius: 6px;
-  border: 1px solid var(--glass-border);
-  background: rgba(255,255,255,.03);
-  cursor: pointer; transition: background .12s;
-}
-.srl-match-row:hover { background: rgba(255,255,255,.07); }
-.srl-match-row--active {
-  border-color: color-mix(in srgb, var(--pl) 50%, transparent);
-  background: color-mix(in srgb, var(--pl) 8%, transparent);
-}
-
-.srl-match-score {
-  font-size: var(--fs-xs, 10px); font-weight: 700;
-  color: var(--pl-light, var(--pl));
-  min-width: 32px; text-align: center;
-  background: color-mix(in srgb, var(--pl) 15%, transparent);
-  border-radius: var(--radius-xs, 4px); padding: 1px 4px;
-}
-
-.srl-match-title {
-  flex: 1; font-size: var(--fs-sm, 12px); color: rgba(255,255,255,.75);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
-.srl-fetch-btn { flex-shrink: 0; padding: 3px 10px; font-size: 11px; }
-
-.srl-req-table {
-  display: flex; flex-direction: column; gap: var(--space-1, 4px); margin: 6px 0;
-}
-
-.srl-req-row {
-  display: flex; gap: var(--space-2, 8px); align-items: baseline;
-}
-
-.srl-req-key {
-  font-size: 11px; font-weight: 700; color: var(--muted);
-  min-width: 72px; flex-shrink: 0; text-transform: uppercase; letter-spacing: .04em;
-}
-
-.srl-req-val {
-  font-size: 11px; color: rgba(255,255,255,.7); line-height: 1.4;
-}
-
-.srl-preview {
-  background: color-mix(in srgb, var(--pl) 6%, rgba(0,0,0,.3));
-  border: 1px solid color-mix(in srgb, var(--pl) 25%, transparent);
-  border-radius: var(--radius-sm, 8px); padding: 10px 12px; margin-top: 8px;
-}
-
-.srl-preview-head {
-  font-size: var(--fs-xs, 10px); font-weight: 700; letter-spacing: .08em;
-  text-transform: uppercase; color: var(--pl-light, var(--pl));
-  margin-bottom: 4px;
-}
-
-.srl-apply-row {
-  display: flex; gap: var(--space-2, 8px); margin-top: 10px;
-}
-
-.srl-clear-btn {
-  margin-top: 8px; font-size: 11px;
-  color: rgba(255,255,255,.3);
-  background: none; border: none; cursor: pointer; padding: 0;
-  text-decoration: underline; text-underline-offset: 2px;
-  transition: color .15s;
-}
-.srl-clear-btn:hover { color: #f87171; }
-
-.srl-pending-notice {
-  font-size: 11px; color: #4ade80;
-  padding: 6px 8px; background: rgba(74,222,128,.08);
-  border: 1px solid rgba(74,222,128,.2); border-radius: 6px;
-  margin-top: 8px;
-}
-
-/* Manual entry grid */
-.srl-manual-grid {
-  display: grid;
-  grid-template-columns: 72px 1fr;
-  gap: 4px 8px;
-  align-items: center;
-  margin-bottom: 4px;
-}
-.mep-input--sm {
-  padding: 4px 8px; font-size: 11px;
-}
-
-/* ── Mobile ────────────────────────────────────────────────────────────────── */
-@media (max-width: 640px) {
-  .mep-panel { width: 100vw; height: 100vh; border-radius: 0; max-width: none; }
-  .mep-left { display: none; }
-  .mep-tabs { flex-wrap: wrap; gap: 2px; }
-  .mep-tab { font-size: .68rem; padding: 6px 8px; }
-  .mep-header { padding: 10px 14px; }
-  .mep-tab-content { padding: 10px; }
-  .mep-covers-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 6px; }
-  .mep-form-row { grid-template-columns: 1fr; }
-}
 </style>

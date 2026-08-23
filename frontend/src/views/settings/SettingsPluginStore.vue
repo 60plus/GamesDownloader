@@ -14,7 +14,7 @@
             <span class="ps-source-name">{{ src.name }}</span>
             <span class="ps-source-url">{{ src.url }}</span>
           </div>
-          <button class="ps-source-del" @click="removeSource(src.id)" title="Remove source">
+          <button class="ps-source-del" @click="removeSource(src.id)" :title="t('pstore.remove_source')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -157,9 +157,9 @@
             </div>
             <div class="ps-modal-details">
               <div v-if="detailPlugin.gdVersionMin" :class="{ 'ps-min-gd-bad': gdTooOld(detailPlugin) }"><strong>Min GD Version:</strong> {{ detailPlugin.gdVersionMin }}<template v-if="gdVersion"> ({{ t('pstore.gd_version', 'GD Version') }}: {{ gdVersion }})</template></div>
-              <div v-if="detailPlugin.repository"><strong>Repository:</strong> <a :href="detailPlugin.repository" target="_blank">{{ detailPlugin.repository }}</a></div>
-              <div v-if="detailPlugin.updated"><strong>Updated:</strong> {{ detailPlugin.updated }}</div>
-              <div v-if="detailPlugin.downloadSize"><strong>Size:</strong> {{ formatSize(detailPlugin.downloadSize) }}</div>
+              <div v-if="detailPlugin.repository"><strong>{{ t('store.repository') }}:</strong> <a :href="detailPlugin.repository" target="_blank">{{ detailPlugin.repository }}</a></div>
+              <div v-if="detailPlugin.updated"><strong>{{ t('store.updated') }}:</strong> {{ detailPlugin.updated }}</div>
+              <div v-if="detailPlugin.downloadSize"><strong>{{ t('store.size') }}:</strong> {{ formatSize(detailPlugin.downloadSize) }}</div>
             </div>
             <div v-if="detailPlugin.changelog" class="ps-modal-changelog">
               <strong>{{ t('pstore.changelog') }}:</strong>
@@ -230,6 +230,8 @@ import { ref, computed, onMounted } from 'vue'
 import client from '@/services/api/client'
 import { useI18n } from '@/i18n'
 import { useDialog } from '@/composables/useDialog'
+import { formatBytes } from '@/utils/format'
+const formatSize = (b: number | null | undefined) => formatBytes(b, '')
 
 const { t } = useI18n()
 const { gdConfirm } = useDialog()
@@ -277,7 +279,7 @@ async function checkNow() {
     }
     await fetchPlugins()
     setTimeout(() => { statusMsg.value = '' }, 4000)
-  } catch { statusMsg.value = 'Check failed'; statusOk.value = false }
+  } catch { statusMsg.value = t('common.check_failed'); statusOk.value = false }
   finally { checking.value = false }
 }
 const lightboxIdx = ref(-1)
@@ -330,12 +332,6 @@ function iconUrl(url: string | undefined): string {
   return `/api/plugins/store/icon?url=${encodeURIComponent(url)}`
 }
 
-function formatSize(bytes: number): string {
-  if (!bytes) return ''
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / 1048576).toFixed(1) + ' MB'
-}
 
 async function fetchSources() {
   try {
@@ -354,7 +350,7 @@ async function addSource() {
     await fetchSources()
     await fetchPlugins()
   } catch (err: any) {
-    sourceError.value = err?.response?.data?.detail || 'Failed to add source'
+    sourceError.value = err?.response?.data?.detail || t('pstore.add_source_failed')
   } finally { addingSource.value = false }
 }
 
@@ -392,7 +388,7 @@ async function installPlugin(p: StorePlugin) {
     if (p.type === 'theme') needsRestart.value = true
     setTimeout(() => { statusMsg.value = '' }, 6000)
   } catch (err: any) {
-    statusMsg.value = err?.response?.data?.detail || 'Install failed'; statusOk.value = false
+    statusMsg.value = err?.response?.data?.detail || t('common.install_failed'); statusOk.value = false
     setTimeout(() => { statusMsg.value = '' }, 6000)
   } finally { installing.value = null }
 }
@@ -411,7 +407,7 @@ async function restartContainer() {
     // Wait for container to come back
     setTimeout(() => { window.location.reload() }, 8000)
   } catch {
-    statusMsg.value = 'Restart failed'; statusOk.value = false
+    statusMsg.value = t('common.restart_failed'); statusOk.value = false
     restarting.value = false
   }
 }

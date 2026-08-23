@@ -45,7 +45,7 @@
         </select>
 
         <!-- Card size -->
-        <div class="size-group" title="Card size">
+        <div class="size-group" :title="t('romsrc.card_size')">
           <button v-for="sz in cardSizes" :key="sz.id" class="size-btn" :class="{ active: cardSize === sz.id }" @click="cardSize = sz.id">{{ sz.label }}</button>
         </div>
       </div>
@@ -270,7 +270,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, reactive, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import client from '@/services/api/client'
 import romSourceActions, { type RomSource } from '@/lib/romSourceActions'
@@ -278,6 +278,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { usePlatformMetaStore } from '@/stores/platformMeta'
 import { useI18n } from '@/i18n'
+import { formatBytes as formatSize } from '@/utils/format'
 
 const { t } = useI18n()
 
@@ -378,20 +379,36 @@ async function triggerScan() {
   scanMsg.value = ''
   try {
     await client.post('/roms/scan')
-    scanMsg.value = 'Scanning ROMs…'
-    const poll = setInterval(async () => {
+    scanMsg.value = t('roms.scanning')
+    // Module-scope handle, cleared before re-arming and on unmount. It used to
+    // be a local one cleared only in the success branch, so navigating away
+    // during a scan left a poll running for ever against a component that no
+    // longer exists, and a failing status endpoint left the button saying
+    // "Scanning..." until the page was reloaded.
+    stopScanPoll()
+    let misses = 0
+    scanPoll = setInterval(async () => {
       try {
         const { data } = await client.get('/roms/scan/status')
+        misses = 0
         if (!data.running) {
-          clearInterval(poll)
+          stopScanPoll()
           await fetchPlatforms()
           scanMsg.value = ''
           scanning.value = false
         }
-      } catch { /* ignore */ }
+      } catch {
+        // A blip is not an answer, but five in a row is: stop claiming to be
+        // scanning something nobody can confirm is still running.
+        if (++misses >= 5) {
+          stopScanPoll()
+          scanMsg.value = t('common.scan_failed')
+          scanning.value = false
+        }
+      }
     }, 2000)
   } catch (e: any) {
-    scanMsg.value = e?.response?.data?.detail || 'Scan failed'
+    scanMsg.value = e?.response?.data?.detail || t('common.scan_failed')
     scanning.value = false
   }
 }
@@ -506,12 +523,6 @@ function removeFile(index: number) {
   addModal.files.splice(index, 1)
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024)        return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 ** 3)   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
 
 async function uploadFiles() {
   if (!addModal.selectedPlatform || !addModal.files.length) return
@@ -539,7 +550,7 @@ async function uploadFiles() {
     // Refresh platform list so ROM count is updated after next scan
     await fetchPlatforms()
   } catch (e: any) {
-    addModal.uploadError = e?.response?.data?.detail || 'Upload failed'
+    addModal.uploadError = e?.response?.data?.detail || t('upload.failed')
     addModal.uploading   = false
   }
 }
@@ -548,6 +559,16 @@ function platformCardStyle(fsSlug: string): Record<string, string> {
   const color = platformMeta.getColor(fsSlug)
   return color ? { '--platform-color': `#${color}` } : {}
 }
+
+// The scan poller lives here rather than inside the function that starts it, so
+// it can be stopped from anywhere - including on unmount.
+let scanPoll: ReturnType<typeof setInterval> | null = null
+function stopScanPoll() {
+  if (scanPoll) clearInterval(scanPoll)
+  scanPoll = null
+}
+
+onUnmounted(stopScanPoll)
 
 onMounted(() => {
   fetchPlatforms()
@@ -811,7 +832,6 @@ onMounted(() => {
   border: 2px solid rgba(255,255,255,.15); border-top-color: var(--pl-light);
   animation: spin .8s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .spin { animation: spin .8s linear infinite; }
 

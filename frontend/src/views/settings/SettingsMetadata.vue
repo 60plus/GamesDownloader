@@ -102,7 +102,7 @@
       <div v-if="savedOk" class="field-ok">{{ t('metadata.saved') }}</div>
 
       <div class="sm-actions">
-        <button class="action-btn action-btn--primary" :disabled="saving" @click="save">
+        <button class="action-btn action-btn--primary btn-save-action" :disabled="saving" @click="save">
           <span v-if="saving" class="spinner" />
           <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
           {{ t('metadata.save_changes') }}
@@ -241,7 +241,7 @@
               {{ restoreFile ? restoreFile.name : t('metadata.restore_pick_file') }}
             </button>
             <button
-              class="action-btn action-btn--primary"
+              class="action-btn action-btn--primary btn-save-action"
               :disabled="!restoreFile || restoring"
               @click="doRestore"
             >
@@ -280,8 +280,11 @@
 import { ref, reactive, onMounted } from 'vue'
 import client from '@/services/api/client'
 import { useI18n } from '@/i18n'
+import { useDialog } from '@/composables/useDialog'
+import { formatBytes } from '@/utils/format'
 
 const { t } = useI18n()
+const { gdConfirm } = useDialog()
 
 const loading = ref(true)
 const saving = ref(false)
@@ -349,12 +352,6 @@ const restoreMetadata = ref(true)
 const restoreMedia = ref(true)
 const restoreSettings = ref(false)
 
-function formatBytes(b: number): string {
-  if (b < 1024) return `${b} B`
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
-  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`
-  return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
 
 async function loadBackupPreview() {
   previewLoading.value = true
@@ -415,7 +412,7 @@ async function doRestore() {
     restoreError.value = t('metadata.restore_nothing_picked')
     return
   }
-  if (!confirm(t('metadata.restore_confirm'))) return
+  if (!await gdConfirm(t('metadata.restore_confirm'), { title: t('metadata.restore_run'), danger: true })) return
 
   restoring.value = true
   restoreError.value = ''
@@ -571,7 +568,6 @@ async function save() {
   display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2, 8px);
 }
 
-
 .field-input {
   width: 100%; padding: 8px 12px; border-radius: var(--radius-sm);
   border: 1px solid var(--glass-border); background: rgba(255,255,255,.04);
@@ -616,7 +612,6 @@ async function save() {
   animation: spin .7s linear infinite; display: inline-block;
 }
 .spinner--sm { width: 10px; height: 10px; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Metadata backup ──────────────────────────────────────────── */
 .backup-section {

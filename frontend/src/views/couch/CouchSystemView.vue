@@ -66,16 +66,6 @@
           <!-- Hero gradient overlay (always present) -->
           <div class="csv-card-hero-overlay" />
 
-          <!-- Platform wheel logo (icon moved to bottom bar) -->
-          <div v-if="plat.wheel_path" class="csv-card-logo-wrap">
-            <img
-              :src="plat.wheel_path"
-              class="csv-card-wheel"
-              :alt="plat.name"
-              @error="($event.target as HTMLImageElement).style.display='none'"
-            />
-          </div>
-
           <!-- Platform name + meta -->
           <div class="csv-card-info">
             <div class="csv-card-name-wrap">
@@ -105,7 +95,6 @@
       <div class="csv-bottom-left">
         <!-- Platform icon - centered above description -->
         <img
-          v-if="current.wheel_path || true"
           :key="'icon-' + current.fs_slug"
           :src="`/platforms/icons/${current.fs_slug}.png`"
           class="csv-bottom-icon"
@@ -164,7 +153,6 @@ export interface CouchPlatform {
   manufacturer:         string | null
   release_year_platform: number | null
   generation:           number | null
-  wheel_path:           string | null
 }
 
 const props = defineProps<{ platforms: CouchPlatform[]; modelValue: number }>()
@@ -250,8 +238,6 @@ async function loadPlatformDetails(slug: string, fsSlug: string) {
     p.manufacturer          = data.manufacturer         ?? p.manufacturer
     p.release_year_platform = data.release_year_platform ?? p.release_year_platform
     p.generation            = data.generation           ?? p.generation
-    // wheel from name logo
-    if (data.name_logo_path) p.wheel_path = data.name_logo_path
   } catch { /* silent */ }
 }
 
@@ -445,7 +431,6 @@ useCouchNav({
 }
 
 /* Keep card content above photo & overlay */
-.csv-card-logo-wrap,
 .csv-card-info,
 .csv-card-count {
   position: relative; z-index: 2;
@@ -494,13 +479,6 @@ useCouchNav({
   opacity: 0 !important; pointer-events: none;
 }
 
-.csv-card-logo-wrap {
-  display: flex; align-items: center; justify-content: center;
-}
-.csv-card-wheel {
-  max-width: 200px; max-height: 140px;
-  object-fit: contain; filter: drop-shadow(0 0 16px rgba(255,255,255,.15));
-}
 /* Platform icon - centered above the description in the bottom bar */
 .csv-bottom-icon {
   display: block; margin: 0 auto 10px;

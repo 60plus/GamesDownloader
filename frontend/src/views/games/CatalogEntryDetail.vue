@@ -82,7 +82,7 @@
               <!-- Version facts are data, so they read as chips rather than as
                    labelled rows nothing else in the design would match. -->
               <span v-if="entry.release_tag" class="ced-ver-chip">{{ entry.release_tag }}</span>
-              <span v-if="entry.is_prerelease" class="ced-ver-chip ced-ver-chip--warn">pre-release</span>
+              <span v-if="entry.is_prerelease" class="ced-ver-chip ced-ver-chip--warn">{{ t('detail.pre_release') }}</span>
             </div>
 
             <div class="ced-meta-row">
@@ -402,7 +402,10 @@
 
             <!-- Minimum requirements -->
             <template v-if="reqRows.length">
-              <div class="ced-section-label" style="margin-top:28px">{{ t('detail.min_requirements') }}</div>
+              <div class="ced-section-label ced-section-label--os" style="margin-top:28px">
+                <OsIcon v-if="reqOs" :os="reqOs" />
+                {{ t('detail.min_requirements') }}
+              </div>
               <div class="ced-dlist">
                 <template v-for="[k, v] in reqRows" :key="k">
                   <span class="ced-dk">{{ formatReqKey(k) }}</span>
@@ -421,7 +424,7 @@
         <section v-if="isAdmin && hasMatchRows" class="ced-section ced-admin-section">
           <h2 class="ced-section-title">
             {{ t('detail.edit_metadata') }}
-            <span class="ced-admin-badge">Admin</span>
+            <span class="ced-admin-badge">{{ t('detail.admin_badge') }}</span>
           </h2>
           <div class="ced-dlist">
             <template v-if="entry.meta_source">
@@ -496,297 +499,68 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import client from '@/services/api/client'
-import { useAuthStore } from '@/stores/auth'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
-import { useLibrariesStore } from '@/stores/libraries'
 import { useSocketStore } from '@/stores/socket'
+import { useI18n } from '@/i18n'
 import HeroBackground from '@/components/common/HeroBackground.vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
 import CatalogDownloadDialog from '@/components/games/CatalogDownloadDialog.vue'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
-import { resolveDetailRows } from '@/themes/index'
+import OsIcon from '@/components/common/OsIcon.vue'
 import { sanitizeHtml } from '@/utils/sanitize'
-import { buildLanguageList } from '@/utils/langMap'
 import { ratingVal } from '@/utils/rating'
-import { useI18n } from '@/i18n'
+import { formatReqKey } from '@/utils/requirements'
+import { formatDate } from '@/utils/format'
+import { useCoverTilt } from '@/composables/useCoverTilt'
+import { useCatalogEntry, osLabel, fmtHltb } from '@/composables/useCatalogEntry'
 
-const { t } = useI18n()
-const route = useRoute()
-const router = useRouter()
-const auth = useAuthStore()
-const themeStore = useThemeStore()
-const librariesStore = useLibrariesStore()
+const { coverTilt, sheenStyle, onCoverMove, onCoverLeave } = useCoverTilt()
+
+const { t }       = useI18n()
+const router      = useRouter()
+const themeStore  = useThemeStore()
 const socketStore = useSocketStore()
 
-const isAdmin = computed(() => auth.user?.role === 'admin')
+// ── Carousel, lightbox, description ───────────────────────────────────────────
 
-interface EntryAsset { name: string; os?: string; size?: number; arch?: string | null }
+const carouselEl   = ref<HTMLElement | null>(null)
+const carouselIdx  = ref(0)
+const lightboxIdx  = ref<number | null>(null)
+const descExpanded = ref(false)
+const descOverflow = ref(false)
 
-/** One row of GET /plugins/library/catalog-entries/{id}. Everything past `id`
- *  and `title` is optional: an entry that was never scraped carries little more
- *  than its name. */
-interface Entry {
-  id: number
-  title: string
-  subtitle?: string | null
-  catalog_title?: string | null
-  category?: string | null
-  homepage?: string | null
-  cover_path?: string | null
-  background_path?: string | null
-  logo_path?: string | null
-  screenshots?: string[] | null
-  description?: string | null
-  developer?: string | null
-  publisher?: string | null
-  release_date?: string | null
-  rating?: number | null
-  genres?: string[] | null
-  meta_ratings?: Record<string, number> | null
-  languages?: Record<string, string> | null
-  requirements?: Record<string, unknown> | null
-  hltb_main_s?: number | null
-  hltb_complete_s?: number | null
-  available?: boolean
-  unavailable_reason?: string | null
-  assets?: EntryAsset[] | null
-  release_tag?: string | null
-  released_at?: string | null
-  is_prerelease?: boolean
-  save_root?: string | null
-  downloaded?: boolean
-  library_game_id?: number | null
-  meta_source?: string | null
-  meta_search_term?: string | null
-  meta_matched_title?: string | null
-  meta_confidence?: string | null
+/** Is the description long enough to be worth collapsing? Measured on the TEXT
+ *  the reader sees, not the markup: a short blurb wrapped in heavy HTML used to
+ *  earn a "Read more" that revealed almost nothing. */
+function isLongDescription(html?: string | null): boolean {
+  if (!html) return false
+  return sanitizeHtml(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().length > 600
 }
 
-const entry = ref<Entry | null>(null)
-const loading = ref(true)
-const showDownload = ref(false)
 // Set the instant a download is queued from this page; component-local, so it
 // resets on navigation. It drives the transient "Downloading..." marker. The
 // persistent server state (library_game_id set, no file yet) also describes a
 // download that FAILED, which must read as on offer again - not as a spinner
 // stuck forever - so the marker is not derived from that state.
 const justQueued = ref(false)
-const showMetaPanel = ref(false)
-const scraping = ref(false)
-const coverFailed = ref(false)
+
+const {
+  entry, loading, showDownload, showMetaPanel, scraping, coverFailed,
+  isAdmin, assets, screenshots, entryLangs, releaseYear, storeName,
+  pluginRows, pluginGame, homepageHost, assetOses, buildsByOs,
+  externalRatings, pluginRatings, hasMatchRows, totalSize, reqRows, reqOs,
+  fmtSize, hideImg, load, onMetadataSaved, refreshMeta, goBack,
+} = useCatalogEntry({
+  onLoaded: (e) => {
+    carouselIdx.value  = 0
+    descExpanded.value = false
+    descOverflow.value = isLongDescription(e?.description)
+  },
+})
 
 const bgSrc = computed(() => entry.value?.background_path || entry.value?.cover_path || '')
-const assets = computed<EntryAsset[]>(() => entry.value?.assets || [])
-const screenshots = computed<string[]>(() => entry.value?.screenshots || [])
-const releaseYear = computed(() => (String(entry.value?.release_date || '').match(/(\d{4})/) || [])[1] || '')
-const entryLangs = computed(() => buildLanguageList(entry.value?.languages))
-
-// The library's REAL display name, from the registry. Title-casing the slug
-// only ever produced "Pc Ports", and this name now stands in three places at
-// once (back pill, hero badge, Source row). The de-slugified form survives as
-// the last resort for a registry that has not loaded yet.
-const storeName = computed(() => {
-  const slug = String(route.params.slug || '')
-  if (!slug) return t('nav.store')
-  const lib = librariesStore.bySlug(slug)
-  if (lib) return librariesStore.label(lib)
-  return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-})
-
-// Rows contributed by plugins via window.__GD__.registerDetailRow. Resolved
-// against 'games' - see the note in the template.
-const pluginRows = computed(() => (entry.value ? resolveDetailRows(entry.value as unknown as Record<string, unknown>, 'games') : []))
-// PluginDetailValue requires a non-null game object; an entry is always the
-// thing being described, so an empty object only ever stands in pre-load.
-const pluginGame = computed<Record<string, unknown>>(() => (entry.value || {}) as unknown as Record<string, unknown>)
-
-// The catalogue's own page for this listing, named by its host so the button
-// carries no label that would need translating.
-const homepageHost = computed(() => {
-  const url = entry.value?.homepage
-  if (!url) return ''
-  try { return new URL(url).hostname.replace(/^www\./, '') } catch { return '' }
-})
-
-// ── Platforms ─────────────────────────────────────────────────────────────────
-
-/** Collapse a build's free-form os string onto the three chips we can draw. */
-function osKey(os?: string | null): string {
-  const k = String(os || '').toLowerCase()
-  if (!k) return ''
-  if (k.includes('win')) return 'windows'
-  if (k.includes('mac') || k.includes('osx') || k.includes('darwin')) return 'mac'
-  if (k.includes('linux')) return 'linux'
-  return k
-}
-
-function osLabel(os: string): string {
-  if (os === 'windows') return 'Windows'
-  if (os === 'mac') return 'macOS'
-  if (os === 'linux') return 'Linux'
-  return os
-}
-
-const assetOses = computed(() => {
-  const seen: string[] = []
-  for (const a of assets.value) {
-    const k = osKey(a.os)
-    if (k && !seen.includes(k)) seen.push(k)
-  }
-  const order = ['windows', 'mac', 'linux']
-  return [...order.filter(o => seen.includes(o)), ...seen.filter(o => !order.includes(o))]
-})
-
-/** Builds grouped under the platform they are for, the way a GOG game lists
- *  its installers. A build marked for every platform - the catalogue's "all" -
- *  gets its own group rather than being repeated under each one, which is how
- *  it lands on disk too: in the title folder, not under an os. */
-const buildsByOs = computed(() => {
-  const groups = new Map<string, EntryAsset[]>()
-  for (const a of assets.value) {
-    const k = osKey(a.os) || 'all'
-    if (!groups.has(k)) groups.set(k, [])
-    groups.get(k)!.push(a)
-  }
-  const order = ['windows', 'mac', 'linux', 'all']
-  const keys = [
-    ...order.filter(o => groups.has(o)),
-    ...Array.from(groups.keys()).filter(o => !order.includes(o)),
-  ]
-  return keys.map(os => ({
-    os,
-    label: os === 'all' ? t('detail.dl_any_os') : osLabel(os),
-    entries: groups.get(os)!,
-  }))
-})
-
-// ── External ratings ──────────────────────────────────────────────────────────
-
-const externalRatings = computed(() => ({
-  rawg: entry.value?.meta_ratings?.['rawg'] ?? undefined,
-  igdb: entry.value?.meta_ratings?.['igdb'] ?? undefined,
-  steam: entry.value?.meta_ratings?.['steam'] ?? undefined,
-}))
-
-// meta_ratings is keyed by provider id ("ppe"), which is not what the provider
-// calls itself ("PPE.pl"). Ask the plugins for their own names and fall back to
-// the shouted id when the list cannot be read.
-const providerNames = ref<Record<string, string>>({})
-
-const pluginRatings = computed(() => {
-  const out: { id: string; name: string; rating: number; logo: string }[] = []
-  for (const [k, v] of Object.entries(entry.value?.meta_ratings || {})) {
-    if (k === 'rawg' || k === 'igdb' || k === 'steam') continue
-    if (!ratingVal(v)) continue
-    out.push({
-      id: k,
-      name: providerNames.value[k] || k.toUpperCase(),
-      rating: ratingVal(v),
-      logo: `/api/plugins/${k}-metadata/logo`,
-    })
-  }
-  return out
-})
-
-async function loadProviderNames() {
-  try {
-    const { data } = await client.get('/plugins/metadata/providers')
-    if (!Array.isArray(data)) return
-    const out: Record<string, string> = {}
-    for (const p of data) if (p?.id && p?.name) out[p.id] = p.name
-    providerNames.value = out
-  } catch { /* no read access to plugins: the id stands in */ }
-}
-
-function hideImg(e: Event) {
-  (e.target as HTMLImageElement).style.display = 'none'
-}
-
-// ── Details grid ──────────────────────────────────────────────────────────────
-
-const hasMatchRows = computed(() => !!(
-  entry.value?.meta_source || entry.value?.meta_matched_title || entry.value?.meta_search_term
-))
-
-const totalSize = computed(() => {
-  const bytes = assets.value.reduce((n, a) => n + (a.size ?? 0), 0)
-  return bytes ? fmtSize(bytes) : ''
-})
-
-function fmtSize(bytes: number): string {
-  if (!bytes) return ''
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  if (bytes < 1024 ** 3) return (bytes / 1024 / 1024).toFixed(1) + ' MB'
-  return (bytes / 1024 ** 3).toFixed(2) + ' GB'
-}
-
-function fmtHltb(s: number): string {
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`
-  return `${m}m`
-}
-
-// release_date is free-form on an entry (a catalogue may store "2019" or a full
-// ISO date), so anything Date cannot parse is printed as it arrived.
-function formatDate(raw: string): string {
-  const d = new Date(raw)
-  if (!isNaN(d.getTime())) {
-    const loc = localStorage.getItem('gd3_locale') || navigator.language || 'en'
-    return d.toLocaleDateString(loc, { year: 'numeric', month: 'long', day: 'numeric' })
-  }
-  return raw.length <= 10 ? raw : raw.slice(0, 10)
-}
-
-// ── Requirements ──────────────────────────────────────────────────────────────
-
-const REQ_SHOW = new Set(['processor', 'cpu', 'memory', 'ram', 'graphics', 'gpu', 'video', 'os', 'storage', 'directx'])
-
-function formatReqKey(k: string): string {
-  const key = k.toLowerCase()
-  if (['processor', 'cpu'].includes(key))         return 'CPU'
-  if (['memory', 'ram'].includes(key))            return 'RAM'
-  if (['graphics', 'gpu', 'video'].includes(key)) return 'GPU'
-  if (key === 'os')                               return 'OS'
-  if (key === 'storage')                          return 'Storage'
-  if (key === 'directx')                          return 'DirectX'
-  return k
-}
-
-const reqRows = computed((): [string, string][] => {
-  const reqs = entry.value?.requirements as Record<string, any> | null | undefined
-  if (!reqs) return []
-  const minimum: any =
-    reqs.minimum ??
-    reqs.Windows?.minimum ??
-    reqs.windows?.minimum ??
-    (reqs.per_os as any[] | undefined)?.find((o: any) => (o.os || '').toLowerCase().includes('win'))?.minimum ??
-    (Object.values(reqs)[0] as any)?.minimum ?? null
-  if (!minimum) return []
-  if (Array.isArray(minimum)) {
-    return minimum
-      .filter((r: any) => REQ_SHOW.has((r.name || r.id || '').toLowerCase()) && (r.description || r.value))
-      .map((r: any) => [r.name || r.id, r.description || r.value] as [string, string])
-  }
-  if (typeof minimum === 'object') {
-    return Object.entries(minimum)
-      .filter(([k, v]) => REQ_SHOW.has(k.toLowerCase()) && v)
-      .map(([k, v]) => [k, String(v)] as [string, string])
-  }
-  return []
-})
-
-// ── Carousel, lightbox, description ───────────────────────────────────────────
-
-const carouselEl = ref<HTMLElement | null>(null)
-const carouselIdx = ref(0)
-const lightboxIdx = ref<number | null>(null)
-const descExpanded = ref(false)
-const descOverflow = ref(false)
 
 // How many slides are visible at once. The clamp below, the right arrow's
 // disabled test, the dot count and the slide's flex-basis all read this one
@@ -821,53 +595,7 @@ function slideTo(idx: number) {
   })
 }
 
-// ── 3D tilt effect ────────────────────────────────────────────────────────────
-
-const coverTilt = ref('perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)')
-const sheenStyle = ref('')
-
-function onCoverMove(e: MouseEvent) {
-  const el = e.currentTarget as HTMLElement
-  const rect = el.getBoundingClientRect()
-  const cx = rect.width / 2
-  const cy = rect.height / 2
-  const dx = e.clientX - rect.left - cx
-  const dy = e.clientY - rect.top - cy
-  const rotY = (dx / cx) * 10
-  const rotX = -(dy / cy) * 7
-  coverTilt.value = `perspective(800px) rotateX(${rotX}deg) rotateY(${rotY}deg) scale3d(1.03,1.03,1.03)`
-  const mx = ((e.clientX - rect.left) / rect.width * 100).toFixed(1)
-  const my = ((e.clientY - rect.top) / rect.height * 100).toFixed(1)
-  sheenStyle.value = `opacity:1; background: radial-gradient(ellipse at ${mx}% ${my}%, rgba(255,255,255,0.22) 0%, transparent 65%);`
-}
-
-function onCoverLeave() {
-  coverTilt.value = 'perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)'
-  sheenStyle.value = 'opacity:0;'
-}
-
-/** Is the description long enough to be worth collapsing? Measured on the TEXT
- *  the reader sees, not the markup: a short blurb wrapped in heavy HTML used to
- *  earn a "Read more" that revealed almost nothing. */
-function isLongDescription(html?: string | null): boolean {
-  if (!html) return false
-  return sanitizeHtml(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().length > 600
-}
-
-// ── Load / actions ────────────────────────────────────────────────────────────
-
-async function load() {
-  loading.value = true
-  try {
-    const { data } = await client.get(`/plugins/library/catalog-entries/${route.params.id}`)
-    entry.value = data
-    coverFailed.value = false
-    carouselIdx.value = 0
-    descExpanded.value = false
-    descOverflow.value = isLongDescription(data.description)
-  } catch { entry.value = null }
-  finally { loading.value = false }
-}
+// ── Actions ───────────────────────────────────────────────────────────────────
 
 /** The dialog owns the choice of builds and the queuing; the page only opens
  *  it, the way the GOG detail hands off to its own download dialog. */
@@ -896,36 +624,11 @@ function onCatalogDownloadEvent(kind: string, data: Record<string, unknown>) {
   }
 }
 
-/** The save already pushed the new presentation onto the downloaded game
- *  server-side; this only brings the page itself back in step. */
-async function onMetadataSaved() {
-  showMetaPanel.value = false
-  await load()
-}
-
-async function refreshMeta() {
-  if (!entry.value || scraping.value) return
-  scraping.value = true
-  try { await client.post(`/plugins/library/catalog-entries/${entry.value.id}/scrape-metadata`); await load() }
-  catch { /* ignore */ }
-  finally { scraping.value = false }
-}
-
 function openGame() {
   if (entry.value?.library_game_id) router.push(`/games/${entry.value.library_game_id}`)
 }
 
-function goBack() {
-  if (window.history.length > 1) router.back()
-  else router.push(`/lib/${route.params.slug}`)
-}
-
 onMounted(() => {
-  load()
-  loadProviderNames()
-  // The registry carries this store's display name; a deep link can land here
-  // before anything else has fetched it.
-  if (!librariesStore.loaded) librariesStore.fetch()
   window.addEventListener('resize', onViewportResize)
   unsubDownload = socketStore.onUrlUpload(onCatalogDownloadEvent)
 })
@@ -933,11 +636,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', onViewportResize)
   if (unsubDownload) { unsubDownload(); unsubDownload = null }
 })
-// Moving between two offers keeps this component mounted and only swaps the
-// route parameter, so loading once on mount left every pick showing whichever
-// entry happened to open first. Classic reaches the page that way for its whole
-// catalogue, since its list sits beside the page rather than above it.
-watch(() => route.params.id, (id, prev) => { if (id && id !== prev) load() })
 </script>
 
 <style scoped>
@@ -1161,7 +859,7 @@ watch(() => route.params.id, (id, prev) => { if (id && id !== prev) load() })
 
 /* ══ SEPARATOR ═════════════════════════════════════════════════════════════════ */
 .ced-separator {
-  width: 100%; height: 80px; margin-top: -80px;
+  width: 100%; height: var(--gd-hero-fade-h, 80px); margin-top: calc(-1 * var(--gd-hero-fade-h, 80px));
   background: linear-gradient(to bottom, transparent, var(--bg1, rgba(8,7,18,1)));
   pointer-events: none; flex-shrink: 0;
   position: relative; z-index: 0;
@@ -1177,6 +875,11 @@ watch(() => route.params.id, (id, prev) => { if (id && id !== prev) load() })
   font-size: 11px; font-weight: 700; color: var(--muted);
   text-transform: uppercase; letter-spacing: 1.4px; margin-bottom: 16px;
 }
+.ced-section-label--os { display: flex; align-items: center; gap: 8px; }
+.gd-req-os-icon { flex-shrink: 0; opacity: .9; }
+.gd-req-os-icon--win  { color: #60a5fa; }
+.gd-req-os-icon--mac  { color: #c4b5fd; }
+.gd-req-os-icon--linux { color: #fbbf24; }
 .ced-section-title {
   font-size: 11px; font-weight: 700; color: var(--muted);
   text-transform: uppercase; letter-spacing: 1.4px; margin: 0 0 4px;

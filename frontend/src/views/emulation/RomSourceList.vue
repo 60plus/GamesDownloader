@@ -270,6 +270,8 @@ import { useThemeStore } from '@/stores/theme'
 import { usePlatformMetaStore } from '@/stores/platformMeta'
 import client from '@/services/api/client'
 import { useI18n } from '@/i18n'
+import { formatBytes as _formatBytes } from '@/utils/format'
+const formatBytes = (b: number | null | undefined): string => _formatBytes(b, '')
 
 const { t } = useI18n()
 const route = useRoute()
@@ -492,13 +494,6 @@ function toggleAll() {
   else selectableRows.value.forEach(e => selected.add(e.id))
 }
 
-function formatBytes(bytes: number): string {
-  if (!bytes) return ''
-  const units = ['B', 'KB', 'MB', 'GB']
-  let v = bytes, u = 0
-  while (v >= 1024 && u < units.length - 1) { v /= 1024; u++ }
-  return `${v.toFixed(u > 0 ? 1 : 0)} ${units[u]}`
-}
 
 // Monotonic guard: search / region / sort / page can each fire load() while a
 // prior one is still in flight, and responses can arrive out of order - only the
@@ -921,7 +916,6 @@ onUnmounted(() => {
   border: 2px solid rgba(255,255,255,.15); border-top-color: var(--pl-light);
   animation: spin .8s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── List ───────────────────────────────────────────────────────────────── */
 .rsl-list {

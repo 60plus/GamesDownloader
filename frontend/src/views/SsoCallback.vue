@@ -3,18 +3,18 @@
     <div class="sso-card">
       <div v-if="state === 'loading'" class="sso-state">
         <div class="sso-spinner" />
-        <div class="sso-msg">Signing you in…</div>
+        <div class="sso-msg">{{ t('sso.signing_in') }}</div>
       </div>
 
       <div v-else-if="state === 'ok'" class="sso-state">
         <div class="sso-icon sso-icon--ok">✓</div>
-        <div class="sso-msg">Signed in - redirecting…</div>
+        <div class="sso-msg">{{ t('sso.signed_in') }}</div>
       </div>
 
       <div v-else class="sso-state">
         <div class="sso-icon sso-icon--err">✕</div>
         <div class="sso-msg">{{ errorMessage }}</div>
-        <a href="/login" class="sso-back">Back to login</a>
+        <a href="/login" class="sso-back">{{ t('login.back_to_login') }}</a>
       </div>
     </div>
   </div>
@@ -23,6 +23,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
 
@@ -97,7 +100,7 @@ onMounted(async () => {
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+
 .sso-icon {
   width: 48px; height: 48px;
   border-radius: 50%;

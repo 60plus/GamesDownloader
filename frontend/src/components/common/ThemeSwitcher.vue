@@ -1,13 +1,13 @@
 <template>
   <!-- ── COMPACT mode (sidebar bottom) ──────────────────────────────────── -->
   <div v-if="compact" class="ts-compact">
-    <button class="ts-compact-btn" @click.stop="open = !open" title="Theme & Skin">
+    <button class="ts-compact-btn" @click.stop="open = !open" :title="t('theme.switcher_title')">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="10"/>
         <path d="M12 2a7 7 0 0 1 7 7c0 3.87-3.13 7-7 7S5 12.87 5 9a7 7 0 0 1 7-7z" opacity=".4"/>
         <circle cx="12" cy="12" r="3" fill="var(--pl)" stroke="none"/>
       </svg>
-      <span>Appearance</span>
+      <span>{{ t('settings.appearance') }}</span>
       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
         :style="open ? 'transform:rotate(180deg)' : ''" style="transition:transform .15s; margin-left:auto;">
         <polyline points="18 15 12 9 6 15"/>
@@ -17,7 +17,7 @@
     <transition name="slide-down">
       <div v-if="open" class="ts-compact-panel glass-panel">
         <!-- Theme -->
-        <div class="ts-section-label">Layout</div>
+        <div class="ts-section-label">{{ t('theme.layout') }}</div>
         <div class="ts-theme-row">
           <button
             v-for="t in themes"
@@ -33,7 +33,7 @@
         </div>
 
         <!-- Skin swatches -->
-        <div class="ts-section-label" style="margin-top:8px">Skin</div>
+        <div class="ts-section-label" style="margin-top:8px">{{ t('theme.skin') }}</div>
         <div class="ts-skin-row">
           <button
             v-for="s in skins"
@@ -50,11 +50,11 @@
         <div class="ts-toggles">
           <button class="ts-toggle" :class="{ on: themeStore.animations }" @click="themeStore.toggleAnimations()">
             <span class="ts-toggle-dot" />
-            Animations
+            {{ t('theme.animations') }}
           </button>
           <button class="ts-toggle" :class="{ on: themeStore.ambient }" @click="themeStore.toggleAmbient()">
             <span class="ts-toggle-dot" />
-            Ambient
+            {{ t('theme.orbs') }}
           </button>
           <button
             v-if="themeStore.ambient"
@@ -63,11 +63,7 @@
             @click="themeStore.toggleOrbMotion()"
           >
             <span class="ts-toggle-dot" />
-            Orb Motion
-          </button>
-          <button class="ts-toggle" :class="{ on: themeStore.grid }" @click="themeStore.toggleGrid()">
-            <span class="ts-toggle-dot" />
-            Grid
+            {{ t('theme.orb_motion') }}
           </button>
         </div>
       </div>
@@ -186,164 +182,61 @@
       <div class="ts-option-list">
 
         <!-- Animations -->
-        <label class="ts-option"
-          @mouseenter="setHint(t('theme.animations'), t('hint.animations'))"
-          @mouseleave="clearHint()"
-        >
-          <div class="ts-option-info">
-            <span class="ts-option-name">{{ t('theme.animations') }}</span>
-            <span class="ts-option-hint">{{ t('theme.animations_hint') }}</span>
-          </div>
-          <div class="ts-pill" :class="{ on: themeStore.animations }" @click="themeStore.toggleAnimations()">
-            <div class="ts-pill-knob" />
-          </div>
-        </label>
+        <ThemeOptionRow
+          label="theme.animations"
+          hint="theme.animations_hint"
+          hint-body="hint.animations"
+          type="toggle"
+          :model-value="themeStore.animations"
+          @update:model-value="themeStore.toggleAnimations()"
+        />
 
         <!-- Ambient Orbs -->
-        <label class="ts-option"
-          @mouseenter="setHint(t('theme.orbs'), t('hint.orbs'))"
-          @mouseleave="clearHint()"
-        >
-          <div class="ts-option-info">
-            <span class="ts-option-name">{{ t('theme.orbs') }}</span>
-            <span class="ts-option-hint">{{ t('theme.orbs_hint') }}</span>
-          </div>
-          <div class="ts-pill" :class="{ on: themeStore.ambient }" @click="themeStore.toggleAmbient()">
-            <div class="ts-pill-knob" />
-          </div>
-        </label>
+        <ThemeOptionRow
+          label="theme.orbs"
+          hint="theme.orbs_hint"
+          hint-body="hint.orbs"
+          type="toggle"
+          :model-value="themeStore.ambient"
+          :disabled="!themeStore.supportsEffect('ambient')"
+          :unavailable="!themeStore.supportsEffect('ambient')"
+          @update:model-value="themeStore.toggleAmbient()"
+        />
 
         <!-- Orb Motion (sub) -->
-        <label class="ts-option ts-option--sub" :class="{ 'ts-option--disabled': !themeStore.ambient }"
-          @mouseenter="setHint(t('theme.orb_motion'), t('hint.orb_motion'))"
-          @mouseleave="clearHint()"
-        >
-          <div class="ts-option-info">
-            <span class="ts-option-name">{{ t('theme.orb_motion') }}</span>
-            <span class="ts-option-hint">{{ t('theme.orb_motion_hint') }}</span>
-          </div>
-          <div class="ts-pill" :class="{ on: themeStore.orbMotion && themeStore.ambient }" @click="themeStore.ambient && themeStore.toggleOrbMotion()">
-            <div class="ts-pill-knob" />
-          </div>
-        </label>
+        <ThemeOptionRow
+          label="theme.orb_motion"
+          hint="theme.orb_motion_hint"
+          hint-body="hint.orb_motion"
+          type="toggle"
+          sub
+          :model-value="themeStore.orbMotion && themeStore.ambient"
+          :disabled="!themeStore.ambient || !themeStore.supportsEffect('orbMotion')"
+          :unavailable="!themeStore.supportsEffect('orbMotion')"
+          @update:model-value="themeStore.toggleOrbMotion()"
+        />
 
         <!-- Static orb settings (always visible when ambient on) -->
-        <template v-if="themeStore.ambient">
-          <template v-for="setting in staticOrbSettings" :key="setting.key">
-
-            <!-- Select chips -->
-            <div v-if="setting.type === 'select'" class="ts-option ts-option--select ts-option--sub ts-option--orb"
-              @mouseenter="setHint(ts(setting.label), ts(setting.description ?? setting.hint ?? ''))"
-              @mouseleave="clearHint()"
-            >
-              <div class="ts-option-info">
-                <span class="ts-option-name">{{ ts(setting.label) }}</span>
-                <span v-if="setting.hint" class="ts-option-hint">{{ ts(setting.hint) }}</span>
-              </div>
-              <div class="ts-chip-row">
-                <button
-                  v-for="(opt, i) in setting.options"
-                  :key="opt"
-                  class="ts-chip"
-                  :class="{ active: themeStore.getThemeSettingValue(setting.key) === opt }"
-                  @click.stop="themeStore.setThemeSettingValue(setting.key, opt)"
-                >
-                  {{ ts(setting.optionLabels?.[i] ?? opt) }}
-                </button>
-              </div>
-            </div>
-
-            <!-- Range slider -->
-            <div v-else-if="setting.type === 'range'" class="ts-option ts-option--range ts-option--sub ts-option--orb"
-              @mouseenter="setHint(ts(setting.label), ts(setting.description ?? setting.hint ?? ''))"
-              @mouseleave="clearHint()"
-            >
-              <div class="ts-option-info">
-                <span class="ts-option-name">{{ ts(setting.label) }}</span>
-                <span v-if="setting.hint" class="ts-option-hint">{{ ts(setting.hint) }}</span>
-              </div>
-              <div class="ts-range-wrap">
-                <input
-                  type="range"
-                  :min="setting.min"
-                  :max="setting.max"
-                  :step="setting.step"
-                  :value="themeStore.getThemeSettingValue(setting.key) as number"
-                  @input="themeStore.setThemeSettingValue(setting.key, +($event.target as HTMLInputElement).value)"
-                  class="ts-range"
-                />
-                <span class="ts-range-val">{{ themeStore.getThemeSettingValue(setting.key) }}{{ setting.unit }}</span>
-              </div>
-            </div>
-
-          </template>
-        </template>
+        <ThemeOptionRow
+          v-for="setting in (themeStore.ambient ? staticOrbSettings : [])"
+          :key="setting.key"
+          v-bind="rowProps(setting)"
+          sub
+          orb
+          :model-value="themeStore.getThemeSettingValue(setting.key)"
+          @update:model-value="v => themeStore.setThemeSettingValue(setting.key, v)"
+        />
 
         <!-- Motion orb settings (visible only when ambient AND orbMotion on) -->
-        <template v-if="themeStore.ambient && themeStore.orbMotion">
-          <template v-for="setting in motionOrbSettings" :key="setting.key">
-
-            <!-- Select chips -->
-            <div v-if="setting.type === 'select'" class="ts-option ts-option--select ts-option--sub ts-option--orb"
-              @mouseenter="setHint(ts(setting.label), ts(setting.description ?? setting.hint ?? ''))"
-              @mouseleave="clearHint()"
-            >
-              <div class="ts-option-info">
-                <span class="ts-option-name">{{ ts(setting.label) }}</span>
-                <span v-if="setting.hint" class="ts-option-hint">{{ ts(setting.hint) }}</span>
-              </div>
-              <div class="ts-chip-row">
-                <button
-                  v-for="(opt, i) in setting.options"
-                  :key="opt"
-                  class="ts-chip"
-                  :class="{ active: themeStore.getThemeSettingValue(setting.key) === opt }"
-                  @click.stop="themeStore.setThemeSettingValue(setting.key, opt)"
-                >
-                  {{ ts(setting.optionLabels?.[i] ?? opt) }}
-                </button>
-              </div>
-            </div>
-
-            <!-- Range slider -->
-            <div v-else-if="setting.type === 'range'" class="ts-option ts-option--range ts-option--sub ts-option--orb"
-              @mouseenter="setHint(ts(setting.label), ts(setting.description ?? setting.hint ?? ''))"
-              @mouseleave="clearHint()"
-            >
-              <div class="ts-option-info">
-                <span class="ts-option-name">{{ ts(setting.label) }}</span>
-                <span v-if="setting.hint" class="ts-option-hint">{{ ts(setting.hint) }}</span>
-              </div>
-              <div class="ts-range-wrap">
-                <input
-                  type="range"
-                  :min="setting.min"
-                  :max="setting.max"
-                  :step="setting.step"
-                  :value="themeStore.getThemeSettingValue(setting.key) as number"
-                  @input="themeStore.setThemeSettingValue(setting.key, +($event.target as HTMLInputElement).value)"
-                  class="ts-range"
-                />
-                <span class="ts-range-val">{{ themeStore.getThemeSettingValue(setting.key) }}{{ setting.unit }}</span>
-              </div>
-            </div>
-
-          </template>
-        </template>
-
-        <!-- Grid Pattern -->
-        <label class="ts-option"
-          @mouseenter="setHint(t('theme.grid'), t('hint.grid'))"
-          @mouseleave="clearHint()"
-        >
-          <div class="ts-option-info">
-            <span class="ts-option-name">{{ t('theme.grid') }}</span>
-            <span class="ts-option-hint">{{ t('theme.grid_hint') }}</span>
-          </div>
-          <div class="ts-pill" :class="{ on: themeStore.grid }" @click="themeStore.toggleGrid()">
-            <div class="ts-pill-knob" />
-          </div>
-        </label>
+        <ThemeOptionRow
+          v-for="setting in (themeStore.ambient && themeStore.orbMotion ? motionOrbSettings : [])"
+          :key="setting.key"
+          v-bind="rowProps(setting)"
+          sub
+          orb
+          :model-value="themeStore.getThemeSettingValue(setting.key)"
+          @update:model-value="v => themeStore.setThemeSettingValue(setting.key, v)"
+        />
 
       </div>
     </div>
@@ -360,72 +253,13 @@
         </button>
       </div>
       <div class="ts-option-list">
-        <template v-for="setting in nonOrbSettings" :key="setting.key">
-
-          <!-- Select chips -->
-          <div v-if="setting.type === 'select'" class="ts-option ts-option--select"
-            @mouseenter="setHint(ts(setting.label), ts(setting.description ?? setting.hint ?? ''))"
-            @mouseleave="clearHint()"
-          >
-            <div class="ts-option-info">
-              <span class="ts-option-name">{{ ts(setting.label) }}</span>
-              <span v-if="setting.hint" class="ts-option-hint">{{ ts(setting.hint) }}</span>
-            </div>
-            <div class="ts-chip-row">
-              <button
-                v-for="(opt, i) in setting.options"
-                :key="opt"
-                class="ts-chip"
-                :class="{ active: themeStore.getThemeSettingValue(setting.key) === opt }"
-                @click.stop="themeStore.setThemeSettingValue(setting.key, opt)"
-              >
-                {{ ts(setting.optionLabels?.[i] ?? opt) }}
-              </button>
-            </div>
-          </div>
-
-          <!-- Range slider -->
-          <div v-else-if="setting.type === 'range'" class="ts-option ts-option--range"
-            @mouseenter="setHint(ts(setting.label), ts(setting.description ?? setting.hint ?? ''))"
-            @mouseleave="clearHint()"
-          >
-            <div class="ts-option-info">
-              <span class="ts-option-name">{{ ts(setting.label) }}</span>
-              <span v-if="setting.hint" class="ts-option-hint">{{ ts(setting.hint) }}</span>
-            </div>
-            <div class="ts-range-wrap">
-              <input
-                type="range"
-                :min="setting.min"
-                :max="setting.max"
-                :step="setting.step"
-                :value="themeStore.getThemeSettingValue(setting.key) as number"
-                @input="themeStore.setThemeSettingValue(setting.key, +($event.target as HTMLInputElement).value)"
-                class="ts-range"
-              />
-              <span class="ts-range-val">{{ themeStore.getThemeSettingValue(setting.key) }}{{ setting.unit }}</span>
-            </div>
-          </div>
-
-          <!-- Toggle -->
-          <label v-else-if="setting.type === 'toggle'" class="ts-option"
-            @mouseenter="setHint(ts(setting.label), ts(setting.description ?? setting.hint ?? ''))"
-            @mouseleave="clearHint()"
-          >
-            <div class="ts-option-info">
-              <span class="ts-option-name">{{ ts(setting.label) }}</span>
-              <span v-if="setting.hint" class="ts-option-hint">{{ ts(setting.hint) }}</span>
-            </div>
-            <div
-              class="ts-pill"
-              :class="{ on: themeStore.getThemeSettingValue(setting.key) }"
-              @click="themeStore.setThemeSettingValue(setting.key, !themeStore.getThemeSettingValue(setting.key))"
-            >
-              <div class="ts-pill-knob" />
-            </div>
-          </label>
-
-        </template>
+        <ThemeOptionRow
+          v-for="setting in nonOrbSettings"
+          :key="setting.key"
+          v-bind="rowProps(setting)"
+          :model-value="themeStore.getThemeSettingValue(setting.key)"
+          @update:model-value="v => themeStore.setThemeSettingValue(setting.key, v)"
+        />
       </div>
     </div>
   </div>
@@ -436,6 +270,8 @@ import { ref, computed } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { useSettingsHint } from '@/composables/useSettingsHint'
 import { sanitizePreviewHtml } from '@/utils/sanitize'
+import ThemeOptionRow from '@/components/common/ThemeOptionRow.vue'
+import type { ThemeSetting } from '@/themes'
 import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
@@ -462,6 +298,24 @@ const currentTheme = computed(() => themeStore.currentTheme)
 const staticOrbSettings = computed(() => currentTheme.value?.settings?.filter(s => s.section === 'orb' && !s.motion) ?? [])
 const motionOrbSettings  = computed(() => currentTheme.value?.settings?.filter(s => s.section === 'orb' && s.motion)  ?? [])
 const nonOrbSettings    = computed(() => currentTheme.value?.settings?.filter(s => s.section !== 'orb') ?? [])
+
+// The one place that knows which field of a theme setting feeds which part of
+// a row. Everything a theme declares goes through here, so a select, a slider
+// and a switch cannot drift apart.
+function rowProps(s: ThemeSetting) {
+  return {
+    label: s.label,
+    hint: s.hint,
+    hintBody: s.description ?? s.hint ?? '',
+    type: s.type,
+    options: s.options,
+    optionLabels: s.optionLabels,
+    min: s.min,
+    max: s.max,
+    step: s.step,
+    unit: s.unit,
+  }
+}
 
 const { setHint, clearHint } = useSettingsHint()
 </script>
@@ -903,41 +757,12 @@ const { setHint, clearHint } = useSettingsHint()
 .ts-skin-name { font-size: 11px; color: var(--muted); font-weight: 600; }
 .ts-skin-item.active .ts-skin-name { color: var(--text); }
 
-/* Options */
+/* Options - the row itself lives in ThemeOptionRow.vue */
 .ts-option-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
-.ts-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4, 16px);
-  padding: 12px 16px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--glass-border);
-  background: var(--glass-bg);
-  cursor: pointer;
-  transition: background var(--transition);
-}
-.ts-option:hover { background: var(--glass-highlight); }
-.ts-option--sub {
-  margin-left: 20px;
-  border-left: 2px solid var(--glass-border);
-  opacity: 1;
-  transition: opacity var(--transition);
-}
-.ts-option--disabled {
-  opacity: 0.4;
-  pointer-events: none;
-}
-.ts-option--orb {
-  border-left: 2px solid var(--glass-border);
-}
-.ts-option-info { display: flex; flex-direction: column; gap: 2px; }
-.ts-option-name { font-size: var(--fs-md, 14px); font-weight: 600; color: var(--text); }
-.ts-option-hint { font-size: var(--fs-sm, 12px); color: var(--muted); }
 
 /* Theme title row with reset */
 .ts-title-row {
@@ -964,118 +789,6 @@ const { setHint, clearHint } = useSettingsHint()
   border-color: var(--pl);
   color: var(--pl-light);
   background: var(--pl-dim);
-}
-
-/* Range settings */
-.ts-option--range {
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--space-2, 8px);
-  cursor: default;
-}
-.ts-option--range:hover {
-  background: var(--glass-bg);
-}
-.ts-range-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.ts-range {
-  flex: 1;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--glass-border);
-  outline: none;
-  cursor: pointer;
-}
-.ts-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--pl) 30%, transparent);
-  box-shadow: 0 0 8px var(--pglow2);
-  cursor: pointer;
-  transition: box-shadow var(--transition);
-}
-.ts-range::-webkit-slider-thumb:hover {
-  box-shadow: 0 0 14px var(--pglow);
-}
-.ts-range-val {
-  font-size: var(--fs-sm, 12px);
-  font-weight: 700;
-  color: var(--pl-light);
-  min-width: 40px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Select chips */
-.ts-option--select {
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--space-2, 8px);
-  cursor: default;
-}
-.ts-option--select:hover { background: var(--glass-bg); }
-.ts-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.ts-chip {
-  padding: 4px 12px;
-  border-radius: var(--radius-pill, 999px);
-  border: 1px solid var(--glass-border);
-  background: rgba(255,255,255,.05);
-  color: var(--muted);
-  font-size: var(--fs-sm, 12px);
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  transition: all var(--transition);
-}
-.ts-chip:hover { border-color: var(--pl); color: var(--text); }
-.ts-chip.active {
-  background: var(--pl-dim);
-  border-color: var(--pl);
-  color: var(--pl-light);
-  box-shadow: 0 0 8px var(--pglow2);
-}
-
-/* Toggle pill */
-.ts-pill {
-  width: 40px;
-  height: 22px;
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid var(--glass-border);
-  flex-shrink: 0;
-  position: relative;
-  cursor: pointer;
-  transition: all var(--transition);
-}
-.ts-pill.on {
-  background: color-mix(in srgb, var(--pl) 40%, rgba(255,255,255,.1));
-  border-color: color-mix(in srgb, var(--pl) 50%, transparent);
-  box-shadow: 0 0 10px var(--pglow2);
-}
-.ts-pill-knob {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: rgba(255,255,255,.4);
-  transition: all var(--transition);
-}
-.ts-pill.on .ts-pill-knob {
-  left: 21px;
-  background: #fff;
 }
 
 /* ── Mobile ────────────────────────────────────────────────────────────────── */

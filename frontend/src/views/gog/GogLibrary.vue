@@ -232,7 +232,7 @@
               <!-- Status badge -->
               <div v-if="game.download_status === 'completed'" class="badge badge--owned">
                 <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                OWNED
+                {{ t('library.owned') }}
               </div>
               <div v-else-if="game.download_status === 'downloading'" class="badge badge--dl">
                 <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v10m0 0l-4-4m4 4l4-4M2 17l.621 2.485A2 2 0 0 0 4.561 21H19.44a2 2 0 0 0 1.94-1.515L22 17"/></svg>
@@ -252,19 +252,19 @@
             <div class="cover-scores">
               <!-- Star = the blended score; GOG's own mark keeps its icon and
                    moves in with the other per-source badges below. -->
-              <div v-if="game.rating_agg" class="cover-score" title="Rating">
+              <div v-if="game.rating_agg" class="cover-score" :title="t('library.rating')">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style="color:#facc15"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
                 {{ ratingVal(game.rating_agg).toFixed(1) }}
               </div>
-              <div v-if="game.rating" class="cover-score cover-score--gog" title="GOG Rating">
+              <div v-if="game.rating" class="cover-score cover-score--gog" :title="t('meta.gog_rating')">
                 <img src="/icons/gog.ico" width="24" height="24" alt="GOG" class="score-ico" />
                 {{ ratingVal(game.rating).toFixed(1) }}
               </div>
-              <div v-if="game.meta_ratings?.rawg" class="cover-score cover-score--ext" title="RAWG Rating">
+              <div v-if="game.meta_ratings?.rawg" class="cover-score cover-score--ext" :title="t('meta.rawg_rating')">
                 <img src="/icons/RAWG.ico" width="24" height="24" alt="RAWG" class="score-ico" />
                 {{ (game.meta_ratings.rawg).toFixed(1) }}
               </div>
-              <div v-if="game.meta_ratings?.igdb" class="cover-score cover-score--ext" title="IGDB Rating">
+              <div v-if="game.meta_ratings?.igdb" class="cover-score cover-score--ext" :title="t('meta.igdb_rating')">
                 <img src="/icons/igdb.ico" width="24" height="24" alt="IGDB" class="score-ico" />
                 {{ Math.round(game.meta_ratings.igdb) }}
               </div>
@@ -310,7 +310,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useIncrementalList } from '@/composables/useIncrementalList'
 import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
@@ -534,8 +534,26 @@ function openSyncDialog() {
 // ── Sync polling ─────────────────────────────────────────────────────────────
 // Extracted so it can be started both from confirmSync() and from onMounted
 // (to reconnect to a sync that was running before a page refresh).
+// The handle is component-scope, not function-scope. onMounted re-arms this
+// whenever a sync is already running, so every visit to the page during one
+// long sync used to leave another poller behind - and when the sync finally
+// ended, all of them fired loadGames() at once. Nothing ever cleared them,
+// because nothing outside this function could see the handle.
+let syncPoll: ReturnType<typeof setInterval> | null = null
+let syncClear: ReturnType<typeof setTimeout> | null = null
+
+function stopSyncPoller() {
+  if (syncPoll) clearInterval(syncPoll)
+  syncPoll = null
+  if (syncClear) clearTimeout(syncClear)
+  syncClear = null
+}
+
+onUnmounted(stopSyncPoller)
+
 function startSyncPoller() {
-  const poll = setInterval(async () => {
+  if (syncPoll) return          // already watching this sync
+  syncPoll = setInterval(async () => {
     try {
       const data = await libraryActions.gogSyncStatus()
       if (data.running) {
@@ -545,7 +563,7 @@ function startSyncPoller() {
             ? 'Fetching metadata…'
             : `Synced ${data.synced} games…`
       } else {
-        clearInterval(poll)
+        stopSyncPoller()
         syncing.value = false
         const adopted = data.adopted || 0
         syncMsg.value = data.error
@@ -554,9 +572,9 @@ function startSyncPoller() {
             ? `Done - ${data.synced} games, ${adopted} added to library`
             : `Done - ${data.synced} games`
         await loadGames()
-        setTimeout(() => { syncMsg.value = '' }, 4000)
+        syncClear = setTimeout(() => { syncMsg.value = '' }, 4000)
       }
-    } catch { clearInterval(poll); syncing.value = false }
+    } catch { stopSyncPoller(); syncing.value = false }
   }, 1500)
 }
 
@@ -564,12 +582,12 @@ async function confirmSync() {
   showSyncDialog.value = false
   if (syncing.value) return
   syncing.value = true
-  syncMsg.value = 'Syncing…'
+  syncMsg.value = t('library.syncing')
   try {
     await libraryActions.gogSync({ autoScrape: syncAutoScrape.value, forceRescrape: syncForceRescrape.value })
     startSyncPoller()
   } catch (e: any) {
-    syncMsg.value = e?.response?.data?.detail || 'Sync failed'
+    syncMsg.value = e?.response?.data?.detail || t('profile.gog_sync_failed')
     syncing.value = false
   }
 }
@@ -706,7 +724,6 @@ function openGame(game: Game) {
 .sync-btn--running { border-color: var(--pl); color: var(--pl-light); }
 .sync-msg { font-size: var(--fs-sm, 12px); color: var(--muted); }
 .spin { animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .library-view {
   display: flex;

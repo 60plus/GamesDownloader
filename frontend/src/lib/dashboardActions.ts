@@ -93,6 +93,10 @@ export interface GameSaveItem {
   rom_name?: string | null; rom_cover?: string | null; rom_cover_aspect?: string | null;
   rom_support?: string | null;
   platform_name?: string | null; platform_slug?: string | null;
+  // The routable slug and the artwork key are different strings for all but
+  // twenty of the platforms ("super-nintendo" against "snes"), so a tile that
+  // wants console art needs this one.
+  platform_fs_slug?: string | null;
 }
 export interface SavesData {
   states: GameSaveItem[]; saves: GameSaveItem[];

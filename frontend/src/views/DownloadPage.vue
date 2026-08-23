@@ -14,7 +14,7 @@
       <!-- Loading -->
       <div v-if="state === 'loading'" class="dp-loading">
         <span class="dp-spinner" />
-        <span>Checking link…</span>
+        <span>{{ t('dlpage.checking') }}</span>
       </div>
 
       <!-- Not found / expired / exhausted -->
@@ -24,7 +24,7 @@
           <line x1="12" y1="8" x2="12" y2="12"/>
           <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        <div class="dp-error-title">Link unavailable</div>
+        <div class="dp-error-title">{{ t('dlpage.unavailable') }}</div>
         <div class="dp-error-msg">{{ errorMsg }}</div>
       </div>
 
@@ -34,12 +34,12 @@
           <div class="dp-file-name">{{ info.file_name }}</div>
           <div v-if="info.game_title" class="dp-game-title">{{ info.game_title }}</div>
         </div>
-        <div class="dp-pw-label">This download is password-protected.</div>
+        <div class="dp-pw-label">{{ t('dlpage.protected') }}</div>
         <input
           v-model="password"
           type="password"
           class="dp-input"
-          placeholder="Enter password…"
+          :placeholder="t('dlpage.password_ph')"
           @keydown.enter="startDownload"
           ref="pwInput"
           autocomplete="off"
@@ -52,7 +52,7 @@
             <polyline points="7 10 12 15 17 10"/>
             <line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
-          Download
+          {{ t('common.download') }}
         </button>
       </div>
 
@@ -69,7 +69,7 @@
             <polyline points="7 10 12 15 17 10"/>
             <line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
-          Download
+          {{ t('common.download') }}
         </button>
       </div>
 
@@ -80,8 +80,8 @@
           <polyline points="7 10 12 15 17 10"/>
           <line x1="12" y1="15" x2="12" y2="3"/>
         </svg>
-        <div class="dp-dl-title">Download started</div>
-        <div class="dp-dl-msg">Your file is downloading. You can close this page.</div>
+        <div class="dp-dl-title">{{ t('dlpage.started') }}</div>
+        <div class="dp-dl-msg">{{ t('dlpage.started_msg') }}</div>
       </div>
 
       <div class="dp-footer">GamesDownloader</div>
@@ -93,6 +93,9 @@
 import { ref, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import axios from 'axios'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 
 const route  = useRoute()
 const token  = route.params.token as string
@@ -113,7 +116,7 @@ onMounted(async () => {
     info.value = { file_name: d.file_name, game_title: d.game_title }
     if (!d.valid) {
       state.value = 'invalid'
-      errorMsg.value = 'This download link has expired or has reached its download limit.'
+      errorMsg.value = t('dlpage.expired')
       return
     }
     if (d.password_required) {
@@ -125,7 +128,7 @@ onMounted(async () => {
     }
   } catch (e: any) {
     state.value = 'invalid'
-    errorMsg.value = e?.response?.data?.detail || 'This download link was not found or is no longer valid.'
+    errorMsg.value = e?.response?.data?.detail || t('dlpage.not_found')
   }
 })
 
@@ -142,7 +145,7 @@ async function startDownload() {
       downloadUrl = `/api/dl/${token}?bt=${encodeURIComponent(data.bypass_token)}`
     } catch (e: any) {
       const detail = (e?.response?.data?.detail || '').toLowerCase()
-      pwError.value = detail.includes('incorrect') ? 'Incorrect password.' : 'Verification failed. Please try again.'
+      pwError.value = detail.includes('incorrect') ? t('dlpage.wrong_password') : t('dlpage.verify_failed')
       downloading.value = false
       return
     }
@@ -230,5 +233,5 @@ async function startDownload() {
   border-top-color: currentColor; border-radius: 50%;
   animation: spin .7s linear infinite; display: inline-block; flex-shrink: 0;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+
 </style>

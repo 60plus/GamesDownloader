@@ -134,7 +134,7 @@
             <span>{{ releaseYear }}</span>
           </div>
           <div v-if="entry.release_tag" class="chip chip--ver"><span>{{ entry.release_tag }}</span></div>
-          <div v-if="entry.is_prerelease" class="chip chip--warn"><span>pre-release</span></div>
+          <div v-if="entry.is_prerelease" class="chip chip--warn"><span>{{ t('detail.pre_release') }}</span></div>
         </div>
 
         <!-- A listing that offers nothing still owes the reader a reason, and
@@ -387,108 +387,49 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import client from '@/services/api/client'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
 import CatalogDownloadDialog from '@/components/games/CatalogDownloadDialog.vue'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
-import { resolveDetailRows } from '@/themes/index'
 import { useThemeStore } from '@/stores/theme'
-import { useAuthStore } from '@/stores/auth'
-import { useLibrariesStore } from '@/stores/libraries'
 import { useI18n } from '@/i18n'
 import { sanitizeHtml } from '@/utils/sanitize'
-import { buildLanguageList } from '@/utils/langMap'
 import { ratingVal } from '@/utils/rating'
+import { formatReqKey } from '@/utils/requirements'
+import { formatDate } from '@/utils/format'
+import { useCoverTilt } from '@/composables/useCoverTilt'
+import { useCatalogEntry, osLabel, fmtHltb } from '@/composables/useCatalogEntry'
+
+const { coverTilt, sheenStyle, onCoverMove, onCoverLeave } = useCoverTilt()
 
 const { t } = useI18n()
-const route = useRoute()
-const router = useRouter()
 const themeStore = useThemeStore()
-const authStore = useAuthStore()
-const librariesStore = useLibrariesStore()
 
-const isAdmin = computed(() => authStore.user?.role === 'admin')
+const logoFailed = ref(false)
 
-interface EntryAsset { name: string; os?: string; size?: number; arch?: string | null }
+// ── Media strip / lightbox ────────────────────────────────────────────────────
 
-/** One row of GET /plugins/library/catalog-entries/{id}. Everything past `id`
- *  and `title` is optional: an entry that was never scraped carries little more
- *  than its name. */
-interface Entry {
-  id: number
-  title: string
-  subtitle?: string | null
-  category?: string | null
-  homepage?: string | null
-  cover_path?: string | null
-  background_path?: string | null
-  logo_path?: string | null
-  screenshots?: string[] | null
-  description?: string | null
-  developer?: string | null
-  publisher?: string | null
-  release_date?: string | null
-  rating?: number | null
-  genres?: string[] | null
-  meta_ratings?: Record<string, number> | null
-  languages?: Record<string, string> | null
-  requirements?: Record<string, unknown> | null
-  hltb_main_s?: number | null
-  hltb_complete_s?: number | null
-  available?: boolean
-  unavailable_reason?: string | null
-  assets?: EntryAsset[] | null
-  /** Server-side folder a download lands in. Shown, never chosen. */
-  save_root?: string | null
-  release_tag?: string | null
-  is_prerelease?: boolean
-  downloaded?: boolean
-  library_game_id?: number | null
-  meta_source?: string | null
-  meta_search_term?: string | null
-  meta_matched_title?: string | null
-  meta_confidence?: string | null
-}
+const stripEl     = ref<HTMLElement | null>(null)
+const slideIdx    = ref(0)
+const lightboxIdx = ref<number | null>(null)
 
-const entry        = ref<Entry | null>(null)
-const loading      = ref(true)
-const showDownload  = ref(false)
-const showMetaPanel = ref(false)
-const scraping      = ref(false)
-const coverFailed  = ref(false)
-const logoFailed   = ref(false)
+// ── Cover ─────────────────────────────────────────────────────────────────────
 
-const assets      = computed<EntryAsset[]>(() => entry.value?.assets || [])
-const screenshots = computed<string[]>(() => entry.value?.screenshots || [])
-const entryLangs  = computed(() => buildLanguageList(entry.value?.languages))
+const coverIsSquarish = ref(false)
 
-/** Builds grouped under the platform they are for, matching the core store
- *  page. A build marked for every platform gets its own group rather than
- *  being repeated under each one - which is where it lands on disk too. */
-const buildsByOs = computed(() => {
-  const groups = new Map<string, EntryAsset[]>()
-  for (const a of assets.value) {
-    const k = osKey(a.os) || 'all'
-    if (!groups.has(k)) groups.set(k, [])
-    groups.get(k)!.push(a)
-  }
-  const order = ['windows', 'mac', 'linux', 'all']
-  const keys = [
-    ...order.filter(o => groups.has(o)),
-    ...Array.from(groups.keys()).filter(o => !order.includes(o)),
-  ]
-  return keys.map(os => ({
-    os,
-    label: os === 'all' ? t('detail.dl_any_os') : osLabel(os),
-    entries: groups.get(os)!,
-  }))
+const {
+  entry, loading, showDownload, showMetaPanel, scraping, coverFailed,
+  isAdmin, assets, screenshots, entryLangs, releaseYear, storeName,
+  pluginRows, pluginGame, homepageHost, assetOses, buildsByOs,
+  externalRatings, pluginRatings, hasRatings, hasMatchRows, totalSize, reqRows,
+  fmtSize, hideImg, load, onMetadataSaved, refreshMeta, goBack,
+} = useCatalogEntry({
+  onLoaded: () => {
+    logoFailed.value      = false
+    coverIsSquarish.value = false
+    slideIdx.value        = 0
+  },
 })
-
-// release_date is free-form on an entry (a catalogue may store "2019" or a full
-// ISO date), so the year is matched rather than sliced off the front.
-const releaseYear = computed(() => (String(entry.value?.release_date || '').match(/(\d{4})/) || [])[1] || '')
 
 // cover_path is already `cover_path or icon_path` server-side, and there is no
 // CDN pair to fall back to, so the chain is this short.
@@ -501,186 +442,6 @@ const heroBgStyle = computed(() => {
 const heroAnimClass = computed(() => {
   if (!themeStore.heroAnim || !themeStore.animations) return ''
   return `cd-hero--${themeStore.heroAnimStyle}`   // cd- prefix = ClassicDetail
-})
-
-// The library's REAL display name, from the registry. Title-casing the slug
-// only ever produced "Pc Ports"; the de-slugified form survives as the last
-// resort for a registry that has not loaded yet.
-const storeName = computed(() => {
-  const slug = String(route.params.slug || '')
-  if (!slug) return t('nav.store')
-  const lib = librariesStore.bySlug(slug)
-  if (lib) return librariesStore.label(lib)
-  return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-})
-
-const pluginRows = computed(() => (entry.value ? resolveDetailRows(entry.value as unknown as Record<string, unknown>, 'games') : []))
-// PluginDetailValue requires a non-null game object; an entry is always the
-// thing being described, so an empty object only ever stands in pre-load.
-const pluginGame = computed<Record<string, unknown>>(() => (entry.value || {}) as unknown as Record<string, unknown>)
-
-// The catalogue's own page for this listing, named by its host so the button
-// carries no label that would need translating.
-const homepageHost = computed(() => {
-  const url = entry.value?.homepage
-  if (!url) return ''
-  try { return new URL(url).hostname.replace(/^www\./, '') } catch { return '' }
-})
-
-// ── Platforms ─────────────────────────────────────────────────────────────────
-
-/** Collapse a build's free-form os string onto the glyphs we can draw. */
-function osKey(os?: string | null): string {
-  const k = String(os || '').toLowerCase()
-  if (!k) return ''
-  if (k.includes('win')) return 'windows'
-  if (k.includes('mac') || k.includes('osx') || k.includes('darwin')) return 'mac'
-  if (k.includes('linux')) return 'linux'
-  return k
-}
-
-function osLabel(os: string): string {
-  if (os === 'windows') return 'Windows'
-  if (os === 'mac') return 'macOS'
-  if (os === 'linux') return 'Linux'
-  return os
-}
-
-const assetOses = computed(() => {
-  const seen: string[] = []
-  for (const a of assets.value) {
-    const k = osKey(a.os)
-    if (k && !seen.includes(k)) seen.push(k)
-  }
-  const order = ['windows', 'mac', 'linux']
-  return [...order.filter(o => seen.includes(o)), ...seen.filter(o => !order.includes(o))]
-})
-
-// ── Ratings ───────────────────────────────────────────────────────────────────
-
-const externalRatings = computed(() => ({
-  rawg:  entry.value?.meta_ratings?.['rawg']  ?? undefined,
-  igdb:  entry.value?.meta_ratings?.['igdb']  ?? undefined,
-  steam: entry.value?.meta_ratings?.['steam'] ?? undefined,
-}))
-
-// meta_ratings is keyed by provider id ("ppe"), which is not what the provider
-// calls itself ("PPE.pl"). Ask the plugins for their own names and fall back to
-// the shouted id when the list cannot be read.
-const providerNames = ref<Record<string, string>>({})
-
-const pluginRatings = computed(() => {
-  const out: { id: string; name: string; rating: number; logo: string }[] = []
-  for (const [k, v] of Object.entries(entry.value?.meta_ratings || {})) {
-    if (k === 'rawg' || k === 'igdb' || k === 'steam') continue
-    if (!ratingVal(v)) continue
-    out.push({
-      id: k,
-      name: providerNames.value[k] || k.toUpperCase(),
-      rating: ratingVal(v),
-      logo: `/api/plugins/${k}-metadata/logo`,
-    })
-  }
-  return out
-})
-
-const hasRatings = computed(() =>
-  ratingVal(entry.value?.rating) > 0
-  || !!externalRatings.value.rawg
-  || !!externalRatings.value.igdb
-  || !!externalRatings.value.steam
-  || pluginRatings.value.length > 0,
-)
-
-async function loadProviderNames() {
-  try {
-    const { data } = await client.get('/plugins/metadata/providers')
-    if (!Array.isArray(data)) return
-    const out: Record<string, string> = {}
-    for (const p of data) if (p?.id && p?.name) out[p.id] = p.name
-    providerNames.value = out
-  } catch { /* no read access to plugins: the id stands in */ }
-}
-
-function hideImg(e: Event) {
-  (e.target as HTMLImageElement).style.display = 'none'
-}
-
-// ── Facts ─────────────────────────────────────────────────────────────────────
-
-const hasMatchRows = computed(() => !!(
-  entry.value?.meta_source || entry.value?.meta_matched_title || entry.value?.meta_search_term
-))
-
-const totalSize = computed(() => {
-  const bytes = assets.value.reduce((n, a) => n + (a.size ?? 0), 0)
-  return bytes ? fmtSize(bytes) : ''
-})
-
-function fmtSize(bytes: number): string {
-  if (!bytes) return ''
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  if (bytes < 1024 ** 3) return (bytes / 1024 / 1024).toFixed(1) + ' MB'
-  return (bytes / 1024 ** 3).toFixed(2) + ' GB'
-}
-
-function fmtHltb(s: number): string {
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`
-  return `${m}m`
-}
-
-// Anything Date cannot parse is printed as it arrived - see releaseYear.
-function formatDate(raw: string): string {
-  const d = new Date(raw)
-  if (!isNaN(d.getTime())) {
-    const loc = localStorage.getItem('gd3_locale') || navigator.language || 'en'
-    return d.toLocaleDateString(loc, { year: 'numeric', month: 'long', day: 'numeric' })
-  }
-  return raw.length <= 10 ? raw : raw.slice(0, 10)
-}
-
-// ── Requirements ──────────────────────────────────────────────────────────────
-
-// Wider than the game page's set: a catalogue's requirements blob routinely
-// carries os/storage/directx, and dropping them here would lose data the
-// listing actually has.
-const REQ_SHOW = new Set(['processor', 'cpu', 'memory', 'ram', 'graphics', 'gpu', 'video', 'os', 'storage', 'directx'])
-
-function formatReqKey(k: string): string {
-  const key = k.toLowerCase()
-  if (['processor', 'cpu'].includes(key))         return 'CPU'
-  if (['memory', 'ram'].includes(key))            return 'RAM'
-  if (['graphics', 'gpu', 'video'].includes(key)) return 'GPU'
-  if (key === 'os')                               return 'OS'
-  if (key === 'storage')                          return 'Storage'
-  if (key === 'directx')                          return 'DirectX'
-  return k
-}
-
-const reqRows = computed((): [string, string][] => {
-  const reqs = entry.value?.requirements as Record<string, any> | null | undefined
-  if (!reqs) return []
-  const minimum: any =
-    reqs.minimum ??
-    reqs.Windows?.minimum ??
-    reqs.windows?.minimum ??
-    (reqs.per_os as any[] | undefined)?.find((o: any) => (o.os || '').toLowerCase().includes('win'))?.minimum ??
-    (Object.values(reqs)[0] as any)?.minimum ?? null
-  if (!minimum) return []
-  if (Array.isArray(minimum)) {
-    return minimum
-      .filter((r: any) => REQ_SHOW.has((r.name || r.id || '').toLowerCase()) && (r.description || r.value))
-      .map((r: any) => [r.name || r.id, r.description || r.value] as [string, string])
-  }
-  if (typeof minimum === 'object') {
-    return Object.entries(minimum)
-      .filter(([k, v]) => REQ_SHOW.has(k.toLowerCase()) && v)
-      .map(([k, v]) => [k, String(v)] as [string, string])
-  }
-  return []
 })
 
 // ── Card count ────────────────────────────────────────────────────────────────
@@ -700,12 +461,6 @@ const cardCount = computed(() =>
   + (entry.value?.available && assets.value.length ? 1 : 0)
   + (isAdmin.value && hasMatchRows.value ? 1 : 0),
 )
-
-// ── Media strip / lightbox ────────────────────────────────────────────────────
-
-const stripEl     = ref<HTMLElement | null>(null)
-const slideIdx    = ref(0)
-const lightboxIdx = ref<number | null>(null)
 
 // Four visible at a time. That number lives here, in the next arrow's disabled
 // test and in .shot-item's flex-basis - move them together.
@@ -727,34 +482,6 @@ function onKeydown(e: KeyboardEvent) {
   else if (e.key === 'ArrowRight' && lightboxIdx.value < screenshots.value.length - 1)  { lightboxIdx.value++ }
 }
 
-// ── Cover: tilt, sheen, aspect ────────────────────────────────────────────────
-
-const coverTilt  = ref('perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)')
-const sheenStyle = ref('opacity:0')
-const coverIsSquarish = ref(false)
-
-function onCoverMove(e: MouseEvent) {
-  if (!themeStore.cardTilt) return
-  const el = e.currentTarget as HTMLElement
-  const rect = el.getBoundingClientRect()
-  const cx = rect.width / 2; const cy = rect.height / 2
-  const dx = e.clientX - rect.left - cx
-  const dy = e.clientY - rect.top  - cy
-  const rotY =  (dx / cx) * 10
-  const rotX = -(dy / cy) *  7
-  coverTilt.value = `perspective(800px) rotateX(${rotX}deg) rotateY(${rotY}deg) scale3d(1.03,1.03,1.03)`
-  if (themeStore.cardShine) {
-    const mx = ((e.clientX - rect.left) / rect.width  * 100).toFixed(1)
-    const my = ((e.clientY - rect.top)  / rect.height * 100).toFixed(1)
-    sheenStyle.value = `opacity:1; background: radial-gradient(ellipse at ${mx}% ${my}%, rgba(255,255,255,0.22) 0%, transparent 65%);`
-  }
-}
-
-function onCoverLeave() {
-  coverTilt.value = 'perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)'
-  sheenStyle.value = 'opacity:0'
-}
-
 /** A catalogue often has only a square icon where a game has a 2:3 poster, and
  *  cropping one to poster shape cut the artwork in half. Measure what actually
  *  arrived and let anything squarer than a poster keep its own shape. */
@@ -763,62 +490,14 @@ function onCoverLoad(e: Event) {
   coverIsSquarish.value = !!img.naturalHeight && (img.naturalWidth / img.naturalHeight) > 0.8
 }
 
-// ── Load / actions ────────────────────────────────────────────────────────────
-
-async function load() {
-  loading.value = true
-  try {
-    const { data } = await client.get(`/plugins/library/catalog-entries/${route.params.id}`)
-    entry.value = data
-    coverFailed.value = false
-    logoFailed.value = false
-    coverIsSquarish.value = false
-    slideIdx.value = 0
-  } catch { entry.value = null }
-  finally { loading.value = false }
-}
-
 /** Re-read rather than flip a local flag: `downloaded` and `library_game_id`
  *  are what turn this into the owned state, and the server decides both. */
 async function onDownloadStarted() {
   await load()
 }
 
-/** The save already pushed the new presentation onto the downloaded game
- *  server-side; this only brings the page itself back in step. */
-async function onMetadataSaved() {
-  showMetaPanel.value = false
-  await load()
-}
-
-async function refreshMeta() {
-  if (!entry.value || scraping.value) return
-  scraping.value = true
-  try { await client.post(`/plugins/library/catalog-entries/${entry.value.id}/scrape-metadata`); await load() }
-  catch { /* ignore */ }
-  finally { scraping.value = false }
-}
-
-function goBack() {
-  if (window.history.length > 1) router.back()
-  else router.push(`/lib/${route.params.slug}`)
-}
-
-onMounted(() => {
-  load()
-  loadProviderNames()
-  // The registry carries this store's display name; a deep link can land here
-  // before anything else has fetched it.
-  if (!librariesStore.loaded) librariesStore.fetch()
-  document.addEventListener('keydown', onKeydown)
-})
+onMounted(() => document.addEventListener('keydown', onKeydown))
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
-
-// Moving between two offers keeps this component mounted and only swaps the
-// route parameter, so loading once on mount left every pick showing whichever
-// entry happened to open first. Classic reaches the page that way for its whole
-// catalogue, since its list sits beside the page rather than above it.
-watch(() => route.params.id, (id, prev) => { if (id && id !== prev) load() })
 </script>
 
 <style scoped>
@@ -832,7 +511,7 @@ watch(() => route.params.id, (id, prev) => { if (id && id !== prev) load() })
 /* Loading / empty */
 .cd-loading { flex: 1; display: flex; align-items: center; justify-content: center; }
 .cd-spin { animation: cd-spin-anim 1s linear infinite; }
-@keyframes cd-spin-anim { to { transform: rotate(360deg); } }
+
 .cd-empty {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 14px;
@@ -871,23 +550,7 @@ watch(() => route.params.id, (id, prev) => { if (id && id !== prev) load() })
 
 /* ── Hero animation keyframes - same names as the game page, so the global
       animations kill switch below reaches them too ─────────────────────────── */
-@keyframes cd-kenburns {
-  0%   { transform: scale(1.06) translate(0%,    0%   ); }
-  20%  { transform: scale(1.12) translate(-2.5%, 1%   ); }
-  45%  { transform: scale(1.09) translate( 1.5%, -1.5%); }
-  70%  { transform: scale(1.14) translate(-1%,   2%   ); }
-  100% { transform: scale(1.06) translate(0%,    0%   ); }
-}
-@keyframes cd-drift {
-  0%   { transform: scale(1.1) translateX(0%);  }
-  50%  { transform: scale(1.1) translateX(-5%); }
-  100% { transform: scale(1.1) translateX(0%);  }
-}
-@keyframes cd-pulse {
-  0%   { transform: scale(1.04); }
-  50%  { transform: scale(1.11); }
-  100% { transform: scale(1.04); }
-}
+
 .cd-hero--kenburns { animation: cd-kenburns calc(44s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite; }
 .cd-hero--drift    { animation: cd-drift    calc(28s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite alternate; }
 .cd-hero--pulse    { animation: cd-pulse    calc(10s / max(var(--hero-anim-speed, 1), 0.1)) ease-in-out infinite; }
@@ -946,7 +609,6 @@ watch(() => route.params.id, (id, prev) => { if (id && id !== prev) load() })
 .cov-btn:hover { background: color-mix(in srgb, var(--pl) 85%, transparent); transform: scale(1.1); }
 .cov-btn--spin { opacity: .7; cursor: default; }
 .cov-btn--spin svg { animation: cov-spin 1s linear infinite; }
-@keyframes cov-spin { to { transform: rotate(360deg); } }
 
 /* Title */
 .game-logo {
@@ -1070,7 +732,7 @@ watch(() => route.params.id, (id, prev) => { if (id && id !== prev) load() })
   display: flex; align-items: center; justify-content: center;
   cursor: zoom-out; animation: lb-in .15s ease;
 }
-@keyframes lb-in { from { opacity: 0; } to { opacity: 1; } }
+
 .cd-lb-close {
   position: absolute; top: 20px; right: 20px;
   width: 38px; height: 38px; border-radius: 50%;

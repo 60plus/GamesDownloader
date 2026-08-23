@@ -50,19 +50,19 @@
           <!-- Hover overlay: Play + Download + Edit metadata -->
           <div class="cover-overlay">
             <!-- ROM play -->
-            <button v-if="activeLib === 'roms' && ejsCore" class="cov-btn cov-btn--play" title="Play" @click="requestPlay()">
+            <button v-if="activeLib === 'roms' && ejsCore" class="cov-btn cov-btn--play" :title="t('detail.play')" @click="requestPlay()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5,3 19,12 5,21"/></svg>
             </button>
             <!-- ROM download -->
-            <button v-if="activeLib === 'roms'" class="cov-btn" title="Download ROM" @click="downloadRom()">
+            <button v-if="activeLib === 'roms'" class="cov-btn" :title="t('detail.download_rom')" @click="downloadRom()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
             <!-- GOG download -->
-            <button v-else-if="activeLib !== 'games'" class="cov-btn" title="Download" @click="dlOpen = true">
+            <button v-else-if="activeLib !== 'games'" class="cov-btn" :title="t('common.download')" @click="dlOpen = true">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
             <!-- GAMES library download -->
-            <button v-else-if="libAvailableFiles.length" class="cov-btn" title="Download" @click="showLibDownload = true">
+            <button v-else-if="libAvailableFiles.length" class="cov-btn" :title="t('common.download')" @click="showLibDownload = true">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
             <button v-if="isAdmin" class="cov-btn" @click="metaOpen = true" :title="t('detail.edit_metadata')">
@@ -158,7 +158,7 @@
         <div class="shots-strip" ref="stripEl">
           <!-- Video (first) - index 0 -->
           <div v-if="videoItem" class="shot-item shot-item--video" @click="openLightbox(0)">
-            <img v-if="videoItem.thumb" :src="videoItem.thumb" class="shot-thumb-img" alt="Video"
+            <img v-if="videoItem.thumb" :src="videoItem.thumb" class="shot-thumb-img" :alt="t('detail.video')"
               @error="($event.target as HTMLImageElement).style.display='none'" />
             <div v-else class="shot-thumb-img shot-thumb-img--dark" />
             <div class="shot-play-btn">
@@ -224,10 +224,10 @@
           <template v-if="activeLib === 'roms'">
             <div class="icard-head">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="14" rx="2"/><circle cx="8" cy="13" r="1.5"/><circle cx="16" cy="13" r="1.5"/><path d="M6 10h4M8 8v4M14 11h4"/></svg>
-              <span>ROM Info</span>
+              <span>{{ t('detail.rom_info') }}</span>
             </div>
-            <div class="icard-row"><span class="icard-label">Platform: </span><span class="icard-val">{{ game.platform_name || '-' }}</span></div>
-            <div class="icard-row"><span class="icard-label">File: </span><span class="icard-val">{{ (game as any).fs_name || game.fs_name_no_ext || '-' }}</span></div>
+            <div class="icard-row"><span class="icard-label">{{ t('detail.platform') }}: </span><span class="icard-val">{{ game.platform_name || '-' }}</span></div>
+            <div class="icard-row"><span class="icard-label">{{ t('detail.file') }}: </span><span class="icard-val">{{ (game as any).fs_name || game.fs_name_no_ext || '-' }}</span></div>
             <!-- A title split across floppies is one entry; the rest of its
                  disks live nowhere else in the interface. Playing inserts the
                  whole set either way, so these pick the one to start from. -->
@@ -258,13 +258,13 @@
                 </div>
               </div>
             </template>
-            <div class="icard-row"><span class="icard-label">Extension: </span><span class="icard-val">{{ game.fs_extension || '-' }}</span></div>
+            <div class="icard-row"><span class="icard-label">{{ t('detail.extension') }}: </span><span class="icard-val">{{ game.fs_extension || '-' }}</span></div>
             <div class="icard-row"><span class="icard-label">{{ t('detail.size') }}: </span><span class="icard-val">{{ game.fs_size_bytes ? formatSize(game.fs_size_bytes) : '-' }}</span></div>
             <div class="icard-row"><span class="icard-label">{{ t('detail.players') }}: </span><span class="icard-val">{{ game.player_count || '-' }}</span></div>
             <template v-if="game.regions?.length">
               <div class="icard-head" style="margin-top:10px">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-                <span>Regions</span>
+                <span>{{ t('detail.regions') }}</span>
               </div>
               <div class="genre-tags">
                 <span v-for="r in game.regions" :key="r" class="genre-tag">{{ r }}</span>
@@ -316,7 +316,7 @@
               <span class="icard-label">100%: </span>
               <span class="icard-val">{{ Math.round((game.hltb_complete_s || 0) / 3600) }}h {{ Math.round(((game.hltb_complete_s || 0) % 3600) / 60) }}m</span>
             </div>
-            <div v-if="!game.hltb_main_s && !game.hltb_complete_s" class="req-none">No HLTB data</div>
+            <div v-if="!game.hltb_main_s && !game.hltb_complete_s" class="req-none">{{ t('detail.no_hltb') }}</div>
             <template v-if="game.franchises?.length">
               <div class="icard-head" style="margin-top:10px">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -347,7 +347,7 @@
                 </tr>
               </table>
             </template>
-            <div v-else class="req-none">No requirements data</div>
+            <div v-else class="req-none">{{ t('detail.no_requirements') }}</div>
           </template>
         </div>
 
@@ -411,11 +411,11 @@
         </div>
         <div class="gd-confirm-title">{{ t('detail.refresh_metadata') }}</div>
         <div class="gd-confirm-body">
-          {{ t('classic.refresh_meta_body') }}
+          {{ t('detail.refresh_meta_body') }}
         </div>
         <div class="gd-confirm-actions">
-          <button class="gd-confirm-btn gd-confirm-btn--ghost" @click="scrapeGame(true)">{{ t('classic.gog_only') }}</button>
-          <button class="gd-confirm-btn gd-confirm-btn--primary" @click="scrapeGame(false)">{{ t('classic.refresh_all') }}</button>
+          <button class="gd-confirm-btn gd-confirm-btn--ghost" @click="scrapeGame(true)">{{ t('detail.gog_only') }}</button>
+          <button class="gd-confirm-btn gd-confirm-btn--primary" @click="scrapeGame(false)">{{ t('detail.refresh_all') }}</button>
         </div>
       </div>
     </div>
@@ -532,7 +532,7 @@
   <!-- ── EMULATOR - fullscreen / window iframe ──────────────────────────── -->
   <teleport to="body">
     <div v-if="playerOpen" class="cd-player-wrap" :class="playerMode === 'full' ? 'cd-player--full' : 'cd-player--window'">
-      <button class="cd-player-close" @click="closePlayer" title="Close emulator">✕</button>
+      <button class="cd-player-close" @click="closePlayer" :title="t('detail.close_player')">✕</button>
       <iframe
         ref="playerIframe"
         :src="playerUrl"
@@ -547,16 +547,16 @@
   <teleport to="body">
     <div v-if="showPlayerDialog" class="gd-play-dialog-backdrop" @click.self="showPlayerDialog = false">
       <div class="gd-play-dialog">
-        <div class="gd-play-dialog-title">Choose display mode</div>
-        <div class="gd-play-dialog-sub">How would you like to open the emulator?</div>
+        <div class="gd-play-dialog-title">{{ t('detail.choose_display') }}</div>
+        <div class="gd-play-dialog-sub">{{ t('detail.choose_display_sub') }}</div>
 
         <div class="gd-play-mode-grid gd-play-mode-grid--3">
           <button class="gd-play-mode-card" :class="{ selected: pendingMode === 'full' }" @click="pendingMode = 'full'">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
             </svg>
-            <span class="gd-play-mode-name">Fullscreen</span>
-            <span class="gd-play-mode-desc">Covers the entire screen</span>
+            <span class="gd-play-mode-name">{{ t('detail.mode_fullscreen') }}</span>
+            <span class="gd-play-mode-desc">{{ t('detail.mode_fullscreen_desc') }}</span>
           </button>
           <button class="gd-play-mode-card" :class="{ selected: pendingMode === 'window' }" @click="pendingMode = 'window'">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -565,8 +565,8 @@
               <circle cx="7" cy="6" r="1" fill="currentColor"/>
               <circle cx="10" cy="6" r="1" fill="currentColor"/>
             </svg>
-            <span class="gd-play-mode-name">Window</span>
-            <span class="gd-play-mode-desc">Floating panel within the page</span>
+            <span class="gd-play-mode-name">{{ t('detail.mode_window') }}</span>
+            <span class="gd-play-mode-desc">{{ t('detail.mode_window_desc') }}</span>
           </button>
           <button class="gd-play-mode-card" :class="{ selected: pendingMode === 'tab' }" @click="pendingMode = 'tab'">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -575,16 +575,16 @@
               <line x1="7" y1="5" x2="7" y2="10"/>
               <line x1="13" y1="5" x2="13" y2="10"/>
             </svg>
-            <span class="gd-play-mode-name">New Tab</span>
-            <span class="gd-play-mode-desc">Best gamepad support</span>
+            <span class="gd-play-mode-name">{{ t('detail.mode_tab') }}</span>
+            <span class="gd-play-mode-desc">{{ t('detail.mode_tab_desc') }}</span>
           </button>
         </div>
 
         <!-- Bezel toggle - only shown when this game has a bezel -->
         <div v-if="game?.bezel_path" class="gd-play-bezel-row">
           <div class="gd-play-bezel-info">
-            <span class="gd-play-bezel-label">Bezel</span>
-            <span class="gd-play-bezel-desc">Decorative frame overlay</span>
+            <span class="gd-play-bezel-label">{{ t('detail.bezel') }}</span>
+            <span class="gd-play-bezel-desc">{{ t('detail.bezel_desc') }}</span>
           </div>
           <button
             class="gd-play-bezel-toggle"
@@ -598,16 +598,16 @@
 
         <label class="gd-play-remember">
           <input type="checkbox" v-model="rememberMode" />
-          <span>Remember my choice</span>
+          <span>{{ t('detail.remember_choice') }}</span>
         </label>
 
         <div class="gd-play-dialog-actions">
-          <button class="gd-play-cancel" @click="showPlayerDialog = false">Cancel</button>
+          <button class="gd-play-cancel" @click="showPlayerDialog = false">{{ t('common.cancel') }}</button>
           <button class="gd-play-confirm" @click="launchPlayer">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none">
               <polygon points="5,3 19,12 5,21"/>
             </svg>
-            Play
+            {{ t('detail.play') }}
           </button>
         </div>
       </div>
@@ -622,6 +622,7 @@ import { useRouter } from 'vue-router'
 import client from '@/services/api/client'
 import { buildLanguageList } from '@/utils/langMap'
 import { ratingVal } from '@/utils/rating'
+import { formatReqKey, reqRows as reqRowsFrom } from '@/utils/requirements'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
 import PackageDialog from '@/components/games/PackageDialog.vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
@@ -632,14 +633,18 @@ import { useThemeStore } from '@/stores/theme'
 import { useCollectionsStore } from '@/stores/collections'
 import { useNotifications } from '@/composables/useNotifications'
 import { useDialog } from '@/composables/useDialog'
+import { useCoverTilt } from '@/composables/useCoverTilt'
+const { coverTilt, sheenStyle, onCoverMove, onCoverLeave } = useCoverTilt()
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
 import { sanitizeHtml } from '@/utils/sanitize'
 import { getEjsCore } from '@/utils/ejsCores'
+import { formatBytes } from '@/utils/format'
+const formatSize = (b: number | null | undefined) => formatBytes(b, '-')
 
 const themeStore = useThemeStore()
 const { success: notifySuccess, error: notifyError } = useNotifications()
-const { gdConfirm } = useDialog()
+const { gdConfirm, gdAlert } = useDialog()
 const authStore = useAuthStore()
 const { t } = useI18n()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
@@ -828,29 +833,7 @@ const logoSrc = computed(() => {
 })
 
 // ── 3D tilt (same as Modern theme, respects themeStore.cardTilt/cardShine) ──
-const coverTilt  = ref('perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)')
-const sheenStyle = ref('opacity:0')
 
-function onCoverMove(e: MouseEvent) {
-  if (!themeStore.cardTilt) return
-  const el = e.currentTarget as HTMLElement
-  const rect = el.getBoundingClientRect()
-  const cx = rect.width / 2; const cy = rect.height / 2
-  const dx = e.clientX - rect.left - cx
-  const dy = e.clientY - rect.top  - cy
-  const rotY =  (dx / cx) * 10
-  const rotX = -(dy / cy) *  7
-  coverTilt.value = `perspective(800px) rotateX(${rotX}deg) rotateY(${rotY}deg) scale3d(1.03,1.03,1.03)`
-  if (themeStore.cardShine) {
-    const mx = ((e.clientX - rect.left) / rect.width  * 100).toFixed(1)
-    const my = ((e.clientY - rect.top)  / rect.height * 100).toFixed(1)
-    sheenStyle.value = `opacity:1; background: radial-gradient(ellipse at ${mx}% ${my}%, rgba(255,255,255,0.22) 0%, transparent 65%);`
-  }
-}
-function onCoverLeave() {
-  coverTilt.value = 'perspective(800px) rotateX(0deg) rotateY(0deg) scale3d(1,1,1)'
-  sheenStyle.value = 'opacity:0'
-}
 
 const screenshotUrls = computed(() => {
   const shots = game.value?.screenshots || []
@@ -907,51 +890,7 @@ const descHtml = computed(() => game.value?.description || game.value?.descripti
 
 // ── Requirements ─────────────────────────────────────────────────────────────
 
-const REQ_SHOW = new Set(['processor', 'cpu', 'memory', 'ram', 'graphics', 'gpu', 'video'])
-
-function formatReqKey(k: string): string {
-  const key = k.toLowerCase()
-  if (['processor', 'cpu'].includes(key))       return 'CPU'
-  if (['memory', 'ram'].includes(key))           return 'RAM'
-  if (['graphics', 'gpu', 'video'].includes(key)) return 'GPU'
-  return k
-}
-
-const reqRows = computed((): [string, string][] => {
-  const reqs = game.value?.requirements
-  if (!reqs) return []
-  let minimum: any = null
-  if (reqs.minimum) minimum = reqs.minimum
-  else if (reqs.Windows?.minimum) minimum = reqs.Windows.minimum
-  else if (reqs.windows?.minimum) minimum = reqs.windows.minimum
-  else if (reqs.per_os) {
-    const win = (reqs.per_os as any[]).find((o: any) => (o.os || '').toLowerCase().includes('win'))
-    minimum = win?.minimum
-  } else {
-    const first = Object.values(reqs)[0] as any
-    if (first?.minimum) minimum = first.minimum
-  }
-  if (!minimum) return []
-  if (Array.isArray(minimum)) {
-    return minimum
-      .filter((r: any) => REQ_SHOW.has((r.name || r.id || '').toLowerCase()) && (r.description || r.value))
-      .map((r: any) => [r.name || r.id, r.description || r.value] as [string, string])
-  }
-  if (typeof minimum === 'string') {
-    const rows: [string, string][] = []
-    for (const line of minimum.split(/\n/)) {
-      const m = line.match(/^([^:]+):\s*(.+)/)
-      if (m && REQ_SHOW.has(m[1].trim().toLowerCase())) rows.push([m[1].trim(), m[2].trim()])
-    }
-    return rows
-  }
-  if (typeof minimum === 'object') {
-    return Object.entries(minimum)
-      .filter(([k, v]) => REQ_SHOW.has(k.toLowerCase()) && v)
-      .map(([k, v]) => [k, String(v)] as [string, string])
-  }
-  return []
-})
+const reqRows = computed((): [string, string][] => reqRowsFrom(game.value?.requirements))
 
 // ── GAMES library download helpers ───────────────────────────────────────────
 
@@ -993,38 +932,51 @@ function libToggleSelect(id: number) {
   else libDlSelected.value.add(id)
 }
 
-function formatSize(bytes: number | null): string {
-  if (!bytes) return '-'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
 
 function osLabel(os: string) {
   return os === 'windows' ? 'Windows' : os === 'mac' ? 'macOS' : os === 'linux' ? 'Linux' : 'All'
 }
 
+// The same two-step download the Modern theme uses: ask for a short-lived
+// one-time token, then hand the browser a plain link and let it stream the
+// file itself, with its own progress and its own resume.
+//
+// This used to fetch the file with a raw request and call resp.blob(), which
+// materialises the whole thing in the renderer before the save dialog appears:
+// a multi-gigabyte installer took gigabytes of browser memory and past a few
+// of them Chrome simply killed the tab. It also read the token straight out of
+// localStorage rather than going through the axios client, so an expired one
+// produced a 401 that `continue` swallowed - the dialog closed, no file, no
+// message, and the interceptor that would have refreshed the token never saw
+// it. The ROM half of this same file already says why the approach was
+// abandoned there.
 async function startLibDownload() {
   libDownloading.value = true
-  const token = localStorage.getItem('gd3_token') || ''
+  const failed: number[] = []
   for (const id of libDlSelected.value) {
     try {
-      const url = `/api/library/download/${id}`
-      const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-      if (!resp.ok) continue
-      const blob = await resp.blob()
-      const cd = resp.headers.get('Content-Disposition') || ''
-      const nameMatch = cd.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
-      const filename = nameMatch ? nameMatch[1].replace(/['"]/g, '') : `file_${id}`
-      const objUrl = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = objUrl; a.download = filename; a.click()
-      setTimeout(() => URL.revokeObjectURL(objUrl), 10000)
-    } catch { /* skip failed file */ }
+      const { data } = await client.post(`/library/download/${id}/token`)
+      const link = document.createElement('a')
+      link.href = `/api/library/dl/${id}?dl_token=${encodeURIComponent(data.token)}`
+      link.setAttribute('download', '')
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+    } catch (e) {
+      console.error('Download failed for file', id, e)
+      failed.push(id)
+    }
   }
   libDownloading.value = false
   showLibDownload.value = false
+  // Say so. Closing the dialog with nothing to show for it was the whole
+  // problem with the old path.
+  if (failed.length) {
+    await gdAlert(
+      t('detail.download_failed_body', { n: failed.length }),
+      { title: t('detail.download_failed_title'), danger: true },
+    )
+  }
 }
 
 // ── Events ───────────────────────────────────────────────────────────────────
@@ -1245,7 +1197,7 @@ async function loadGame(id: string | number) {
       if (props.activeLib === 'games') { loadGameCollections(data.id); fetchPackable(data.id) }
     }
   } catch (e: any) {
-    error.value = e?.response?.data?.detail || 'Failed to load game'
+    error.value = e?.response?.data?.detail || t('detail.load_failed')
   } finally {
     loading.value = false
   }
@@ -1276,7 +1228,7 @@ async function publishToLibrary(pendingDownload = false) {
     const { data } = await client.post(`/library/games/publish/${game.value.id}`)
     publishedId.value = data.id
     if (pendingDownload) {
-      publishMsg.value = 'Added to library - files will sync after download'
+      publishMsg.value = t('detail.added_to_library')
     } else {
       publishMsg.value = data._scanned > 0
         ? `Re-synced - ${data._scanned} file(s) added`
@@ -1284,7 +1236,7 @@ async function publishToLibrary(pendingDownload = false) {
     }
     setTimeout(() => publishMsg.value = '', 6000)
   } catch (e: any) {
-    publishMsg.value = e?.response?.data?.detail || 'Publish failed'
+    publishMsg.value = e?.response?.data?.detail || t('detail.publish_failed')
   } finally {
     publishLoading.value = false
   }
@@ -1419,7 +1371,7 @@ onUnmounted(() => window.removeEventListener('message', onPlayerMessage))
 /* Loading / error */
 .cd-loading { flex: 1; display: flex; align-items: center; justify-content: center; }
 .cd-spin { animation: cd-spin-anim 1s linear infinite; }
-@keyframes cd-spin-anim { to { transform: rotate(360deg); } }
+
 .cd-error { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--danger); font-size: 13px; }
 
 /* ── COVER HERO ────────────────────────────────────────────────────────────── */
@@ -1446,25 +1398,10 @@ onUnmounted(() => window.removeEventListener('message', onPlayerMessage))
 
 /* ── Hero animation keyframes - identical to Modern theme ─────────────────── */
 /* Ken Burns - classic documentary zoom + gentle pan */
-@keyframes cd-kenburns {
-  0%   { transform: scale(1.06) translate(0%,    0%   ); }
-  20%  { transform: scale(1.12) translate(-2.5%, 1%   ); }
-  45%  { transform: scale(1.09) translate( 1.5%, -1.5%); }
-  70%  { transform: scale(1.14) translate(-1%,   2%   ); }
-  100% { transform: scale(1.06) translate(0%,    0%   ); }
-}
+
 /* Drift - slow lateral pan with slight zoom */
-@keyframes cd-drift {
-  0%   { transform: scale(1.1) translateX(0%);  }
-  50%  { transform: scale(1.1) translateX(-5%); }
-  100% { transform: scale(1.1) translateX(0%);  }
-}
+
 /* Pulse - smooth breathing zoom */
-@keyframes cd-pulse {
-  0%   { transform: scale(1.04); }
-  50%  { transform: scale(1.11); }
-  100% { transform: scale(1.04); }
-}
 
 /* Applied via :class heroAnimClass - speed uses shared --hero-anim-speed CSS var */
 .cd-hero--kenburns {
@@ -1691,7 +1628,7 @@ onUnmounted(() => window.removeEventListener('message', onPlayerMessage))
   cursor: zoom-out;
   animation: lb-in .15s ease;
 }
-@keyframes lb-in { from { opacity: 0; } to { opacity: 1; } }
+
 .cd-lb-close {
   position: absolute; top: 20px; right: 20px;
   width: 38px; height: 38px; border-radius: 50%;
@@ -1805,7 +1742,6 @@ span.cdisk-btn:hover { background: none; color: var(--pl-light, #a78bfa); }
 /* Refresh button spin animation */
 .cov-btn--spin { opacity: .7; cursor: default; }
 .cov-btn--spin svg { animation: cov-spin 1s linear infinite; }
-@keyframes cov-spin { to { transform: rotate(360deg); } }
 
 /* OS icons */
 .os-icons { display: flex; gap: var(--space-2, 8px); margin-top: 5px; align-items: center; }

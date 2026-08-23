@@ -130,6 +130,10 @@ export const useSocketStore = defineStore("socket", () => {
     socket.value.on("romsource:download_error", (data) => {
       romSourceCallbacks.forEach(cb => cb("error", data));
     });
+    // Paused, resumed, cancelled: a state change with no bytes attached.
+    socket.value.on("romsource:download_state", (data) => {
+      romSourceCallbacks.forEach(cb => cb("state", data));
+    });
     socket.value.on("dashboard:queue", (data) => {
       dashboardQueueCallbacks.forEach(cb => cb(data));
     });

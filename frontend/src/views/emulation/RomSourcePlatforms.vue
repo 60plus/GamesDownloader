@@ -33,6 +33,23 @@
             @click="cardSize = sz.id"
           >{{ sz.label }}</button>
         </div>
+
+        <!-- A source caches its listings, so a platform that came back empty
+             while the archive was down keeps looking empty afterwards. This is
+             how to say "forget that and ask again" without waiting it out. -->
+        <button
+          class="rsp-refresh"
+          :class="{ busy: refreshing }"
+          :disabled="refreshing"
+          :title="t('romsrc.refresh_hint', 'Refresh the lists from the source')"
+          @click="refreshLists"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <polyline points="23 4 23 10 17 10"/>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+          <span>{{ t('romsrc.refresh', 'Refresh') }}</span>
+        </button>
       </div>
     </div>
 
@@ -178,6 +195,18 @@ function openPlatform(p: RomSourcePlatform) {
 // and the page then shows A's platforms under B's name.
 let loadSeq = 0
 
+const refreshing = ref(false)
+
+async function refreshLists() {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    await romSourceActions.refreshSource(sourceId.value)
+  } catch { /* the reload below is worth doing either way */ }
+  refreshing.value = false
+  await load()
+}
+
 async function load() {
   const seq = ++loadSeq
   loading.value = true
@@ -297,7 +326,6 @@ watch(sourceId, () => load())
   border: 2px solid rgba(255,255,255,.15); border-top-color: var(--pl-light);
   animation: spin .8s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Platform grid (mirrors EmulationHome) ──────────────────────────────── */
 .rsp-grid {
@@ -353,4 +381,19 @@ watch(sourceId, () => load())
   text-align: center; letter-spacing: .3px; text-shadow: 0 1px 4px rgba(0,0,0,.8);
 }
 .rsp-count { font-size: var(--fs-xs, 10px); color: rgba(255,255,255,.5); font-weight: 500; }
+/* Refresh: quiet next to the size buttons until it is doing something. */
+.rsp-refresh {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; margin-left: 10px;
+  font-size: var(--fs-sm, 12px); font-weight: 600; color: var(--muted);
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm, 8px); cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+.rsp-refresh:hover:not(:disabled) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--pl) 45%, transparent);
+}
+.rsp-refresh:disabled { cursor: default; opacity: .7; }
+.rsp-refresh.busy svg { animation: spin 1s linear infinite; }
 </style>

@@ -3,7 +3,7 @@
 
     <!-- ── Header ──────────────────────────────────────────────────────────── -->
     <div class="settings-header">
-      <button class="back-btn" @click="router.back()" title="Go back">
+      <button class="back-btn" @click="router.back()" :title="t('settings.back')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <polyline points="15 18 9 12 15 6"/>
         </svg>
@@ -63,8 +63,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, defineAsyncComponent, h } from 'vue'
+import { ref, computed, defineAsyncComponent, h, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import client from '@/services/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsHint } from '@/composables/useSettingsHint'
 import { useI18n } from '@/i18n'
@@ -77,6 +78,19 @@ const isAdmin   = computed(() => auth.user?.role === 'admin')
 const route     = useRoute()
 const activeTab = ref((route.query.tab as string) || 'appearance')
 const { hintTitle, hintBody } = useSettingsHint()
+
+// Transmission gets a tab of its own, but only once it is switched on. Off, it
+// is one toggle on the Downloads page and a tab would be an empty room.
+const trEnabled = ref(false)
+onMounted(async () => {
+  if (!isAdmin.value) return
+  try {
+    const { data } = await client.get('/torrents/enabled')
+    trEnabled.value = data?.enabled === true
+  } catch {
+    // Leave the tab hidden rather than show one that cannot load.
+  }
+})
 
 // ── Inline SVG icon helpers ───────────────────────────────────────────────
 const icons = {
@@ -116,6 +130,11 @@ const icons = {
     h('circle', { cx:16, cy:13, r:1.5 }),
     h('path', { d:'M6 10h4M8 8v4M14 11h4' }),
   ]),
+  transmission: () => h('svg', { width:14, height:14, viewBox:'0 0 24 24', fill:'none', stroke:'currentColor', 'stroke-width':2 }, [
+    h('circle', { cx:12, cy:12, r:9 }),
+    h('path', { d:'M12 7v10' }),
+    h('path', { d:'M8 11l4 4 4-4' }),
+  ]),
   users: () => h('svg', { width:14, height:14, viewBox:'0 0 24 24', fill:'none', stroke:'currentColor', 'stroke-width':2 }, [
     h('path', { d:'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2' }),
     h('circle', { cx:9, cy:7, r:4 }),
@@ -132,13 +151,16 @@ const ALL_TABS = [
   { key: 'metadata',      label: 'Metadata',      icon: icons.metadata,      adminOnly: true  },
   { key: 'downloads',     label: 'Downloads',     icon: icons.downloads,     adminOnly: true  },
   { key: 'roms',          label: 'ROMs',          icon: icons.roms,          adminOnly: true  },
+  { key: 'transmission',  label: 'Transmission',  icon: icons.transmission,  adminOnly: true, needsTransmission: true },
   { key: 'notifications', label: 'Notifications', icon: icons.notifications, adminOnly: true  },
   { key: 'plugins',       label: 'Plugins',       icon: icons.plugins,       adminOnly: true  },
   { key: 'pluginstore',   label: 'Plugin Store',  icon: icons.plugins,       adminOnly: true  },
   { key: 'users',         label: 'Users',         icon: icons.users,         adminOnly: true  },
 ]
 
-const TABS = computed(() => ALL_TABS.filter(t => !t.adminOnly || isAdmin.value))
+const TABS = computed(() => ALL_TABS.filter(
+  t => (!t.adminOnly || isAdmin.value) && (!t.needsTransmission || trEnabled.value)
+))
 
 const views: Record<string, ReturnType<typeof defineAsyncComponent>> = {
   appearance:    defineAsyncComponent(() => import('./SettingsAppearance.vue')),
@@ -148,6 +170,7 @@ const views: Record<string, ReturnType<typeof defineAsyncComponent>> = {
   metadata:      defineAsyncComponent(() => import('./SettingsMetadata.vue')),
   downloads:     defineAsyncComponent(() => import('./SettingsDownloads.vue')),
   roms:          defineAsyncComponent(() => import('./SettingsRoms.vue')),
+  transmission:  defineAsyncComponent(() => import('./SettingsTransmission.vue')),
   notifications: defineAsyncComponent(() => import('./SettingsNotifications.vue')),
   plugins:       defineAsyncComponent(() => import('./SettingsPlugins.vue')),
   pluginstore:   defineAsyncComponent(() => import('./SettingsPluginStore.vue')),

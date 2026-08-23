@@ -11,7 +11,7 @@
     >
       {{ n.message }}
       <template #actions>
-        <v-btn variant="text" size="small" @click="remove(n.id)">Close</v-btn>
+        <v-btn variant="text" size="small" @click="remove(n.id)">{{ t('common.close') }}</v-btn>
       </template>
     </v-snackbar>
   </div>
@@ -19,6 +19,9 @@
 
 <script setup lang="ts">
 import { useNotifications } from "@/composables/useNotifications";
+import { useI18n } from "@/i18n";
+
+const { t } = useI18n();
 
 const { notifications, remove } = useNotifications();
 </script>

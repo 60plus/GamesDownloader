@@ -91,7 +91,7 @@
     <template v-else>
       <div class="gog-profile">
         <div class="profile-avatar-wrap">
-          <img v-if="gogAvatar" :src="gogAvatar" class="profile-avatar" alt="GOG avatar" @error="gogAvatar = ''" />
+          <img v-if="gogAvatar" :src="gogAvatar" class="profile-avatar" :alt="t('gog.avatar')" @error="gogAvatar = ''" />
           <div v-else class="profile-avatar-placeholder">
             <img src="/icons/gog.ico" width="32" height="32" alt="" />
           </div>
@@ -207,7 +207,7 @@ async function linkAccount() {
   serverError.value = ''
   try {
     const { data } = await client.post('/setup/gog', { code: codeInput.value.trim() })
-    gogUsername.value = data.username || 'GOG User'
+    gogUsername.value = data.username || t('gog.default_user')
     gogAvatar.value   = data.avatar_url || ''
     connected.value   = true
     emit('gogConnected', true)
@@ -330,5 +330,5 @@ async function linkAccount() {
   border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
   animation: spin .7s linear infinite; display: inline-block;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+
 </style>
