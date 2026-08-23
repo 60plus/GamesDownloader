@@ -1,8 +1,8 @@
-"""Shared async HTTP client - single httpx.AsyncClient for the whole app.
+"""Outbound HTTP for URLs that came from somewhere else.
 
-Usage:
-    from utils.http import http_client
-    resp = await http_client.get("https://api.gog.com/...")
+Every request here is aimed at an address a scraper, a catalogue or a plugin
+handed us, so each one goes through the SSRF guard and under a byte ceiling.
+There is deliberately no shared, unguarded client to reach for.
 """
 
 from __future__ import annotations
@@ -39,38 +39,32 @@ class MediaTooLarge(ValueError):
     """
 
 
-_client: httpx.AsyncClient | None = None
-
-DEFAULT_TIMEOUT = httpx.Timeout(connect=10, read=30, write=10, pool=10)
-DEFAULT_HEADERS = {
-    "User-Agent": "GamesDownloaderV3/1.0",
-    "Accept": "application/json",
-}
-
-
-async def get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(
-            timeout=DEFAULT_TIMEOUT,
-            headers=DEFAULT_HEADERS,
-            follow_redirects=True,
-        )
-    return _client
-
-
-async def close_client() -> None:
-    global _client
-    if _client and not _client.is_closed:
-        await _client.aclose()
-        _client = None
-
-
 # No cover, hero, logo or screenshot is this big. The cap exists because the URL
 # comes from outside - a scraper, a catalogue - and the response used to be read
 # whole into memory before anything checked its size, so a single URL pointing at
 # a multi-gigabyte file could take the container down with it.
 MAX_MEDIA_BYTES = 64 * 1024 * 1024
+
+
+async def read_capped(response, max_bytes: int, *, what: str = "media") -> bytes:
+    """Collect a streamed body under a ceiling, refusing as the bytes arrive.
+
+    Both halves matter. The declared length turns away an honestly-labelled
+    giant before a byte is read; the running total is there for the response
+    that lies about its length or declines to state one, and for the one that
+    is small on the wire and enormous once httpx has transparently decompressed
+    it. Measuring `len(response.content)` instead is a check that runs only
+    after the memory has already been spent.
+    """
+    declared = response.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > max_bytes:
+        raise MediaTooLarge(f"{what} is {declared} bytes, over the {max_bytes} limit")
+    buf = bytearray()
+    async for chunk in response.aiter_bytes(65536):
+        buf.extend(chunk)
+        if len(buf) > max_bytes:
+            raise MediaTooLarge(f"{what} exceeded the {max_bytes} byte limit")
+    return bytes(buf)
 
 
 async def fetch_media_bytes(
@@ -114,16 +108,5 @@ async def fetch_media_bytes(
         # only once the damage is done.
         async with client.stream("GET", url) as resp:
             resp.raise_for_status()
-            declared = int(resp.headers.get("content-length") or 0)
-            if declared > max_bytes:
-                raise MediaTooLarge(
-                    f"media is {declared} bytes, over the {max_bytes} limit"
-                )
-            buf = bytearray()
-            async for chunk in resp.aiter_bytes(65536):
-                buf.extend(chunk)
-                if len(buf) > max_bytes:
-                    # A lying or absent Content-Length is exactly the case the
-                    # running total is here for.
-                    raise MediaTooLarge(f"media exceeded the {max_bytes} byte limit")
-            return bytes(buf), resp.headers.get("content-type", "")
+            body = await read_capped(resp, max_bytes)
+            return body, resp.headers.get("content-type", "")

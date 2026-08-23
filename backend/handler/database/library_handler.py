@@ -104,10 +104,20 @@ class LibraryHandler(DBBaseHandler):
 
     @begin_session
     async def get_popular(
-        self, limit: int = 12, *, session: AsyncSession = None
+        self, limit: int = 12, *, exclude_ids: Sequence[int] | None = None,
+        session: AsyncSession = None,
     ) -> list[tuple[LibraryGame, int]]:
         """Active default-library games ordered by all-time download count.
-        Returns (game, download_count) pairs - the storefront 'popular' rail."""
+        Returns (game, download_count) pairs - the storefront 'popular' rail.
+
+        `exclude_ids` keeps games a caller may not see out of the query rather
+        than out of the result. The storefront used to pad the limit by the
+        number of denied games and drop them afterwards, which fetched rows -
+        each dragging its LibraryFile rows through the selectin relationship -
+        only to discard them, and still returned a short rail when the padding
+        did not cover it. Optional, because /api/library/popular has no denies
+        to apply.
+        """
         counts = (
             select(
                 DownloadStat.library_game_id.label("gid"),
@@ -123,9 +133,10 @@ class LibraryHandler(DBBaseHandler):
                 LibraryGame.is_active == True,  # noqa: E712
                 LibraryGame.in_default_library == True,  # noqa: E712
             )
-            .order_by(counts.c.dl.desc(), LibraryGame.title)
-            .limit(limit)
         )
+        if exclude_ids:
+            stmt = stmt.where(LibraryGame.id.notin_(list(exclude_ids)))
+        stmt = stmt.order_by(counts.c.dl.desc(), LibraryGame.title).limit(limit)
         result = await session.execute(stmt)
         return [(row[0], row[1]) for row in result.all()]
 

@@ -12,6 +12,7 @@ import importlib
 import json
 import logging
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -364,6 +365,36 @@ class PluginManager:
 plugin_manager = PluginManager()
 
 
+@lru_cache(maxsize=1)
+def _sync_engine():
+    """The one synchronous engine the plugin helpers share.
+
+    `get_plugin_config` used to build an engine per call, which meant a TCP
+    connect, an authentication handshake and a full MySQL dialect
+    initialisation for a single SELECT - and RomDownloader asks three or more
+    times per listing page. The `dispose()` at the end was also unreachable
+    whenever a config was found, because the `return` sat inside the `with`.
+
+    Small pool on purpose: it lives alongside the async pool (20 + 10) and the
+    two together have to stay well under the server's connection limit.
+    `pool_recycle` matters more than usual now that connections are kept rather
+    than torn down after every call - an idle one must not outlive MySQL's
+    wait_timeout. Building the engine never connects, so caching the object is
+    safe even if the database is down at the time.
+    """
+    from sqlalchemy import create_engine
+
+    from config import SYNC_DATABASE_URL
+
+    return create_engine(
+        SYNC_DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+        pool_size=2,
+        max_overflow=3,
+    )
+
+
 def get_plugin_config(plugin_id: str) -> dict:
     """Read plugin config from DB (synchronous helper for plugins).
 
@@ -375,17 +406,15 @@ def get_plugin_config(plugin_id: str) -> dict:
     """
     import json as _json
     try:
-        from sqlalchemy import create_engine, text
-        from config import SYNC_DATABASE_URL
-        engine = create_engine(SYNC_DATABASE_URL, pool_pre_ping=True)
-        with engine.connect() as conn:
+        from sqlalchemy import text
+        with _sync_engine().connect() as conn:
             row = conn.execute(
                 text("SELECT config_json FROM plugin_configs WHERE plugin_id = :pid"),
                 {"pid": plugin_id},
             ).fetchone()
-            if row and row[0]:
-                return _json.loads(row[0])
-        engine.dispose()
+        # Parsing happens after the connection is back in the pool.
+        if row and row[0]:
+            return _json.loads(row[0])
     except Exception:
         pass
     return {}

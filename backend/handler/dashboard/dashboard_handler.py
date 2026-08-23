@@ -674,15 +674,17 @@ class DashboardHandler(DBBaseHandler):
         downloads: list[dict] = []
         try:
             from handler.gog.gog_download_handler import gog_download_handler
-            for j in await gog_download_handler.list_jobs():
-                if j.status in ("pending", "queued", "downloading", "paused"):
-                    downloads.append({
-                        "kind": "gog", "title": j.game_title, "file": j.file_name,
-                        "status": j.status, "progress": round(float(j.progress_pct or 0), 1),
-                        "speed_bps": int(j.speed_bps or 0),
-                        "downloaded": int(j.downloaded_size or 0), "total": int(j.total_size or 0),
-                        "eta": None,
-                    })
+            # Asked every 1.5 s while a dashboard tab is open, so it selects the
+            # live rows rather than fetching the whole history and filtering it
+            # here. The status set is the same one, now named on the model.
+            for j in await gog_download_handler.list_active_jobs():
+                downloads.append({
+                    "kind": "gog", "title": j.game_title, "file": j.file_name,
+                    "status": j.status, "progress": round(float(j.progress_pct or 0), 1),
+                    "speed_bps": int(j.speed_bps or 0),
+                    "downloaded": int(j.downloaded_size or 0), "total": int(j.total_size or 0),
+                    "eta": None,
+                })
         except Exception:
             pass
         try:

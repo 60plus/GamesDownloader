@@ -65,6 +65,7 @@ async def storefront(
     from endpoints.library.library_router import (
         _game_to_tile,
         _gog_fallback_map,
+        _gog_meta_map,
         aggregate_rating,
     )
     from models.user import Role
@@ -78,11 +79,17 @@ async def storefront(
     if user.role != Role.ADMIN:
         denied = await _lib.get_denied_game_ids_for_user(user.id)
 
-    # Over-fetch each rail so per-game denies and the featured hero/logo filter
-    # still leave full rows; the featured mix reuses the same two queries.
-    fetch = rail_limit * 2 + len(denied)
-    recent = await _lib.get_all_active(in_default_only=True, sort="created_desc", limit=fetch)
-    pop    = await _lib.get_popular(limit=rail_limit + len(denied))
+    # Over-fetch each rail so the featured hero/logo filter still leaves full
+    # rows; the featured mix reuses the same two queries. The denies go into
+    # the queries rather than padding the limit and filtering afterwards -
+    # every over-fetched row drags its LibraryFile rows along through the
+    # selectin relationship, and the padding still left a short rail whenever
+    # it did not cover the denies.
+    fetch = rail_limit * 2
+    recent = await _lib.get_all_active(
+        in_default_only=True, sort="created_desc", limit=fetch, exclude_ids=denied,
+    )
+    pop    = await _lib.get_popular(limit=rail_limit, exclude_ids=denied)
 
     # ── Whole-library meta rows (slim, no files/media columns) ──────────────
     # They feed the aggregations below AND the top-rated ranking: the blended
@@ -91,7 +98,10 @@ async def storefront(
     meta_rows = await _lib.get_home_meta()
     if denied:
         meta_rows = [r for r in meta_rows if r.id not in denied]
-    meta_gog = await _gog_fallback_map(meta_rows)
+    # Whole-library fallback, so it takes the nine columns the rails read
+    # rather than full GogGame rows. The one below is bounded to a rail's worth
+    # and feeds _game_to_tile, which reads far more, so it stays as it was.
+    meta_gog = await _gog_meta_map(meta_rows)
 
     def _agg_of(r) -> float:
         gg = meta_gog.get(r.gog_game_id)
@@ -101,10 +111,6 @@ async def storefront(
 
     ranked = sorted(((_agg_of(r), r.id) for r in meta_rows), reverse=True)
     top = await _lib.get_by_ids([rid for score, rid in ranked[:fetch] if score > 0])
-
-    if denied:
-        recent = [g for g in recent if g.id not in denied]
-        pop    = [(g, c) for g, c in pop if g.id not in denied]
 
     by_id = {g.id: g for g in recent}
     by_id.update({g.id: g for g in top})

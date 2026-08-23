@@ -24,6 +24,10 @@ from __future__ import annotations
 import logging
 import math
 import mimetypes
+
+from utils.apicalypse import sanitize_search
+from handler.gog_web import GOG_JSON_HEADERS, gog_image_url
+from handler.metadata.igdb_auth import igdb_headers
 import os
 import re
 import unicodedata
@@ -67,7 +71,10 @@ def _slugify(title: str) -> str:
     t = unicodedata.normalize("NFKD", title).lower()
     t = t.encode("ascii", errors="ignore").decode("ascii")
     t = re.sub(r"[^a-z0-9]+", "-", t).strip("-")
-    return t
+    # slug is a VARCHAR(255) and the caller may append "-1", "-2" to make it
+    # unique, so leave room for that suffix rather than handing the database a
+    # value it will refuse.
+    return t[:240].rstrip("-")
 
 
 
@@ -174,10 +181,14 @@ async def _check_user_can_access(request: Request, game: LibraryGame) -> None:
     """Raise 401/404 if the current user may not see this game.
 
     The single gate every game-detail / file route must call. It enforces
-    authentication, hides inactive games, and applies the per-game deny list
-    (UserGameAccess). Admins bypass every check. Keeping the deny check here -
-    rather than duplicated inline per route - is what keeps per-game access
-    consistent across the primary route, the GOG-id lookup, and file listing.
+    authentication, hides inactive games, and applies BOTH visibility rules:
+    the per-game deny list and membership of a restricted library. Admins
+    bypass every check.
+
+    The restricted-library half used to live only in `list_library_games`, so a
+    user kept off a restricted library saw an empty listing but could still
+    fetch any game in it by id, list its files and mint a download token. Both
+    rules now come from one place; see handler/library/visibility.py.
     """
     user = request.state.user
     if not user:
@@ -188,10 +199,11 @@ async def _check_user_can_access(request: Request, game: LibraryGame) -> None:
         return
     if not game.is_active:
         raise HTTPException(status_code=404, detail="Game not found")
-    # Per-game access: a denied non-admin is treated as if the game does not
-    # exist (404, matching the primary route), so nothing about the title leaks.
-    access = await _lib.get_game_access(user.id, game.id)
-    if access and access.access == "deny":
+    # A hidden game is answered as if it did not exist, so neither the title nor
+    # the fact that the id is taken leaks to somebody who may not see it.
+    from handler.library.visibility import membership_map, visibility_for
+    vis = await visibility_for(user)
+    if not vis.allows(game, (await membership_map([game.id])).get(game.id)):
         raise HTTPException(status_code=404, detail="Game not found")
 
 
@@ -387,6 +399,36 @@ async def _gog_fallback_map(games) -> dict[int, object]:
     async with _asf() as _s:
         rows = (await _s.execute(_sel(_GG).where(_GG.id.in_(gog_ids)))).scalars().all()
         return {gg.id: gg for gg in rows}
+
+
+async def _gog_meta_map(games) -> dict[int, object]:
+    """The same fallback as `_gog_fallback_map`, but only the columns the
+    storefront reads.
+
+    The home route hands it the whole default library - eight hundred rows on a
+    real GOG account - to build twelve tiles, and the full entity select drags
+    the description HTML, the changelog, the installer manifests, the extras
+    and the DLC lists along with it.
+
+    The column list must cover every `_row_fb` in home_router. `_row_fb` uses
+    getattr with a default, so a field added there and forgotten here would
+    silently fall back instead of failing.
+    """
+    from handler.database.session import async_session_factory as _asf
+    from models.gog_game import GogGame as _GG
+    from sqlalchemy import select as _sel
+    gog_ids = {g.gog_game_id for g in games if g.source == "gog" and g.gog_game_id}
+    if not gog_ids:
+        return {}
+    async with _asf() as _s:
+        rows = (await _s.execute(
+            _sel(
+                _GG.id, _GG.rating, _GG.meta_ratings, _GG.cover_path,
+                _GG.background_path, _GG.genres, _GG.videos, _GG.video_path,
+                _GG.description_short,
+            ).where(_GG.id.in_(gog_ids))
+        )).all()
+        return {row.id: row for row in rows}
 
 
 async def _catalog_origin_map(games) -> dict[int, str]:
@@ -875,12 +917,32 @@ async def _set_video_path(game: LibraryGame, url: str | None) -> None:
         await _lib.update(game, {"video_path": url})
 
 
+# Outcome of the most recent trailer fetch per game. The download runs in a
+# background task, so a failure had nowhere to go: the editor polled the game
+# detail for five minutes waiting for a video_path that was never coming, then
+# stopped without a word. This is what it polls instead.
+#
+# Memory only, like the ROM download registry. A trailer fetch that is lost to a
+# restart is a button press, not data, and the user can simply press it again.
+_video_jobs: dict[int, dict] = {}
+_VIDEO_JOBS_KEEP = 200
+
+
+def _remember_video_job(game_id: int, **fields) -> None:
+    job = _video_jobs.setdefault(game_id, {"game_id": game_id})
+    job.update(fields)
+    # Oldest entries first: dicts preserve insertion order and a re-run
+    # re-inserts, so this drops whatever has gone longest without a press.
+    while len(_video_jobs) > _VIDEO_JOBS_KEEP:
+        _video_jobs.pop(next(iter(_video_jobs)))
+
+
 @protected_route(library_router.post, "/games/{game_id}/video/download", scopes=[Scope.LIBRARY_WRITE])
 async def download_game_video(
     request: Request, game_id: int, body: VideoDownloadBody, bg: BackgroundTasks,
 ) -> dict:
     """Fetch the game's trailer to local storage in the background (yt-dlp).
-    The editor polls the game detail until video_path shows up."""
+    The editor polls /video/status until it reports done or failed."""
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
@@ -889,16 +951,50 @@ async def download_game_video(
 
     quality = body.quality if body.quality in {"best", "2160", "1440", "1080", "720", "480", "360"} else "1080"
 
+    _video_jobs.pop(game_id, None)
+    _remember_video_job(game_id, state="running", video_id=body.video_id, quality=quality, error=None, url=None)
+
     async def _task() -> None:
         from handler.library.media_handler import download_youtube_video
-        url = await download_youtube_video(game_id, body.video_id, quality)
+        try:
+            url, error = await download_youtube_video(game_id, body.video_id, quality)
+        except Exception:
+            # download_youtube_video already swallows yt-dlp's own failures, so
+            # reaching here means our side broke. Still has to reach the editor,
+            # otherwise we are back to the silent spinner.
+            logger.exception("Trailer task crashed game_id=%s", game_id)
+            _remember_video_job(game_id, state="failed", error="failed")
+            return
         if url:
             fresh = await _lib.get_by_id(game_id)
             if fresh:
                 await _set_video_path(fresh, url)
+            _remember_video_job(game_id, state="done", url=url, error=None)
+        else:
+            _remember_video_job(game_id, state="failed", error=error or "failed")
 
     bg.add_task(_task)
     return {"started": True}
+
+
+@protected_route(library_router.get, "/games/{game_id}/video/status", scopes=[Scope.LIBRARY_WRITE])
+async def game_video_status(request: Request, game_id: int) -> dict:
+    """How the last trailer fetch for this game ended.
+
+    `state` is one of running, done, failed or idle. On failure `error` carries
+    a stable code the editor turns into a sentence, because yt-dlp's own text is
+    three lines of wiki links about exporting browser cookies.
+    """
+    job = _video_jobs.get(game_id)
+    if not job:
+        return {"state": "idle"}
+    return {
+        "state":    job.get("state", "idle"),
+        "error":    job.get("error"),
+        "url":      job.get("url"),
+        "video_id": job.get("video_id"),
+        "quality":  job.get("quality"),
+    }
 
 
 @protected_route(library_router.post, "/games/{game_id}/video/upload", scopes=[Scope.LIBRARY_WRITE])
@@ -998,20 +1094,13 @@ async def search_screenshot_options(
             if not client_id or not client_secret:
                 return []
             async with httpx.AsyncClient(timeout=15) as c:
-                tr = await c.post("https://id.twitch.tv/oauth2/token", params={
-                    "client_id": client_id, "client_secret": client_secret,
-                    "grant_type": "client_credentials",
-                })
-                if tr.status_code != 200:
+                headers = await igdb_headers(client_id, client_secret)
+                if headers is None:
                     return []
-                token = tr.json().get("access_token", "")
-                if not token:
-                    return []
-                headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
                 gr = await c.post(
                     "https://api.igdb.com/v4/games",
                     headers=headers,
-                    content=f'fields id,name,screenshots.image_id; search "{search_term}"; limit 3;',
+                    content=f'fields id,name,screenshots.image_id; search "{sanitize_search(search_term)}"; limit 3;',
                 )
                 if gr.status_code == 200:
                     for ig_game in gr.json():
@@ -1089,10 +1178,8 @@ async def search_screenshot_options(
 
     elif source == "gog":
         try:
-            from handler.library.library_scrape_handler import _abs_url
             _GOG_CATALOG = "https://catalog.gog.com/v1/catalog"
             _GOG_V1 = "https://api.gog.com/products/{gog_id}?expand=screenshots&locale=en-US"
-            _HDRS = {"User-Agent": "Mozilla/5.0 GOGGalaxy/2.0", "Accept": "application/json"}
             gog_product_id = None
             if gog_game_id:
                 from models.gog_game import GogGame
@@ -1102,20 +1189,20 @@ async def search_screenshot_options(
                     if gog_game:
                         gog_product_id = gog_game.gog_id
             if not gog_product_id:
-                async with httpx.AsyncClient(timeout=10, headers=_HDRS) as c:
+                async with httpx.AsyncClient(timeout=10, headers=GOG_JSON_HEADERS) as c:
                     r = await c.get(_GOG_CATALOG, params={"query": search_term, "productType": "in:game,pack", "limit": "1", "locale": "en-US", "order": "desc:score"})
                     if r.status_code == 200:
                         products = r.json().get("products", [])
                         if products:
                             gog_product_id = products[0].get("id")
             if gog_product_id:
-                async with httpx.AsyncClient(timeout=15, headers=_HDRS) as c:
+                async with httpx.AsyncClient(timeout=15, headers=GOG_JSON_HEADERS) as c:
                     r = await c.get(_GOG_V1.format(gog_id=gog_product_id))
                     if r.status_code == 200:
                         for i, ss in enumerate(r.json().get("screenshots", []) or []):
                             img_id = ss.get("image_id", "")
                             if img_id:
-                                url = _abs_url(f"https://images-1.gog-statics.com/{img_id}.jpg" if not img_id.startswith("http") else img_id)
+                                url = gog_image_url(f"https://images-1.gog-statics.com/{img_id}.jpg" if not img_id.startswith("http") else img_id)
                                 results.append({"url": url, "thumb": url, "type": "static", "label": f"Screenshot {i+1}", "author": "GOG"})
         except Exception as exc:
             logger.warning("GOG screenshot search failed: %s", exc)
@@ -1224,20 +1311,13 @@ async def library_get_video_options(
             if not client_id or not client_secret:
                 return []
             async with httpx.AsyncClient(timeout=15) as c:
-                tr = await c.post("https://id.twitch.tv/oauth2/token", params={
-                    "client_id": client_id, "client_secret": client_secret,
-                    "grant_type": "client_credentials",
-                })
-                if tr.status_code != 200:
+                headers = await igdb_headers(client_id, client_secret)
+                if headers is None:
                     return []
-                token = tr.json().get("access_token", "")
-                if not token:
-                    return []
-                headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
                 gr = await c.post(
                     "https://api.igdb.com/v4/games",
                     headers=headers,
-                    content=f'fields id,name,videos.video_id,videos.name; search "{search_term}"; limit 3;',
+                    content=f'fields id,name,videos.video_id,videos.name; search "{sanitize_search(search_term)}"; limit 3;',
                 )
                 if gr.status_code == 200:
                     for ig_game in gr.json():
@@ -1265,10 +1345,8 @@ async def library_get_video_options(
                     if gog_game:
                         gog_product_id = gog_game.gog_id
             if not gog_product_id:
-                from handler.library.library_scrape_handler import _abs_url
                 _GOG_CATALOG = "https://catalog.gog.com/v1/catalog"
-                _HDRS = {"User-Agent": "Mozilla/5.0 GOGGalaxy/2.0", "Accept": "application/json"}
-                async with httpx.AsyncClient(timeout=10, headers=_HDRS) as c:
+                async with httpx.AsyncClient(timeout=10, headers=GOG_JSON_HEADERS) as c:
                     r = await c.get(_GOG_CATALOG, params={"query": search_term, "productType": "in:game,pack", "limit": "1", "locale": "en-US", "order": "desc:score"})
                     if r.status_code == 200:
                         products = r.json().get("products", [])
@@ -1276,8 +1354,7 @@ async def library_get_video_options(
                             gog_product_id = products[0].get("id")
             if gog_product_id:
                 _GOG_V1 = "https://api.gog.com/products/{gog_id}?expand=videos&locale=en-US"
-                _HDRS = {"User-Agent": "Mozilla/5.0 GOGGalaxy/2.0", "Accept": "application/json"}
-                async with httpx.AsyncClient(timeout=15, headers=_HDRS) as c:
+                async with httpx.AsyncClient(timeout=15, headers=GOG_JSON_HEADERS) as c:
                     r = await c.get(_GOG_V1.format(gog_id=gog_product_id))
                     if r.status_code == 200:
                         import re
@@ -1896,7 +1973,7 @@ async def package_game_files(request: Request, game_id: int, body: PackageBody |
     groups = body.groups if body else None
     delete_originals = body.delete_originals if body else None
     import asyncio
-    asyncio.create_task(package_library_game(
+    fire_task(package_library_game(
         game_id, groups=groups, delete_originals=delete_originals, single_archive=single_archive,
     ))
     return {"ok": True, "started": True, "platforms": platforms or (["all"] if single_archive else [])}
@@ -1954,22 +2031,40 @@ async def delete_library_file(request: Request, file_id: int) -> dict:
 
 # ── Download (streaming) ──────────────────────────────────────────────────────
 
+async def _assert_file_visible(user, library_game_id: int) -> None:
+    """The download gate, for a user object rather than a request.
+
+    The two download routes each carried their own copy of the deny check and
+    neither knew about restricted libraries, so a file could be streamed out of
+    a library its recipient was not on. The token route carried no check at
+    all: it resolved the user from the token and went straight to the bytes.
+
+    Answers 404 rather than 403 throughout, matching `_check_user_can_access`:
+    telling somebody "you may not have this" also tells them it exists.
+    """
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    game = await _lib.get_by_id(library_game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="File not available")
+    from handler.library.visibility import membership_map, visibility_for
+    vis = await visibility_for(user)
+    if not vis.allows(game, (await membership_map([game.id])).get(game.id)):
+        raise HTTPException(status_code=404, detail="File not available")
+
+
 @protected_route(library_router.get, "/download/{file_id}", scopes=[Scope.LIBRARY_DOWNLOAD])
 async def download_file(request: Request, file_id: int):
     f = await _lib.get_file_by_id(file_id)
     if not f or not f.is_available:
         raise HTTPException(status_code=404, detail="File not available")
 
-    # Per-game access check
-    from models.user import Role
+    # Bound here and used again further down, where the transfer is attributed
+    # to whoever asked for it. Folding the old inline access check into
+    # _assert_file_visible took this binding out with it and left those later
+    # uses pointing at nothing, so every call to this route raised NameError.
     user = request.state.user
-    if user.role != Role.ADMIN:
-        access = await _lib.get_game_access(user.id, f.library_game_id)
-        if access and access.access == "deny":
-            raise HTTPException(status_code=403, detail="Access denied")
-        game = await _lib.get_by_id(f.library_game_id)
-        if not game or not game.is_active:
-            raise HTTPException(status_code=404, detail="File not available")
+    await _assert_file_visible(user, f.library_game_id)
 
     abs_path = _abs_path(f.file_path)
 
@@ -2055,6 +2150,7 @@ import secrets as _secrets
 import redis.asyncio as _aioredis
 from config import REDIS_URL as _REDIS_URL
 from fastapi import Query as _Query
+from utils.async_utils import fire_task
 
 _DL1T_PREFIX = "library_dl1t:"
 _DL1T_TTL    = 60  # seconds - enough for browser to open the URL
@@ -2072,14 +2168,7 @@ async def create_native_download_token(request: Request, file_id: int) -> dict:
     if not f or not f.is_available:
         raise HTTPException(status_code=404, detail="File not available")
 
-    from models.user import Role
-    if user.role != Role.ADMIN:
-        access = await _lib.get_game_access(user.id, f.library_game_id)
-        if access and access.access == "deny":
-            raise HTTPException(status_code=403, detail="Access denied")
-        game = await _lib.get_by_id(f.library_game_id)
-        if not game or not game.is_active:
-            raise HTTPException(status_code=404, detail="File not available")
+    await _assert_file_visible(user, f.library_game_id)
 
     token = _secrets.token_urlsafe(32)
     async with _redis_dl1t() as r:
@@ -2107,6 +2196,11 @@ async def native_download_file(request: Request, file_id: int, dl_token: str = _
     f    = await _lib.get_file_by_id(file_id)
     if not f or not f.is_available:
         raise HTTPException(status_code=404, detail="File not available")
+
+    # The token was minted for a user who could see this file at the time. A
+    # token lives for a minute, but access can be taken away inside a minute,
+    # and this route had no check of its own at all.
+    await _assert_file_visible(user, f.library_game_id)
 
     abs_path   = _abs_path(f.file_path)
     _resolved  = os.path.realpath(abs_path)

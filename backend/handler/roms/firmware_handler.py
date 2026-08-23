@@ -136,12 +136,24 @@ def _digest(p: Path) -> tuple[str, int]:
     return md5.hexdigest(), size
 
 
-def status(ejs_core: str) -> list[dict]:
+def status(ejs_core: str, *, with_hash: bool = True) -> list[dict]:
     """Every file *ejs_core* declares, each marked present or missing.
 
     The MD5 of a stored file is reported so the caller can compare it against a
     reference set; nothing here decides whether a dump is the right one, only
     whether a file is there and what it hashes to.
+
+    `with_hash=False` answers the cheap question - is the file there, how big -
+    without reading it. The overview screen only ever asked that, and hashing
+    every stored file of all twenty-seven cores to answer it was expensive
+    enough to be felt: five of the core names alias onto genesis_plus_gx, so
+    that set was read five times in a single request.
+
+    One deliberate difference between the two modes: presence comes from
+    `is_file()` here, while the hashing path only sets it after a successful
+    read. A file that exists but cannot be read therefore counts as present
+    without a hash, which matches what `missing_required` and `bundle` already
+    believe.
     """
     out: list[dict] = []
     for fw in for_core(ejs_core):
@@ -155,11 +167,18 @@ def status(ejs_core: str) -> list[dict]:
             "md5": None,
         }
         if p.is_file():
-            try:
-                entry["md5"], entry["size"] = _digest(p)
+            if with_hash:
+                try:
+                    entry["md5"], entry["size"] = _digest(p)
+                    entry["present"] = True
+                except OSError as exc:
+                    logger.warning("could not read firmware %s/%s: %s", ejs_core, fw.path, exc)
+            else:
                 entry["present"] = True
-            except OSError as exc:
-                logger.warning("could not read firmware %s/%s: %s", ejs_core, fw.path, exc)
+                try:
+                    entry["size"] = p.stat().st_size
+                except OSError:
+                    pass
         out.append(entry)
     return out
 

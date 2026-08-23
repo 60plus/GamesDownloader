@@ -17,6 +17,7 @@ property of running an emulator client-side rather than a decision made here.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
@@ -35,9 +36,13 @@ router = APIRouter(prefix="/api/firmware", tags=["firmware"])
 @protected_route(router.get, "", scopes=[Scopes.LIBRARY_ADMIN])
 async def list_cores(request: Request) -> list[dict]:
     """Every core that asks for firmware, with how much of it is on hand."""
+    # The overview needs counts, not hashes. It used to MD5 every stored file
+    # of every core to produce them and then throw the hashes away - and since
+    # five core names alias onto genesis_plus_gx, that set was read five times
+    # per request. The screen reloads after every upload, fetch and delete.
     out: list[dict] = []
     for core in sorted(FIRMWARE):
-        st = firmware_handler.status(core)
+        st = firmware_handler.status(core, with_hash=False)
         out.append(
             {
                 "core": core,
@@ -45,7 +50,11 @@ async def list_cores(request: Request) -> list[dict]:
                 "total": len(st),
                 "present": sum(1 for s in st if s["present"]),
                 "required": sum(1 for s in st if not s["optional"]),
-                "missing_required": len(firmware_handler.missing_required(core)),
+                # Counted from what was just read rather than walking the disk
+                # a second time; missing_required() stays for /{core}/required.
+                "missing_required": sum(
+                    1 for s in st if not s["optional"] and not s["present"]
+                ),
             }
         )
     return out
@@ -56,10 +65,14 @@ async def core_status(request: Request, ejs_core: str) -> dict:
     """What *ejs_core* asks for, and which of those files are stored."""
     if ejs_core not in FIRMWARE:
         raise HTTPException(status_code=404, detail="This core does not ask for firmware")
+    # This one does report hashes, so the operator can check a dump against a
+    # reference set - but reading the files is blocking work and belongs off
+    # the event loop.
+    files = await asyncio.to_thread(firmware_handler.status, ejs_core)
     return {
         "core": ejs_core,
         "libretro_core": LIBRETRO_CORE.get(ejs_core),
-        "files": firmware_handler.status(ejs_core),
+        "files": files,
     }
 
 

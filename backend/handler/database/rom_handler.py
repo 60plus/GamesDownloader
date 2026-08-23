@@ -6,12 +6,37 @@ from typing import Sequence
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from decorators.database import begin_session
 from handler.database.base_handler import DBBaseHandler
 from models.rom import Rom
 from models.rom_platform import RomPlatform
+
+# Everything a scraper writes onto a ROM, and nothing the filesystem scan owns:
+# path, size, hashes and disk-set membership have to survive a metadata reset.
+# This list used to exist twice, verbatim, in the two functions that clear it.
+SCRAPED_METADATA_FIELDS = (
+    "name", "slug", "summary",
+    "developer", "developer_ss_id", "publisher", "publisher_ss_id",
+    "release_year", "genres", "regions", "languages", "tags",
+    "rating", "ss_score", "igdb_rating", "lb_rating", "plugin_ratings",
+    "player_count", "alternative_names", "franchises",
+    "cover_path", "cover_url", "cover_type", "cover_aspect",
+    "background_path", "screenshots",
+    "support_path", "wheel_path", "bezel_path", "steamgrid_path",
+    "video_path", "picto_path",
+    "ss_id", "igdb_id", "launchbox_id",
+    "ss_metadata", "igdb_metadata", "launchbox_metadata",
+    "hltb_id", "hltb_main_s", "hltb_extra_s", "hltb_complete_s",
+)
+
+
+def cleared_metadata_values() -> dict:
+    """The column-to-value map that represents "never scraped"."""
+    values: dict = {f: None for f in SCRAPED_METADATA_FIELDS if hasattr(Rom, f)}
+    values["is_identified"] = False
+    return values
 
 
 class RomPlatformHandler(DBBaseHandler):
@@ -208,10 +233,27 @@ class RomHandler(DBBaseHandler):
 
     @begin_session
     async def get_rated(self, *, session: AsyncSession = None) -> list[Rom]:
-        """Every non-missing ROM that carries at least one rating source."""
+        """Every non-missing ROM that carries at least one rating source.
+
+        Unbounded by design - the blended ranking has to see the whole library,
+        because a SQL sample ordered by one column would miss a game rated only
+        by one provider. What it does not need is the raw provider payloads:
+        `ss_metadata` holds the entire ScreenScraper `jeu` object including its
+        full media array, and on a few thousand rated ROMs those three columns
+        are the overwhelming majority of the bytes moved and deserialised for a
+        rail of twenty-four tiles.
+
+        `plugin_ratings` is deliberately NOT deferred - the blended rating
+        reads it, and steam-deck-compatibility writes it.
+        """
         result = await session.execute(
             select(Rom)
-            .options(selectinload(Rom.platform))
+            .options(
+                selectinload(Rom.platform),
+                defer(Rom.ss_metadata),
+                defer(Rom.igdb_metadata),
+                defer(Rom.launchbox_metadata),
+            )
             .where(
                 ~Rom.missing_from_fs, ~Rom.extra_disk,
                 or_(
@@ -550,44 +592,46 @@ class RomHandler(DBBaseHandler):
         rom = await session.get(Rom, rom_id)
         if rom is None:
             return None
-        _CLEAR = [
-            "name", "slug", "summary", "developer", "publisher",
-            "release_year", "genres", "regions", "languages", "tags",
-            "rating", "ss_score", "igdb_rating", "lb_rating", "plugin_ratings", "player_count", "alternative_names", "franchises",
-            "cover_path", "cover_url", "cover_type", "cover_aspect", "background_path", "screenshots",
-            "support_path", "wheel_path", "bezel_path", "steamgrid_path", "video_path", "picto_path",
-            "ss_id", "igdb_id", "launchbox_id", "ss_metadata", "igdb_metadata",
-        ]
-        for field in _CLEAR:
-            if hasattr(rom, field):
-                setattr(rom, field, None)
-        rom.is_identified = False
+        for field, value in cleared_metadata_values().items():
+            setattr(rom, field, value)
         await session.flush()
         await session.refresh(rom)
         return rom
 
     @begin_session
+    async def clear_metadata_for_platform(
+        self, platform_id: int, *, session: AsyncSession = None,
+    ) -> int:
+        """Clear scraped metadata for every ROM on a platform, in one statement.
+
+        The route used to page the platform with `list_for_platform(limit=9999)`
+        and then call `clear_metadata` once per row, which went wrong in four
+        ways on a large set. It stopped at ten thousand and reported that number
+        as though it were the whole job. It skipped every `extra_disk` and
+        `missing_from_fs` ROM, because that listing query filters those out for
+        the shelf - so the extra disks of a multi-disk title kept the metadata
+        the operator had just asked to be rid of. It opened one transaction per
+        ROM. And because clearing sets `name` to NULL while the default sort is
+        `name_asc`, and MariaDB orders NULLs first, a second click walked the
+        same already-cleared rows again and never reached the rest.
+        """
+        result = await session.execute(
+            update(Rom)
+            .where(Rom.platform_id == platform_id)
+            .values(**cleared_metadata_values())
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount
+
+    @begin_session
     async def clear_all_metadata(self, *, session: AsyncSession = None) -> int:
         """Clear metadata for ALL ROMs across all platforms."""
-        from sqlalchemy import select
-        roms = (await session.execute(select(Rom))).scalars().all()
-        count = 0
-        for rom in roms:
-            _CLEAR = [
-                "name", "slug", "summary", "developer", "publisher",
-                "release_year", "genres", "regions", "languages", "tags",
-                "rating", "ss_score", "igdb_rating", "lb_rating", "plugin_ratings", "player_count", "alternative_names", "franchises",
-                "cover_path", "cover_url", "cover_type", "cover_aspect", "background_path", "screenshots",
-                "support_path", "wheel_path", "bezel_path", "steamgrid_path", "video_path", "picto_path",
-                "ss_id", "igdb_id", "launchbox_id", "ss_metadata", "igdb_metadata",
-            ]
-            for field in _CLEAR:
-                if hasattr(rom, field):
-                    setattr(rom, field, None)
-            rom.is_identified = False
-            count += 1
-        await session.flush()
-        return count
+        result = await session.execute(
+            update(Rom)
+            .values(**cleared_metadata_values())
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount
 
 
 rom_platform_handler = RomPlatformHandler()
