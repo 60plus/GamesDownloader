@@ -30,6 +30,13 @@ from typing import Any, Iterable
 import httpx
 
 from config import PLUGINS_PATH, ROMS_PATH, config_manager
+from utils.rom_names import (
+    PAREN_TAG,
+    REGION_TAGS,
+    is_region_part,
+    region_from_name,
+    strip_region_from_title,
+)
 from handler.database.rom_handler import rom_handler, rom_platform_handler
 from handler.filesystem.rom_scanner import _ROM_EXTENSIONS, scan_roms_path
 from handler.metadata.rom_platform_map import PLATFORM_MAP, slug_from_fs_slug
@@ -53,17 +60,11 @@ logger = logging.getLogger(__name__)
 _CHUNK_WRITE = 256 * 1024
 _DEFAULT_MAX_ROM_BYTES = 64 * 1024 ** 3
 
-# Region tags parsed from a No-Intro filename, kept out of the displayed title.
-_REGION_TAGS = {
-    "usa": "USA", "us": "USA", "u": "USA",
-    "europe": "Europe", "eu": "Europe", "e": "Europe",
-    "japan": "Japan", "jp": "Japan", "jpn": "Japan", "j": "Japan",
-    "world": "World", "w": "World",
-    "korea": "Korea", "china": "China", "brazil": "Brazil",
-    "australia": "Australia", "spain": "Spain", "france": "France",
-    "germany": "Germany", "italy": "Italy",
-}
-_PAREN_TAG = re.compile(r"\s*\(([^()]*)\)")
+# Region parsing moved to utils.rom_names so the library scanner can reach it
+# too. Kept under the old private names here: the call sites below and the
+# tests both address them that way.
+_REGION_TAGS = REGION_TAGS
+_PAREN_TAG = PAREN_TAG
 _BAD_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 _job_seq = itertools.count(1)
@@ -302,37 +303,9 @@ async def refresh_source(source_id: str, scope: str = "listings") -> dict[str, A
     return {"refreshed": bool(done)}
 
 
-def _region_from_name(filename: str) -> str | None:
-    """Best-effort region parsed from a No-Intro filename's parenthesised tags."""
-    for tag in _PAREN_TAG.findall(filename or ""):
-        for part in re.split(r"[,/]", tag):
-            key = part.strip().lower()
-            if key in _REGION_TAGS:
-                return _REGION_TAGS[key]
-    return None
-
-
-def _is_region_part(part: str) -> bool:
-    """Whether one comma-separated part of a tag is nothing but region names."""
-    bits = [b.strip().lower() for b in part.split("/") if b.strip()]
-    return bool(bits) and all(b in _REGION_TAGS for b in bits)
-
-
-def _strip_region_from_title(title: str) -> str:
-    """Drop region tags from a display title, keep the name and everything else.
-
-    Only the region parts of a tag go, not the whole parenthesis: an arcade set
-    is described as "DoDonPachi II - Bee Storm (World, ver. 102)", where the
-    region belongs in its own column but the version is the only thing telling
-    that row apart from its siblings. Dropping the lot collapsed a dozen sets
-    into a dozen identical rows.
-    """
-    def _keep(m: re.Match) -> str:
-        rest = [p.strip() for p in m.group(1).split(",")
-                if p.strip() and not _is_region_part(p)]
-        return f" ({', '.join(rest)})" if rest else ""
-    cleaned = _PAREN_TAG.sub(_keep, title or "")
-    return re.sub(r"\s{2,}", " ", cleaned).strip() or (title or "")
+_region_from_name = region_from_name
+_is_region_part = is_region_part
+_strip_region_from_title = strip_region_from_title
 
 
 async def _owned_lookup(fs_slug: str, items: list[dict[str, Any]]) -> dict[str, set[str]]:

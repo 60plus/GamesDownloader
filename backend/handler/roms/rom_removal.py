@@ -120,8 +120,16 @@ def delete_save_files(save_states, saves) -> int:
     return removed
 
 
-def delete_rom_file(rom) -> bool:
-    """Remove the ROM itself, and any directory it leaves empty behind it."""
+def delete_rom_file(rom, *, spoken_for: set[str] = frozenset()) -> bool:
+    """Remove the ROM itself, and any directory it leaves empty behind it.
+
+    *spoken_for* names files another sheet still points at. A track that became
+    a row of its own is a member of its sheet's set and is deleted with it, so
+    without this the file went whichever of the two sheets naming it was deleted
+    first - and the survivor was left naming a file that is not there.
+    """
+    if rom.fs_name.lower() in spoken_for:
+        return False
     target = _within(os.path.join(rom.fs_path, rom.fs_name), ROMS_PATH)
     if not target or not target.is_file():
         return False
@@ -129,6 +137,99 @@ def delete_rom_file(rom) -> bool:
         return False
     _prune_empty(target.parent, ROMS_PATH)
     return True
+
+
+def spoken_for_elsewhere(members) -> set[str]:
+    """Lower-cased names of files some *other* sheet in the same directory names.
+
+    Two rips of one game can sit side by side and name the same data file - two
+    regional versions of a .cue, or a .gdi and a .cue kept together. The scanner
+    hands that file to whichever sheet sorts first and the other one keeps no
+    claim on it, which is a reasonable way to decide what the library shows and
+    a catastrophic way to decide what a delete may take: the file is the only
+    copy and the sheet left holding nothing is unplayable ever after.
+
+    So deletion asks a different question from scanning. Not "whose is it" but
+    "is anybody else still pointing at it" - and if anybody is, it stays,
+    whichever way the scanner happened to rule.
+
+    Sheets belonging to the set being deleted are not "anybody else". They are
+    going too.
+    """
+    from handler.filesystem.rom_scanner import SHEET_EXTENSIONS, tracks_referenced_by
+
+    ours: dict[Path, set[str]] = {}
+    for member in members:
+        ours.setdefault(Path(member.fs_path), set()).add(member.fs_name.lower())
+
+    claimed: set[str] = set()
+    for directory, mine in ours.items():
+        try:
+            beside = sorted(directory.iterdir())
+        except OSError:
+            continue
+        for entry in beside:
+            if entry.name.lower() in mine:
+                continue
+            if entry.suffix.lower() not in SHEET_EXTENSIONS:
+                continue
+            claimed |= tracks_referenced_by(entry)
+    return claimed
+
+
+def unrowed_tracks(members) -> list[Path]:
+    """Data files a sheet names that never became library rows of their own.
+
+    A Dreamcast rip is a .gdi beside track01.bin and track02.raw, and .raw is
+    not an extension the scanner claims - too generic a name to treat as a ROM
+    on sight. That is the right call for the library and the wrong one for
+    deletion: nothing else points at those bytes once the sheet is gone, so
+    without this they stay on disk forever with no entry to reach them by.
+
+    Read while the sheets are still there. Afterwards there is nothing left to
+    say which files belonged to which disc.
+
+    Anything another sheet in the directory still names is left alone. The name
+    of this function is a promise the caller has to finish keeping: `known` is
+    built from the set being deleted and from nothing else, so a file holding
+    somebody else's library row still reads as unrowed here. Callers go through
+    removable_tracks in the router, which asks the database and drops those.
+    """
+    from handler.filesystem.rom_scanner import SHEET_EXTENSIONS, tracks_referenced_by
+
+    known = {m.fs_name.lower() for m in members}
+    known |= spoken_for_elsewhere(members)
+    found: list[Path] = []
+    for member in members:
+        if Path(member.fs_name).suffix.lower() not in SHEET_EXTENSIONS:
+            continue
+        directory = Path(member.fs_path)
+        named = tracks_referenced_by(directory / member.fs_name)
+        if not named:
+            continue
+        try:
+            beside = sorted(directory.iterdir())
+        except OSError:
+            continue
+        for entry in beside:
+            if entry.name.lower() in named and entry.name.lower() not in known:
+                known.add(entry.name.lower())
+                found.append(entry)
+    return found
+
+
+def delete_paths(paths) -> int:
+    """Remove files already decided on, with the same guard as everything else."""
+    removed = 0
+    touched: set[Path] = set()
+    for path in paths:
+        target = _within(str(path), ROMS_PATH)
+        if target and target.is_file() and _unlink(target):
+            removed += 1
+            touched.add(target.parent)
+    for directory in touched:
+        _prune_empty(directory, ROMS_PATH)
+    return removed
 
 
 def delete_media_dir(platform_slug: str, rom_id: int) -> bool:

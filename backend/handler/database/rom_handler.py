@@ -22,7 +22,11 @@ SCRAPED_METADATA_FIELDS = (
     "release_year", "genres", "regions", "languages", "tags",
     "rating", "ss_score", "igdb_rating", "lb_rating", "plugin_ratings",
     "player_count", "alternative_names", "franchises",
-    "cover_path", "cover_url", "cover_type", "cover_aspect",
+    "cover_path", "cover_url", "cover_type", "cover_aspect", "cover_source",
+    # Where every other picture came from. Cleared with the rest, which is
+    # the way back for somebody who wants a scrape to replace what they
+    # chose: the paths go with it, so the next pass fetches and records.
+    "media_source",
     "background_path", "screenshots",
     "support_path", "wheel_path", "bezel_path", "steamgrid_path",
     "video_path", "picto_path",
@@ -176,7 +180,12 @@ _METADATA_FIELDS: frozenset[str] = frozenset({
     "name", "slug", "summary", "developer", "publisher",
     "release_year", "genres", "regions", "languages", "tags",
     "rating", "ss_score", "igdb_rating", "lb_rating", "plugin_ratings", "player_count", "alternative_names", "franchises",
-    "cover_path", "cover_url", "cover_type", "cover_aspect", "background_path", "screenshots",
+    "cover_path", "cover_url", "cover_type", "cover_aspect", "cover_source",
+    # Where every other picture came from. Cleared with the rest, which is
+    # the way back for somebody who wants a scrape to replace what they
+    # chose: the paths go with it, so the next pass fetches and records.
+    "media_source",
+    "background_path", "screenshots",
     "support_path", "wheel_path", "bezel_path", "steamgrid_path", "video_path", "picto_path",
     "ss_id", "igdb_id", "launchbox_id", "ss_metadata", "igdb_metadata",
     "developer_ss_id", "publisher_ss_id",
@@ -433,6 +442,49 @@ class RomHandler(DBBaseHandler):
         )
 
     @begin_session
+    async def clear_container_hashes(self, platform_id: int, fs_name: str, *,
+                                     drop_sha1: bool = False,
+                                     session: AsyncSession = None) -> None:
+        """Null the CRC and MD5 on a row whose format has no container hash worth keeping.
+
+        `upsert` only writes a hash when it has one, which is the right guard
+        everywhere else: a re-hash that failed must not wipe good values. It
+        also means an empty result cannot clear a stale one, and for a CHD that
+        matters. A CHD hashed under the old scheme carries digests of its
+        compressed container, and leaving them in place is worse than having
+        none - the scraper is handed all three, and a CRC that belongs to a
+        container can still collide with some other entry.
+
+        *drop_sha1* is for the case where nothing replaces them: a CHD older
+        than v5 carries no source hash at all, so its stored SHA-1 is a digest
+        of the container too and has to go with the rest.
+        """
+        values: dict = {"crc_hash": None, "md5_hash": None}
+        if drop_sha1:
+            values["sha1_hash"] = None
+        await session.execute(
+            update(Rom)
+            .where(Rom.platform_id == platform_id, Rom.fs_name == fs_name)
+            .values(**values)
+        )
+
+    @begin_session
+    async def set_hashes(self, rom_id: int, crc: str, md5: str, sha1: str, *,
+                         session: AsyncSession = None) -> None:
+        """Write the three digests of one ROM, computed on request.
+
+        Unlike `upsert`, this writes an empty value as NULL: it is called when
+        somebody asked for the hashes of a specific file, so "nothing came
+        back" is an answer worth recording rather than a partial result that
+        must not overwrite good values.
+        """
+        await session.execute(
+            update(Rom).where(Rom.id == rom_id).values(
+                crc_hash=crc or None, md5_hash=md5 or None, sha1_hash=sha1 or None
+            )
+        )
+
+    @begin_session
     async def mark_present(self, rom_id: int, *, session: AsyncSession = None) -> None:
         await session.execute(
             update(Rom).where(Rom.id == rom_id).values(missing_from_fs=False)
@@ -462,11 +514,11 @@ class RomHandler(DBBaseHandler):
     async def apply_disk_groups(
         self,
         platform_id: int,
-        assignments: dict[str, tuple[str | None, int | None, bool]],
+        assignments: dict[str, tuple[str | None, int | None, bool, str | None]],
         *,
         session: AsyncSession = None,
     ) -> None:
-        """Record which ROMs are disks of one title, for a whole platform.
+        """Record which ROMs belong with which, for a whole platform.
 
         Written after the directory walk rather than during it, because whether
         a file is one of a set depends on what else is beside it: the first disk
@@ -476,11 +528,12 @@ class RomHandler(DBBaseHandler):
         no set - clearing their fields is what lets a title stop being a set
         when its other disks are deleted.
         """
-        for fs_name, (group, number, extra) in assignments.items():
+        for fs_name, (group, number, extra, track_of) in assignments.items():
             await session.execute(
                 update(Rom)
                 .where(Rom.platform_id == platform_id, Rom.fs_name == fs_name)
-                .values(disk_group=group, disk_number=number, extra_disk=extra)
+                .values(disk_group=group, disk_number=number, extra_disk=extra,
+                        track_of=track_of)
             )
 
     @begin_session
@@ -495,9 +548,17 @@ class RomHandler(DBBaseHandler):
         crc_hash: str = "",
         md5_hash: str = "",
         sha1_hash: str = "",
+        region_hint: str | None = None,
         *,
         session: AsyncSession = None,
     ) -> Rom:
+        """Create or update a ROM row from what the filesystem says about it.
+
+        `region_hint` is what the filename claims, and it is only ever written
+        into an empty column. Anything already there came from a scraper or from
+        somebody editing it by hand, and a guess read off a filename has no
+        business overruling either.
+        """
         existing = await session.execute(
             select(Rom).where(
                 Rom.platform_id == platform_id,
@@ -516,12 +577,15 @@ class RomHandler(DBBaseHandler):
                 crc_hash=crc_hash or None,
                 md5_hash=md5_hash or None,
                 sha1_hash=sha1_hash or None,
+                regions=[region_hint] if region_hint else None,
                 missing_from_fs=False,
             )
             session.add(rom)
             await session.flush()
             await session.refresh(rom)
         else:
+            if region_hint and not rom.regions:
+                rom.regions = [region_hint]
             rom.fs_size_bytes = fs_size_bytes
             rom.fs_path = fs_path
             rom.missing_from_fs = False
@@ -553,28 +617,96 @@ class RomHandler(DBBaseHandler):
         return rom
 
 
+    async def _sheet_of(self, rom: Rom, session: AsyncSession) -> Rom:
+        """The row a track belongs to, or the row itself.
+
+        Acting on a track file means acting on its disc. Nothing in the
+        interface offers a track, but an id is an id and a route reached with
+        one should do the sensible thing rather than delete half a disc.
+        """
+        if not rom.track_of:
+            return rom
+        found = await session.execute(
+            select(Rom).where(
+                Rom.platform_id == rom.platform_id, Rom.fs_name == rom.track_of
+            )
+        )
+        return found.scalars().first() or rom
+
+    @begin_session
+    async def fs_names_with_rows(
+        self, platform_id: int, fs_names, *, session: AsyncSession = None
+    ) -> set[str]:
+        """Which of *fs_names* are library entries of this platform, lowercased.
+
+        Asked before a delete takes a data file it believes nothing points at.
+        The set being deleted knows its own members and nothing else, so a file
+        that is somebody else's entry looks exactly like an orphan from there.
+        """
+        names = [n for n in fs_names if n]
+        if not names:
+            return set()
+        result = await session.execute(
+            select(Rom.fs_name).where(Rom.platform_id == platform_id, Rom.fs_name.in_(names))
+        )
+        return {name.lower() for name in result.scalars().all()}
+
+    async def _tracks_of(self, platform_id: int, fs_names, session: AsyncSession) -> list[Rom]:
+        if not fs_names:
+            return []
+        result = await session.execute(
+            select(Rom)
+            .where(Rom.platform_id == platform_id, Rom.track_of.in_(list(fs_names)))
+            .order_by(Rom.fs_name)
+        )
+        return list(result.scalars().all())
+
     @begin_session
     async def disk_set(self, rom_id: int, *, session: AsyncSession = None) -> list[Rom]:
-        """Every ROM belonging to the same title, in disk order.
+        """Every ROM belonging to the same title, disks first and in order.
 
         A title that arrived on several floppies is several rows, and they only
         mean anything together: one of them alone cannot be started and cannot
         be grouped back. Callers that act on a ROM act on this list.
 
-        A ROM that is not part of a set answers with itself, so the caller has
+        The track files of any disc kept as a sheet come after the disks. They
+        are not disks and no caller should offer them as one, which is what
+        `track_of` says - but deleting a sheet and leaving its data behind is
+        how a library ends up with orphaned gigabytes nothing can reach.
+
+        A ROM that is a title on its own answers with itself, so the caller has
         one shape to handle rather than two.
         """
         rom = await session.get(Rom, rom_id)
         if rom is None:
             return []
-        if not rom.disk_group:
-            return [rom]
-        result = await session.execute(
-            select(Rom)
-            .where(Rom.platform_id == rom.platform_id, Rom.disk_group == rom.disk_group)
-            .order_by(Rom.disk_number, Rom.fs_name)
+        rom = await self._sheet_of(rom, session)
+        if rom.disk_group:
+            result = await session.execute(
+                select(Rom)
+                .where(Rom.platform_id == rom.platform_id, Rom.disk_group == rom.disk_group)
+                .order_by(Rom.disk_number, Rom.fs_name)
+            )
+            disks = list(result.scalars().all())
+        else:
+            disks = [rom]
+        return disks + await self._tracks_of(
+            rom.platform_id, [d.fs_name for d in disks], session
         )
-        return list(result.scalars().all())
+
+    @begin_session
+    async def rom_with_tracks(self, rom_id: int, *, session: AsyncSession = None) -> list[Rom]:
+        """One ROM and the track files it is the sheet for.
+
+        Narrower than `disk_set` on purpose. Asking for disc 3 of a title means
+        disc 3, not the whole box - but disc 3 as a sheet alone is two
+        kilobytes of text naming files the download would not include.
+        """
+        rom = await session.get(Rom, rom_id)
+        if rom is None:
+            return []
+        rom = await self._sheet_of(rom, session)
+        return [rom] + await self._tracks_of(rom.platform_id, [rom.fs_name], session)
 
     @begin_session
     async def delete(self, rom_id: int, *, session: AsyncSession = None) -> bool:

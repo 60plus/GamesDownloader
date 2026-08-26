@@ -16,6 +16,11 @@ class Rom(Base):
     __table_args__ = (
         # Composite index - most ROM list queries filter by platform AND exclude missing files
         Index("ix_roms_platform_missing", "platform_id", "missing_from_fs"),
+        # A disc kept as a sheet asks which files are its tracks on every
+        # download and every deletion, and that is a lookup by the sheet's name
+        # within one platform. Spelled the same way in the startup migration, so
+        # a database that was migrated and one created fresh end up identical.
+        Index("ix_roms_track_of", "platform_id", "track_of"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -77,6 +82,14 @@ class Rom(Base):
     cover_url:       Mapped[str | None] = mapped_column(String(1024), nullable=True)  # original remote source (fallback for notifications when public_base_url unset)
     cover_type:      Mapped[str | None] = mapped_column(String(32),  nullable=True)  # box-2D, box-3D, etc.
     cover_aspect:    Mapped[str | None] = mapped_column(String(10),  nullable=True)  # detected from image, e.g. "3/4"
+    # Where the cover came from: "manual" for one a person uploaded or chose by
+    # URL, "scrape" for one a provider gave us. A forced re-scrape replaces the
+    # second and keeps the first, and until this column existed it had to guess
+    # from an empty cover_url - which is also what a ScreenScraper cover leaves
+    # behind, because those URLs carry credentials and are never stored. So
+    # every ScreenScraper cover looked hand-picked and forcing could not touch
+    # any of them, which is most of a ROM library.
+    cover_source:    Mapped[str | None] = mapped_column(String(16),  nullable=True)
     background_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     screenshots:     Mapped[list | None] = mapped_column(JSON,        nullable=True)
     support_path:    Mapped[str | None] = mapped_column(String(512), nullable=True)  # cartridge/disc art
@@ -85,6 +98,24 @@ class Rom(Base):
     steamgrid_path:  Mapped[str | None] = mapped_column(String(512), nullable=True)  # Steam Grid banner
     video_path:      Mapped[str | None] = mapped_column(String(512), nullable=True)  # video file
     picto_path:      Mapped[str | None] = mapped_column(String(512), nullable=True)  # SS pictoliste icon
+
+    # Where every other picture came from, by slot: {"background": "manual",
+    # "wheel": "scrape"}. The cover has a column of its own above, from when it
+    # was the only slot that could tell; one function reads both, so there is
+    # still one place that decides.
+    #
+    # A slot missing from here means we do not know, and not knowing means
+    # leaving it alone. That is not the same default the cover uses: the cover
+    # column was filled in for every existing row by a migration, so a null
+    # there is a genuine "no cover", while this column starts empty on every
+    # library that already exists. Reading an absence as "a provider gave us
+    # this" would have a forced re-scrape delete every background, wheel and
+    # bezel anybody had ever uploaded by hand.
+    #
+    # So an existing library behaves as it always did until its metadata is
+    # cleared, and a slot the scrape has written since is refreshed by a forced
+    # pass like the cover is.
+    media_source:    Mapped[dict | None] = mapped_column(JSON,       nullable=True)
 
     # ── Hashes ────────────────────────────────────────────────────────────────
     crc_hash:  Mapped[str | None] = mapped_column(String(16),  nullable=True)
@@ -107,6 +138,15 @@ class Rom(Base):
     disk_group:  Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     disk_number: Mapped[int | None] = mapped_column(nullable=True)
     extra_disk:  Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # ── Disc tracks ───────────────────────────────────────────────────────────
+    # A disc kept as a sheet plus its data files: the fs_name of the sheet this
+    # file is a track of, and NULL for everything else. It is deliberately not
+    # the disk fields above. A track is not a disk - nobody picks one, it has no
+    # number and it must never appear in a disk selector - but it does have to
+    # travel with its sheet when the disc is downloaded or deleted, or the sheet
+    # arrives as two useless kilobytes and the data is orphaned on disk.
+    track_of:    Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # What an Amiga game calls the disk it saves to. Titles ask for one by name
     # and refuse anything else - Legion wants "ARCHIWUM" and says so on its
