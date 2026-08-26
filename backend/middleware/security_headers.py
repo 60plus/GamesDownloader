@@ -13,10 +13,13 @@ Adds a minimal set of defensive HTTP headers to every response:
       Sends the full URL only to same-origin targets; cross-origin requests
       receive just the origin (no path/query leakage).
 
-  X-XSS-Protection: 1; mode=block
-      Legacy IE/Chrome XSS filter - tells old browsers to block rather than
-      sanitise a detected reflection attack.  Modern browsers ignore it but
-      it costs nothing to send.
+  X-XSS-Protection is deliberately NOT sent.
+      The header is withdrawn. Every browser that still honours it does so
+      with an auditor that was itself exploitable: it could be steered into
+      suppressing legitimate script, and its filtering introduced side
+      channels that leaked cross-origin content. "Costs nothing to send" was
+      the old reason for keeping it, and it was wrong. The Content-Security
+      Policy below is what actually stops injected script here.
 
   Content-Security-Policy
       script-src is locked to 'self' (no 'unsafe-inline'/'unsafe-eval') so an
@@ -47,7 +50,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        response.headers.setdefault("X-XSS-Protection", "1; mode=block")
         # HSTS: only when the real client connection is HTTPS. Uvicorn runs
         # without --proxy-headers, so TLS-terminating proxies are detected via
         # X-Forwarded-Proto. Plain-HTTP deployments never receive this header.

@@ -16,6 +16,7 @@ from handler.database.users_handler import UsersHandler
 from models.user import User
 from schemas.user import PasswordChange, UserCreate, UserResponse, UserUpdate
 from utils.async_utils import fire_task
+from utils.uploads import read_upload_capped
 
 router = APIRouter(prefix="/users", tags=["users"])
 _users_db = UsersHandler()
@@ -112,9 +113,7 @@ async def upload_avatar(request: Request, file: UploadFile = File(...)) -> dict:
     ext = Path(file.filename or "avatar.png").suffix.lower()
     if ext not in _ALLOWED_EXTS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported format. Allowed: {', '.join(_ALLOWED_EXTS)}")
-    content = await file.read()
-    if len(content) > _MAX_AVATAR_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Avatar file too large (max 5 MB)")
+    content = await read_upload_capped(file, _MAX_AVATAR_BYTES, what="Avatar file")
     _AVATARS_DIR.mkdir(parents=True, exist_ok=True)
     dest = _AVATARS_DIR / f"{user.id}{ext}"
     # Remove old avatar files with different extension

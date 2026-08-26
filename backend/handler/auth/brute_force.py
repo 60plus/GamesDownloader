@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import time
 
 import redis.asyncio as aioredis
 
@@ -131,6 +132,36 @@ async def _get_config() -> dict:
     }
 
 
+_last_redis_complaint = 0.0
+
+
+def _carry_on_without_redis(what: str, exc: Exception) -> None:
+    """Say that Redis is unreachable, at most once a minute, and continue.
+
+    The policy, written down because it was previously nowhere: when Redis is
+    unreachable the brute-force counters go away and the login proceeds.
+
+    The alternative reads as the safe one and is not. These calls had no error
+    handling at all, so a Redis that was merely restarting turned the login
+    endpoint into a 500 and locked the owner out of their own server, which is
+    a self-inflicted outage in exchange for a protection that is not the only
+    one: passwords are still verified with bcrypt, which is deliberately slow,
+    and an attacker gains nothing here they could not have had by waiting.
+
+    Revocation is a different matter and is not affected. That check already
+    falls back to the database, which is authoritative, so a revoked token stays
+    revoked whatever Redis is doing.
+    """
+    global _last_redis_complaint
+    now = time.monotonic()
+    if now - _last_redis_complaint > 60:
+        _last_redis_complaint = now
+        logger.error(
+            "Redis unreachable, so %s is not running: brute-force protection is "
+            "off until it returns. %s: %s", what, type(exc).__name__, exc,
+        )
+
+
 async def check_ip(request) -> tuple[bool, int]:
     """Return (is_blocked, remaining_seconds). Call before processing login."""
     cfg = await _get_config()
@@ -139,8 +170,12 @@ async def check_ip(request) -> tuple[bool, int]:
     ip = _client_ip(request, cfg["trusted_proxies"])
     if ip in cfg["whitelist"] or ip == "127.0.0.1":
         return False, 0
-    r = _get_redis()
-    ttl = await r.ttl(f"{_BAN_PREFIX}{ip}")
+    try:
+        r = _get_redis()
+        ttl = await r.ttl(f"{_BAN_PREFIX}{ip}")
+    except Exception as exc:
+        _carry_on_without_redis("the ban check", exc)
+        return False, 0
     if ttl > 0:
         return True, ttl
     return False, 0
@@ -154,9 +189,13 @@ async def record_failure(request) -> None:
     ip = _client_ip(request, cfg["trusted_proxies"])
     if ip in cfg["whitelist"] or ip == "127.0.0.1":
         return
-    r = _get_redis()
-    att_key = f"{_ATT_PREFIX}{ip}"
-    count = await r.eval(_LUA_INCR_EXPIRE, 1, att_key, cfg["window_seconds"])
+    try:
+        r = _get_redis()
+        att_key = f"{_ATT_PREFIX}{ip}"
+        count = await r.eval(_LUA_INCR_EXPIRE, 1, att_key, cfg["window_seconds"])
+    except Exception as exc:
+        _carry_on_without_redis("attempt counting", exc)
+        return
     if count >= cfg["max_attempts"]:
         await r.setex(f"{_BAN_PREFIX}{ip}", cfg["ban_seconds"], "1")
         await r.delete(att_key)
@@ -172,8 +211,12 @@ async def record_success(request) -> None:
     if not cfg["enabled"]:
         return
     ip = _client_ip(request, cfg["trusted_proxies"])
-    r = _get_redis()
-    await r.delete(f"{_ATT_PREFIX}{ip}")
+    try:
+        r = _get_redis()
+        await r.delete(f"{_ATT_PREFIX}{ip}")
+    except Exception as exc:
+        # Nothing to do about it: the counter expires on its own anyway.
+        _carry_on_without_redis("clearing the attempt counter", exc)
 
 
 async def unban_ip(ip: str) -> bool:

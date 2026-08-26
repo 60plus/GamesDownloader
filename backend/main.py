@@ -32,6 +32,7 @@ from config import DEBUG, DEV_HOST, DEV_PORT, GD_VERSION, RESOURCES_PATH, SAVES_
 from handler.auth.middleware import AuthMiddleware
 from middleware.ip_allowlist import IpAllowlistMiddleware
 from middleware.etag import ETagMiddleware
+from middleware.request_size import RequestSizeLimitMiddleware
 from middleware.security_headers import SecurityHeadersMiddleware
 from handler.auth.passwords import hash_password
 from handler.database.session import async_engine, async_session_factory
@@ -164,6 +165,15 @@ async def _init_db() -> None:
         ("roms",           "sha1_hash",         "VARCHAR(40) NULL"),
         ("roms",           "cover_type",        "VARCHAR(32) NULL"),
         ("roms",           "cover_aspect",      "VARCHAR(10) NULL"),
+        # "manual" or "scrape". Backfilled once, below.
+        ("roms",           "cover_source",      "VARCHAR(16) NULL"),
+        # Deliberately not backfilled. An empty map reads as "we do not know
+        # where any of these came from", and not knowing leaves them alone -
+        # which is what an existing library already did, so nothing changes for
+        # one until its metadata is cleared. Filling it in with "scrape" would
+        # have the first forced pass delete every background, wheel and bezel
+        # anybody had uploaded by hand.
+        ("roms",           "media_source",      "JSON NULL"),
         ("roms",           "cover_url",         "VARCHAR(1024) NULL"),
         ("roms",           "developer_ss_id",   "INT NULL"),
         ("roms",           "publisher_ss_id",   "INT NULL"),
@@ -178,6 +188,11 @@ async def _init_db() -> None:
         ("roms",           "disk_group",        "VARCHAR(255) NULL"),
         ("roms",           "disk_number",       "INT NULL"),
         ("roms",           "extra_disk",        "TINYINT(1) NOT NULL DEFAULT 0"),
+        # A disc kept as a sheet plus its data files: which sheet this file is a
+        # track of. Not one of the disk fields above, because a track is not a
+        # disk - it is never offered as something to boot, it only has to travel
+        # with the sheet. The next scan fills it in for what is already there.
+        ("roms",           "track_of",          "VARCHAR(255) NULL"),
         ("roms",           "save_disk_name",    "VARCHAR(30) NULL"),
         ("roms",           "hltb_id",           "INT NULL"),
         ("roms",           "hltb_main_s",        "INT NULL"),
@@ -288,6 +303,11 @@ async def _init_db() -> None:
         # backfill, so an archive uploaded earlier reads as a plain file until it
         # is repackaged.
         ("library_files",   "is_archive",           "TINYINT(1) NOT NULL DEFAULT 0"),
+        # Remembered provider ids, so a re-scrape asks for the same game rather
+        # than searching by title again and possibly finding a different one.
+        ("library_games",  "gog_product_id",       "INT NULL"),
+        ("library_games",  "steam_appid",          "INT NULL"),
+        ("library_games",  "igdb_id",              "INT NULL"),
     ]
     _added_columns: set[tuple[str, str]] = set()
     async with async_engine.begin() as conn:
@@ -340,6 +360,42 @@ async def _init_db() -> None:
                 logger.info("Migration: stamped catalogue origin onto downloaded games")
             except Exception as exc:
                 logger.warning("Migration: catalogue-origin backfill failed: %s", exc)
+
+        # Say where each existing cover came from, so a forced re-scrape can
+        # replace a scraped one and leave a chosen one alone. Two signals are
+        # trustworthy and the rest is guesswork, so the guess is the cautious
+        # one: a cover we cannot place is treated as somebody's choice. Getting
+        # that wrong costs a forced re-scrape that declines to replace a picture
+        # - and the other way round costs a picture that cannot be got back.
+        if ("roms", "cover_source") in _added_columns:
+            for sql, what in (
+                # A remembered remote source only ever comes from a scrape.
+                ("UPDATE `roms` SET `cover_source` = 'scrape' "
+                 "WHERE `cover_source` IS NULL AND `cover_url` IS NOT NULL", "by source url"),
+                # A rule reading cover_type used to stand here, on the grounds
+                # that box-2D and box-3D are written by the scrape and by
+                # nothing else. True, and not the question: the upload route
+                # never wrote one and never cleared one either, so a ROM scraped
+                # once and later given a cover by hand still carried the word
+                # for a picture that was gone, and came out of the migration
+                # labelled as the provider's. On the library this was written
+                # against, that rule claimed twenty-four of thirty covers.
+                #
+                # It clears cover_type now, which makes the trace mean what it
+                # says for anything set from here on. Older rows have no trace
+                # left to read, so they take the cautious answer below: guessing
+                # "chosen" costs a forced re-scrape that declines to replace a
+                # picture, and clearing a ROM's metadata resets this for anyone
+                # who wants the other answer. Guessing the other way costs a
+                # picture that cannot be got back.
+                ("UPDATE `roms` SET `cover_source` = 'manual' "
+                 "WHERE `cover_source` IS NULL AND `cover_path` IS NOT NULL", "assumed chosen"),
+            ):
+                try:
+                    result = await conn.execute(text(sql))
+                    logger.info("Migration: cover origin %s - %s row(s)", what, result.rowcount)
+                except Exception as exc:
+                    logger.warning("Migration: cover-origin backfill (%s) failed: %s", what, exc)
 
     # ── Relocate saves out of the public resources mount ──────────────────────
     # RESOURCES_PATH is served as static files with no authentication, and save
@@ -475,6 +531,12 @@ async def _init_db() -> None:
         # another in the same platform.
         ("ix_roms_platform_fs_name", "roms",
          "CREATE INDEX ix_roms_platform_fs_name ON roms (platform_id, fs_name(255))"),
+        # roms: a disc kept as a sheet asks which files are its tracks on every
+        # download and every deletion, and the answer is a lookup by the sheet's
+        # name. Declared on the model, so a fresh database has it either way -
+        # this is what gives it to a database that was migrated instead.
+        ("ix_roms_track_of",         "roms",
+         "CREATE INDEX ix_roms_track_of ON roms (platform_id, track_of)"),
         # download_jobs: the dashboard's live panel asks for the unfinished ones
         # every 1.5 s while a tab is open, and nothing prunes the finished rows,
         # so this table only grows.
@@ -621,6 +683,61 @@ async def _init_db() -> None:
                 logger.info("Migration: nulled %d remote avatar_path value(s) - upload-only policy", count)
         except Exception as exc:
             logger.warning("Avatar path migration failed: %s", exc)
+
+    # ── Encrypt plugin credentials written before there was encryption ────────
+    # A plugin's password-typed settings are stored encrypted now, but rows
+    # saved by an earlier version still hold the archive.org password or the
+    # GitHub token in the clear, and a plugin config is not something an admin
+    # revisits. Left alone they would stay readable in every backup of this
+    # database for as long as the plugin is installed. The pass is idempotent
+    # (an encrypted value is recognised as such) so it needs no guard flag, and
+    # it re-runs harmlessly on every boot.
+    # ── Drop plugin ratings that were never numbers ───────────────────────────
+    # A provider whose `rating` field means something else - TheGamesDB sends
+    # the age rating, "E - Everyone" - had that value stored as a score. The
+    # scrape refuses it now, but rows written before that keep it, and it shows
+    # on the game's page as "NaN/10" under the provider's name. One pass,
+    # idempotent, and it only writes the rows that actually hold one.
+    try:
+        import json as _json
+
+        from handler.metadata.rom_scrape_handler import clean_plugin_ratings
+
+        async with async_engine.begin() as conn:
+            _rows = (await conn.execute(text(
+                "SELECT id, plugin_ratings FROM roms WHERE plugin_ratings IS NOT NULL"
+            ))).all()
+            _fixed = 0
+            for _rid, _raw in _rows:
+                try:
+                    _stored = _raw if isinstance(_raw, dict) else _json.loads(_raw)
+                except (TypeError, ValueError):
+                    continue
+                _clean = clean_plugin_ratings(_stored)
+                if _clean == _stored:
+                    continue
+                await conn.execute(
+                    text("UPDATE roms SET plugin_ratings = :v WHERE id = :i"),
+                    {"v": _json.dumps(_clean) if _clean else None, "i": _rid},
+                )
+                _fixed += 1
+            if _fixed:
+                logger.info(
+                    "Migration: dropped a rating that was not a number from %d "
+                    "ROM(s)", _fixed,
+                )
+    except Exception as exc:
+        logger.warning("Plugin rating cleanup failed: %s", exc)
+
+    try:
+        from plugins.config_crypto import encrypt_stored_secrets
+
+        for _pid in await encrypt_stored_secrets(async_engine):
+            logger.info(
+                "Migration: encrypted the stored credentials of plugin '%s'", _pid
+            )
+    except Exception as exc:
+        logger.warning("Plugin credential encryption pass failed: %s", exc)
 
     # ── Library kind rename: collection → custom_lib ──────────────────────────
     # User-created separate libraries were historically stored as kind
@@ -1062,6 +1179,11 @@ class SetupGuardMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SetupGuardMiddleware)
 
+# Body size ceiling. Added last so it is outermost and runs first: an oversized
+# body should cost us nothing, and deciding that before authenticating is the
+# same order a reverse proxy would use.
+app.add_middleware(RequestSizeLimitMiddleware)
+
 # ── Auth + Users ──────────────────────────────────────────────────────────────
 from endpoints.auth import router as auth_router
 from endpoints.users import router as users_router
@@ -1186,11 +1308,38 @@ async def health_check() -> dict:
 # outside RESOURCES_PATH entirely, but an install whose compose has no volume for
 # the new directory keeps them here, so the mount refuses their paths itself
 # rather than trusting that they moved.
+#: What this mount will hand back as something a browser may render in place.
+#: Everything else is served as an attachment of unknown type, whatever its
+#: name says.
+#:
+#: The upload route refuses an SVG, which shuts one door. This shuts the rest of
+#: them at once: a metadata backup is an archive supplied by whoever restores it
+#: and its members are checked for where they land, never for what they are, so
+#: a hand-built one can put a .svg or an .html into this tree. Served from our
+#: own origin as image/svg+xml or text/html, either is a script that runs as us.
+_INLINE_RESOURCE_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
+    ".ico": "image/x-icon", ".mp4": "video/mp4", ".webm": "video/webm",
+}
+
+
 class _ResourcesStatic(StaticFiles):
     async def get_response(self, path: str, scope):
         if is_save_path(path):
             raise HTTPException(status_code=404, detail="Not found")
         response = await super().get_response(path, scope)
+
+        inline_type = _INLINE_RESOURCE_TYPES.get(os.path.splitext(path)[1].lower())
+        if inline_type is None:
+            # Named rather than guessed, and downloaded rather than rendered.
+            response.headers["Content-Type"] = "application/octet-stream"
+            response.headers["Content-Disposition"] = "attachment"
+        else:
+            # The type comes from the extension we allowed, not from whatever
+            # the file turned out to look like.
+            response.headers["Content-Type"] = inline_type
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
         # Public media (covers, logos, art). Let the browser reuse them within a
         # short window instead of firing a conditional GET per navigation; the
         # ETag / Last-Modified StaticFiles already sends still forces a

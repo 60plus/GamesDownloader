@@ -8,6 +8,7 @@ Locks in the v1.0.6 hardening:
 """
 from __future__ import annotations
 
+import pytest
 from starlette.applications import Starlette
 from starlette.responses import HTMLResponse
 from starlette.routing import Route
@@ -91,6 +92,19 @@ def test_baseline_headers_present():
     h = client.get("/").headers
     assert h.get("x-content-type-options") == "nosniff"
     assert h.get("x-frame-options") == "SAMEORIGIN"
+    assert h.get("referrer-policy") == "strict-origin-when-cross-origin"
+
+
+def test_the_withdrawn_xss_header_is_not_sent():
+    """It looks like free hardening, which is why it keeps coming back.
+
+    The header is withdrawn. Every browser that still honours it does so with
+    an auditor that was itself exploitable: it could be steered into
+    suppressing legitimate script, and its filtering opened side channels that
+    leaked cross-origin content. The Content-Security Policy is what actually
+    stops injected script here, and it is tested above.
+    """
+    assert "x-xss-protection" not in client.get("/").headers
 
 
 # ── Fonts are served from here, so the policy names no font hosts ────────────
@@ -149,6 +163,11 @@ def test_every_font_the_themes_name_is_actually_stored():
     import pathlib
 
     fonts = pathlib.Path(__file__).resolve().parent.parent.parent / "frontend" / "public" / "fonts"
+    if not fonts.is_dir():
+        # Run from /app inside the image, where only the backend was copied.
+        # Failing here taught everyone to ignore a red line in the local run;
+        # CI checks out the whole repository and still enforces this.
+        pytest.skip("frontend tree not present in this environment")
     for sheet in ("inter.css", "rajdhani.css", "orbitron.css"):
         path = fonts / sheet
         assert path.is_file(), f"{sheet} is missing"

@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from config import BASE_PATH
 from decorators.auth import protected_route
+from utils.uploads import read_upload_capped
 from handler.auth.scopes import Scope
 from handler.config.config_handler import config_handler
 from handler.torrent.transmission_handler import transmission_handler
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 torrent_router = APIRouter(prefix="/api/torrents", tags=["torrents"])
 
 _TORRENT_DIR = "/data/downloads/torrents"
+_MAX_TORRENT_BYTES = 10 * 1024 * 1024   # a .torrent is metadata, not the payload
 _SEED_DIR    = "/data/config/torrents"     # generated .torrent files for seeding
 
 
@@ -135,9 +137,7 @@ async def add_torrent_file(
     os.makedirs(_SEED_DIR, exist_ok=True)
     safe_name = Path(file.filename or "upload.torrent").name  # strip path traversal
     tmp_path = os.path.join(_SEED_DIR, f"upload_{safe_name}")
-    content = await file.read()
-    if len(content) > 10 * 1024 * 1024:  # 10 MB limit for .torrent files
-        raise HTTPException(status_code=413, detail="Torrent file too large (max 10 MB)")
+    content = await read_upload_capped(file, _MAX_TORRENT_BYTES, what="Torrent file")
     with open(tmp_path, "wb") as f:
         f.write(content)
 
