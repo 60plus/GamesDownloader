@@ -19,14 +19,27 @@ _active: dict[int, dict] = {}
 _MAX_AGE_S = 12 * 3600  # safety net: drop entries whose stream never unregistered
 
 
-def register(username: str | None, filename: str | None, total: int | None) -> int:
+def register(
+    username: str | None, filename: str | None, total: int | None,
+    *, resumed_at: int = 0,
+) -> int:
     """Start tracking a download. Returns an id for update()/unregister() (0 on
-    failure - update/unregister treat an unknown id as a no-op)."""
+    failure - update/unregister treat an unknown id as a no-op).
+
+    *resumed_at* is where in the file this request begins. Progress is reported
+    against the whole file, so a resumed transfer picks the bar up where the
+    last one left it - but speed is bytes over time, and the bytes have to be
+    the ones this request moved. Counting from zero while the clock ran from
+    this request's start put a download resumed at nine gigabytes on the
+    dashboard at thirty gigabytes a second.
+    """
     try:
         sid = next(_seq)
+        start = max(0, int(resumed_at or 0))
         _active[sid] = {
             "username": username or "?", "filename": filename or "",
-            "total": int(total or 0), "sent": 0, "started": time.monotonic(),
+            "total": int(total or 0), "sent": start, "from": start,
+            "started": time.monotonic(),
         }
         return sid
     except Exception:
@@ -54,10 +67,13 @@ def snapshot() -> list[dict]:
             _active.pop(sid, None)
             continue
         sent, total = e["sent"], e["total"]
+        # Speed is what this request has moved; progress is how much of the file
+        # the player now has. On a resume those are not the same number.
+        moved = max(0, sent - e.get("from", 0))
         out.append({
             "username": e["username"], "filename": e["filename"],
             "sent": sent, "total": total,
-            "speed_bps": int(sent / elapsed) if (sent and elapsed > 0.1) else 0,
+            "speed_bps": int(moved / elapsed) if (moved and elapsed > 0.1) else 0,
             "progress": round(sent / total * 100, 1) if total else 0.0,
         })
     return out

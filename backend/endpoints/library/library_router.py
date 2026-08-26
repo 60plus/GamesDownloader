@@ -37,10 +37,10 @@ from typing import Any
 import httpx
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import BASE_PATH, GAMES_PATH
+from utils.paths import is_within_allowed_roots
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.database.library_handler import LibraryHandler
@@ -517,8 +517,8 @@ def _game_to_dict(game: LibraryGame, owner_username: str | None = None, gog_game
     }
 
 
-def _file_to_dict(f: LibraryFile) -> dict:
-    return {
+def _file_to_dict(f: LibraryFile, *, include_path: bool = False) -> dict:
+    d = {
         "id":           f.id,
         "filename":     f.filename,
         "display_name": f.display_name or f.filename,
@@ -527,7 +527,6 @@ def _file_to_dict(f: LibraryFile) -> dict:
         "language":     f.language,
         "version":      f.version,
         "size_bytes":   f.size_bytes,
-        "file_path":    f.file_path,
         "checksum_md5": f.checksum_md5,
         "source":       f.source,
         "is_available": f.is_available,
@@ -535,6 +534,13 @@ def _file_to_dict(f: LibraryFile) -> dict:
         # for a platform when one of its files carries this.
         "is_archive":   bool(f.is_archive),
     }
+    if include_path:
+        # Where a file sits on disk is administrator business. It is relative
+        # to the base path rather than a host path, so handing it to everyone
+        # was never a serious leak, but a plain user has no use for the storage
+        # layout and no reason to be given it.
+        d["file_path"] = f.file_path
+    return d
 
 
 # ── Games - list / detail ─────────────────────────────────────────────────────
@@ -1782,6 +1788,24 @@ async def announce_library_game_added(request: Request, game_id: int) -> dict:
     return {"ok": True, "sent": sent}
 
 
+#: Everything "clear metadata" empties, as a name a test can ask about rather
+#: than a literal buried in a function body.
+CLEARED_LIBRARY_FIELDS: tuple[str, ...] = (
+    "description", "description_short", "developer", "publisher", "release_date",
+    "genres", "tags", "features", "rating", "meta_ratings", "screenshots",
+    "videos", "requirements", "languages",
+    "cover_path", "background_path", "logo_path", "icon_path",
+    # The provider ids go too. They are not metadata anybody reads, but they
+    # decide where the next scrape looks: once one is stored the scrapers ask
+    # for that product by number instead of searching the title again, so a
+    # wrong one keeps fetching the wrong game and nothing in the interface could
+    # get rid of it - the edit form does not offer these fields either. Clearing
+    # the metadata and scraping again was the way out of a bad match, and this
+    # is what makes it one again.
+    "gog_product_id", "steam_appid", "igdb_id",
+)
+
+
 @protected_route(library_router.post, "/games/{game_id}/clear-metadata", scopes=[Scope.LIBRARY_ADMIN])
 async def clear_library_game_metadata(request: Request, game_id: int) -> dict:
     """Clear all scraped metadata from a library game.
@@ -1789,37 +1813,16 @@ async def clear_library_game_metadata(request: Request, game_id: int) -> dict:
     Preserves: title, slug, source, is_active, published_by, OS flags, file records.
     Clears: description, ratings, genres, tags, features, screenshots, videos,
             requirements, languages, cover/background/logo paths, developer, publisher,
-            release_date.
+            release_date, and the GOG, Steam and IGDB ids the scrapers pin to.
     """
     from handler.database.session import async_session_factory
-
-    FIELDS_TO_CLEAR = {
-        "description":       None,
-        "description_short": None,
-        "developer":         None,
-        "publisher":         None,
-        "release_date":      None,
-        "genres":            None,
-        "tags":              None,
-        "features":          None,
-        "rating":            None,
-        "meta_ratings":      None,
-        "screenshots":       None,
-        "videos":            None,
-        "requirements":      None,
-        "languages":         None,
-        "cover_path":        None,
-        "background_path":   None,
-        "logo_path":         None,
-        "icon_path":         None,
-    }
 
     async with async_session_factory() as session:
         game = await session.get(LibraryGame, game_id)
         if not game:
             raise HTTPException(status_code=404, detail="Game not found")
-        for field, value in FIELDS_TO_CLEAR.items():
-            setattr(game, field, value)
+        for field in CLEARED_LIBRARY_FIELDS:
+            setattr(game, field, None)
         await session.flush()
         await session.commit()
 
@@ -1879,18 +1882,16 @@ async def clear_all_library_metadata(request: Request) -> dict:
     from handler.database.session import async_session_factory
     from sqlalchemy import update
 
-    FIELDS_TO_CLEAR = {
-        "description": None, "description_short": None,
-        "developer": None, "publisher": None, "release_date": None,
-        "genres": None, "tags": None, "features": None,
-        "rating": None, "meta_ratings": None,
-        "screenshots": None, "videos": None, "requirements": None, "languages": None,
-        "cover_path": None, "background_path": None, "logo_path": None, "icon_path": None,
-    }
-
+    # Built from the same tuple the one-game route uses rather than written out
+    # again. It was written out again, and the copy fell behind: the provider ids
+    # were added to the tuple and not here, so clearing every game's metadata
+    # left each one still pinned to the product the scrapers had matched it to.
+    # Whoever reached for this after a bad match got the emptied fields refilled
+    # from the same wrong product on the next scrape, which is the one thing
+    # clearing metadata is supposed to undo.
     async with async_session_factory() as session:
         result = await session.execute(
-            update(LibraryGame).values(**FIELDS_TO_CLEAR)
+            update(LibraryGame).values(**{f: None for f in CLEARED_LIBRARY_FIELDS})
         )
         await session.commit()
 
@@ -2008,7 +2009,7 @@ async def add_game_file(request: Request, game_id: int, body: FileCreateBody) ->
         is_available=True,
     )
     created = await _lib.create_file(f)
-    return _file_to_dict(created)
+    return _file_to_dict(created, include_path=True)
 
 
 @protected_route(library_router.patch, "/files/{file_id}", scopes=[Scope.LIBRARY_ADMIN])
@@ -2017,7 +2018,7 @@ async def update_library_file(request: Request, file_id: int, body: FileUpdateBo
     if not f:
         raise HTTPException(status_code=404, detail="File not found")
     updated = await _lib.update_file(f, body.model_dump(exclude_unset=True))
-    return _file_to_dict(updated)
+    return _file_to_dict(updated, include_path=True)
 
 
 @protected_route(library_router.delete, "/files/{file_id}", scopes=[Scope.LIBRARY_ADMIN])
@@ -2070,9 +2071,7 @@ async def download_file(request: Request, file_id: int):
 
     # #7 - Security: ensure resolved path stays within BASE_PATH
     # (prevents symlink traversal or crafted file_path escaping the data dir)
-    _resolved  = os.path.realpath(abs_path)
-    _base_real = os.path.realpath(BASE_PATH)
-    if not (_resolved == _base_real or _resolved.startswith(_base_real + os.sep)):
+    if not is_within_allowed_roots(abs_path):
         raise HTTPException(status_code=403, detail="Access denied")
 
     if not os.path.exists(abs_path):
@@ -2086,11 +2085,8 @@ async def download_file(request: Request, file_id: int):
 
     # #8 - Non-blocking file streaming: each read chunk runs in a thread-pool
     # executor so the event loop is never blocked by disk I/O.
-    # #10 - Stats are recorded AFTER streaming with the actual bytes sent,
-    #        not the file_size upfront. try/finally ensures recording even on
-    #        client disconnect mid-download.
-    import asyncio as _asyncio
-    from utils.throttle import effective_chunk_size, effective_speed_kbps, throttle_sleep
+    from utils.throttle import effective_chunk_size, effective_speed_kbps
+    from utils.ranged_file import ranged_file_response
     from handler.dashboard import active_downloads as _active_downloads
 
     _user_id   = user.id if user else None
@@ -2100,44 +2096,57 @@ async def download_file(request: Request, file_id: int):
     _filename  = f.filename
     _speed_kbps = await effective_speed_kbps(_username)
     _chunk_size = effective_chunk_size(_speed_kbps)
+    _slot: dict[str, int | None] = {"id": None}
 
-    async def _stream():
-        bytes_sent = 0
-        loop = _asyncio.get_running_loop()
-        _t0 = loop.time()
-        _ad_sid = _active_downloads.register(_username, _filename, file_size)
-        try:
-            with open(abs_path, "rb") as fh:
-                while True:
-                    chunk = await loop.run_in_executor(None, fh.read, _chunk_size)
-                    if not chunk:
-                        break
-                    bytes_sent += len(chunk)
-                    _active_downloads.update(_ad_sid, bytes_sent)
-                    yield chunk
-                    await throttle_sleep(len(chunk), _speed_kbps)
-        finally:
-            _active_downloads.unregister(_ad_sid)
-            # Record only if at least something was transferred
-            if bytes_sent > 0:
-                try:
-                    await _lib.record_download(
-                        user_id=_user_id,
-                        game_id=_game_id,
-                        file_id=_file_id,
-                        filename=_filename,
-                        bytes_transferred=bytes_sent,
-                        duration_ms=int((loop.time() - _t0) * 1000),
-                    )
-                except Exception:
-                    pass
+    def _register(first: int) -> None:
+        # Where this request starts, so the dashboard measures speed over the
+        # bytes it moves rather than over the whole file it is finishing.
+        _slot["id"] = _active_downloads.register(
+            _username, _filename, file_size, resumed_at=first
+        )
 
-    headers = {
-        "Content-Disposition": "attachment; filename*=UTF-8''" + __import__('urllib.parse', fromlist=['quote']).quote(f.filename, safe=""),
-        "Content-Length": str(file_size),
-        "Accept-Ranges": "none",
-    }
-    return StreamingResponse(_stream(), media_type=mime_type, headers=headers)
+    def _advance(position: int) -> None:
+        # The absolute position in the file, so a resumed transfer picks the
+        # dashboard bar up where the previous one left it instead of at zero.
+        if _slot["id"] is not None:
+            _active_downloads.update(_slot["id"], position)
+
+    async def _settle(moved) -> None:
+        if _slot["id"] is not None:
+            _active_downloads.unregister(_slot["id"])
+        # One row per completed download rather than one per request. Six
+        # dashboard aggregates count these rows to answer "how many downloads",
+        # and with ranges a single download can arrive in several requests.
+        #
+        # The size recorded is what the client now holds, not what this last
+        # request carried: a nine gigabyte file resumed for its final two
+        # megabytes was going into the figures as a two megabyte download.
+        if moved.reached_end:
+            try:
+                await _lib.record_download(
+                    user_id=_user_id,
+                    game_id=_game_id,
+                    file_id=_file_id,
+                    filename=_filename,
+                    bytes_transferred=moved.delivered,
+                    duration_ms=moved.duration_ms,
+                )
+            except Exception:
+                pass
+
+    return ranged_file_response(
+        path=abs_path,
+        file_size=file_size,
+        filename=f.filename,
+        media_type=mime_type,
+        range_header=request.headers.get("range"),
+        speed_kbps=_speed_kbps,
+        chunk_size=_chunk_size,
+        budget_key=f"user:{_username or 'anonymous'}",
+        on_start=_register,
+        on_progress=_advance,
+        on_finish=_settle,
+    )
 
 
 # ── Native browser download - one-time token flow ─────────────────────────────
@@ -2203,9 +2212,7 @@ async def native_download_file(request: Request, file_id: int, dl_token: str = _
     await _assert_file_visible(user, f.library_game_id)
 
     abs_path   = _abs_path(f.file_path)
-    _resolved  = os.path.realpath(abs_path)
-    _base_real = os.path.realpath(BASE_PATH)
-    if not (_resolved == _base_real or _resolved.startswith(_base_real + os.sep)):
+    if not is_within_allowed_roots(abs_path):
         raise HTTPException(status_code=403, detail="Access denied")
 
     if not os.path.exists(abs_path):
@@ -2216,8 +2223,8 @@ async def native_download_file(request: Request, file_id: int, dl_token: str = _
     mime_type, _ = mimetypes.guess_type(f.filename)
     mime_type = mime_type or "application/octet-stream"
 
-    import asyncio as _asyncio
-    from utils.throttle import effective_chunk_size, effective_speed_kbps, throttle_sleep
+    from utils.throttle import effective_chunk_size, effective_speed_kbps
+    from utils.ranged_file import ranged_file_response
     from handler.dashboard import active_downloads as _active_downloads
 
     _username   = user.username if user else stored_username
@@ -2227,43 +2234,51 @@ async def native_download_file(request: Request, file_id: int, dl_token: str = _
     _game_id    = f.library_game_id
     _file_id    = f.id
     _filename   = f.filename
+    _slot: dict[str, int | None] = {"id": None}
 
-    async def _stream():
-        bytes_sent = 0
-        loop = _asyncio.get_running_loop()
-        _t0 = loop.time()
-        _ad_sid = _active_downloads.register(_username, _filename, file_size)
-        try:
-            with open(abs_path, "rb") as fh:
-                while True:
-                    chunk = await loop.run_in_executor(None, fh.read, _chunk_size)
-                    if not chunk:
-                        break
-                    bytes_sent += len(chunk)
-                    _active_downloads.update(_ad_sid, bytes_sent)
-                    yield chunk
-                    await throttle_sleep(len(chunk), _speed_kbps)
-        finally:
-            _active_downloads.unregister(_ad_sid)
-            if bytes_sent > 0:
-                try:
-                    await _lib.record_download(
-                        user_id=_user_id,
-                        game_id=_game_id,
-                        file_id=_file_id,
-                        filename=_filename,
-                        bytes_transferred=bytes_sent,
-                        duration_ms=int((loop.time() - _t0) * 1000),
-                    )
-                except Exception:
-                    pass
+    def _register(first: int) -> None:
+        # Where this request starts, so the dashboard measures speed over the
+        # bytes it moves rather than over the whole file it is finishing.
+        _slot["id"] = _active_downloads.register(
+            _username, _filename, file_size, resumed_at=first
+        )
 
-    headers = {
-        "Content-Disposition": "attachment; filename*=UTF-8''" + __import__('urllib.parse', fromlist=['quote']).quote(f.filename, safe=""),
-        "Content-Length":      str(file_size),
-        "Accept-Ranges":       "none",
-    }
-    return StreamingResponse(_stream(), media_type=mime_type, headers=headers)
+    def _advance(position: int) -> None:
+        if _slot["id"] is not None:
+            _active_downloads.update(_slot["id"], position)
+
+    async def _settle(moved) -> None:
+        if _slot["id"] is not None:
+            _active_downloads.unregister(_slot["id"])
+        # Same rule as the authenticated route above: the row is written when
+        # the last byte goes out, and it records what the client holds rather
+        # than what this request alone carried.
+        if moved.reached_end:
+            try:
+                await _lib.record_download(
+                    user_id=_user_id,
+                    game_id=_game_id,
+                    file_id=_file_id,
+                    filename=_filename,
+                    bytes_transferred=moved.delivered,
+                    duration_ms=moved.duration_ms,
+                )
+            except Exception:
+                pass
+
+    return ranged_file_response(
+        path=abs_path,
+        file_size=file_size,
+        filename=f.filename,
+        media_type=mime_type,
+        range_header=request.headers.get("range"),
+        speed_kbps=_speed_kbps,
+        chunk_size=_chunk_size,
+        budget_key=f"user:{_username or 'anonymous'}",
+        on_start=_register,
+        on_progress=_advance,
+        on_finish=_settle,
+    )
 
 
 # ── Statistics ────────────────────────────────────────────────────────────────

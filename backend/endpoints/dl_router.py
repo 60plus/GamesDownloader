@@ -6,20 +6,19 @@ GET  /api/dl/{token}?bt=xxx    - download with bypass token (never plain passwor
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import mimetypes
 import os
 import secrets
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 
 from fastapi import Request
 from config import BASE_PATH
+from utils.paths import is_within_allowed_roots
 from handler.auth.passwords import verify_password
 from handler.database.download_token_handler import download_token_handler
 from handler.database.library_handler import LibraryHandler
@@ -30,30 +29,37 @@ _AUTH_RATE_PREFIX = "gd:dl:auth:"  # Per-token+IP password attempt rate limit
 
 async def _check_dl_rate(request: Request) -> None:
     """Rate limit downloads: max 20 per IP per 5 minutes."""
-    from handler.auth.brute_force import _get_redis
+    from handler.auth.brute_force import _carry_on_without_redis, _get_redis
     ip = request.client.host if request.client else "unknown"
-    r = await _get_redis()
-    if not r:
+    # `_get_redis` builds a client rather than connecting, so it never returns
+    # anything falsy and the guard that used to stand here never once ran. A
+    # Redis that was down surfaced as a 500 on the download instead.
+    try:
+        r = await _get_redis()
+        key = f"{_DL_RATE_PREFIX}{ip}"
+        count = await r.incr(key)
+        if count == 1:
+            await r.expire(key, 300)
+    except Exception as exc:
+        _carry_on_without_redis("the download rate limit", exc)
         return
-    key = f"{_DL_RATE_PREFIX}{ip}"
-    count = await r.incr(key)
-    if count == 1:
-        await r.expire(key, 300)
     if count > 20:
         raise HTTPException(status_code=429, detail="Too many downloads. Try again in a few minutes.")
 
 
 async def _check_auth_rate(request: Request, token: str) -> None:
     """Rate limit password attempts: max 5 per token per IP per 5 minutes."""
-    from handler.auth.brute_force import _get_redis
+    from handler.auth.brute_force import _carry_on_without_redis, _get_redis
     ip = request.client.host if request.client else "unknown"
-    r = await _get_redis()
-    if not r:
+    try:
+        r = await _get_redis()
+        key = f"{_AUTH_RATE_PREFIX}{token}:{ip}"
+        count = await r.incr(key)
+        if count == 1:
+            await r.expire(key, 300)
+    except Exception as exc:
+        _carry_on_without_redis("the share-link password rate limit", exc)
         return
-    key = f"{_AUTH_RATE_PREFIX}{token}:{ip}"
-    count = await r.incr(key)
-    if count == 1:
-        await r.expire(key, 300)
     if count > 5:
         raise HTTPException(status_code=429, detail="Too many password attempts. Try again later.")
 
@@ -144,9 +150,7 @@ async def token_download(token: str, bt: str | None = Query(default=None), reque
     abs_path = os.path.join(BASE_PATH, f.file_path)
 
     # Path traversal guard
-    _resolved  = os.path.realpath(abs_path)
-    _base_real = os.path.realpath(BASE_PATH)
-    if not (_resolved == _base_real or _resolved.startswith(_base_real + os.sep)):
+    if not is_within_allowed_roots(abs_path):
         raise HTTPException(status_code=403, detail="Access denied")
 
     if not os.path.exists(abs_path):
@@ -156,35 +160,62 @@ async def token_download(token: str, bt: str | None = Query(default=None), reque
     mime_type, _ = mimetypes.guess_type(f.filename)
     mime_type = mime_type or "application/octet-stream"
 
-    from utils.throttle import effective_chunk_size, effective_speed_kbps, throttle_sleep
+    from utils.throttle import effective_chunk_size, effective_speed_kbps
+    from utils.ranged_file import ranged_file_response
     _speed_kbps = await effective_speed_kbps(None)   # token downloads use global limit only
     _chunk_size = effective_chunk_size(_speed_kbps)
     _token_id = entry.id
+    # A limit on how many times a link may be used and the ability to resume a
+    # download cannot both be had. Counting on the way out - once the file had
+    # gone over in full - is what a resumable link allows, and it does not hold
+    # a limit at all: ask for byte nought, then ask for the rest, and the whole
+    # file arrives as two requests of which neither took the file, so neither
+    # spends a use. A link limited to one download and never expiring was a
+    # permanent public address for the file behind it.
+    #
+    # So a limited link is served whole or not at all, and the use is taken
+    # before a byte moves. An unlimited link keeps resuming, and its count is
+    # bookkeeping rather than a limit. Which one you get follows from whether
+    # you set a limit, and the response says so through Accept-Ranges.
+    _limited = entry.max_downloads is not None
+    if _limited and not await download_token_handler.reserve_use(_token_id):
+        raise HTTPException(status_code=410, detail="This download link has expired or been exhausted")
 
-    async def _stream():
-        bytes_sent = 0
-        loop = asyncio.get_running_loop()
-        try:
-            with open(abs_path, "rb") as fh:
-                while True:
-                    chunk = await loop.run_in_executor(None, fh.read, _chunk_size)
-                    if not chunk:
-                        break
-                    bytes_sent += len(chunk)
-                    yield chunk
-                    await throttle_sleep(len(chunk), _speed_kbps)
-        finally:
-            if bytes_sent > 0:
+    async def _settle(moved) -> None:
+        if _limited:
+            # Taken up front, so what is left here is giving it back when the
+            # file did not go over: a link limited to one download must not be
+            # spent by a transfer that dropped at four percent.
+            if not moved.whole_file:
                 try:
-                    await download_token_handler.increment_count(_token_id)
+                    await download_token_handler.release_use(_token_id)
                 except Exception:
-                    logger.warning("Failed to increment download count for token %s", _token_id)
+                    logger.warning("Failed to release the reserved use of token %s", _token_id)
+            return
+        # No limit to enforce, so this is only a record of what happened, and it
+        # records a download that actually completed. Counting every request
+        # that moved bytes would count a dropped transfer; counting every one
+        # that ended on the last byte counts a request for a single trailing
+        # byte, which is what the last segment of a multi-threaded downloader
+        # asks for first.
+        if moved.whole_file:
+            try:
+                await download_token_handler.increment_count(_token_id)
+            except Exception:
+                logger.warning("Failed to increment download count for token %s", _token_id)
 
-    from urllib.parse import quote as _url_quote
-    _safe_fn = _url_quote(f.filename, safe="")
-    headers = {
-        "Content-Disposition": f"attachment; filename*=UTF-8''{_safe_fn}",
-        "Content-Length":      str(file_size),
-        "Accept-Ranges":       "none",
-    }
-    return StreamingResponse(_stream(), media_type=mime_type, headers=headers)
+    return ranged_file_response(
+        path=abs_path,
+        file_size=file_size,
+        filename=f.filename,
+        media_type=mime_type,
+        range_header=request.headers.get("range") if request else None,
+        allow_ranges=not _limited,
+        speed_kbps=_speed_kbps,
+        chunk_size=_chunk_size,
+        # A share link has no user behind it, so the link itself is the
+        # budget: parallel connections to one link share a cap, and two
+        # different links do not compete.
+        budget_key=f"token:{_token_id}",
+        on_finish=_settle,
+    )
