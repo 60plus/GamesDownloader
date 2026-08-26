@@ -70,5 +70,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # No layer cache on purpose. The Actions cache is scoped per ref and
+          # this workflow only ever runs on a tag, so one release could never
+          # read what the previous one wrote: every build here has always been
+          # cold, and cache-to only filled the shared 10 GB budget with blobs
+          # nothing would ever read, crowding out the pip and npm caches that
+          # the test workflow does reuse. A cold build is also the honest one:
+          # a cached pip layer keeps whatever versions it was built with, so a
+          # patched dependency would silently never reach the image.
