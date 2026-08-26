@@ -21,6 +21,7 @@ from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from utils.uploads import read_upload_capped
 from config import RESOURCES_PATH
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope as Scopes
@@ -533,9 +534,7 @@ async def _upload_collection_image(slug: str, file: UploadFile, kind: str) -> di
             status_code=400,
             detail=f"Unsupported format. Allowed: {', '.join(sorted(_COVER_EXTS))}",
         )
-    content = await file.read()
-    if len(content) > _MAX_COVER_BYTES:
-        raise HTTPException(status_code=413, detail="Image too large (max 5 MB)")
+    content = await read_upload_capped(file, _MAX_COVER_BYTES, what="Image")
 
     covers_dir = os.path.join(RESOURCES_PATH, "collection-covers")
     os.makedirs(covers_dir, exist_ok=True)

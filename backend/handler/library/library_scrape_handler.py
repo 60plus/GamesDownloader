@@ -367,7 +367,7 @@ async def _apply_steam_fallback(game: Any) -> list[str]:
         return []
 
     try:
-        app_id = await search_steam_app(game.title or "")
+        app_id = game.steam_appid or await search_steam_app(game.title or "")
     except Exception:
         return []
     if not app_id:
@@ -379,6 +379,12 @@ async def _apply_steam_fallback(game: Any) -> list[str]:
         return []
     if not steam:
         return []
+
+    # Written only once the id has proved to resolve to something. Saving it
+    # first meant a search that landed on nothing was still recorded, and a
+    # recorded id is asked for by number next time rather than searched for by
+    # title - so one bad guess silenced the search that would have corrected it.
+    game.steam_appid = app_id
 
     applied: list[str] = []
 
@@ -497,31 +503,47 @@ async def _fetch_external_ratings(game: Any) -> list[str]:
             try:
                 hdrs = await igdb_headers(igdb_client_id, igdb_client_sec)
                 if hdrs:
-                    safe_title = sanitize_search(title)
+                    fields = (
+                        'fields id,name,total_rating,aggregated_rating,summary,'
+                        'first_release_date,genres.name,'
+                        'involved_companies.company.name,'
+                        'involved_companies.developer,'
+                        'involved_companies.publisher,screenshots.url;'
+                    )
+                    # Once we know which game this is, ask for it by number.
+                    # The alternative is searching the title again and picking a
+                    # winner with a similarity test, which can quietly settle on
+                    # a different game than it did last time.
+                    known = getattr(game, "igdb_id", None)
+                    if known:
+                        query = f'{fields} where id = {int(known)}; limit 1;'
+                    else:
+                        safe_title = sanitize_search(title)
+                        query = f'{fields} search "{safe_title}"; limit 3;'
                     gr = await c.post(
                         "https://api.igdb.com/v4/games",
                         headers=hdrs,
-                        content=(
-                            f'fields total_rating,aggregated_rating,summary,first_release_date,'
-                            f'genres.name,involved_companies.company.name,involved_companies.developer,'
-                            f'involved_companies.publisher,screenshots.url;'
-                            f' search "{safe_title}"; limit 3;'
-                        ),
+                        content=query,
                     )
                     if gr.status_code == 200 and gr.json():
-                        # Pick the best-matching IGDB result; skip unrelated titles
                         ig_results = gr.json()
-                        ig = next(
-                            (x for x in ig_results
-                             if _titles_similar(title, x.get("name") or "")),
-                            None,
-                        )
-                        if ig is None:
-                            logger.debug(
-                                "IGDB: no similar match for '%s' (best: '%s')",
-                                title, ig_results[0].get("name", ""),
+                        if known:
+                            ig = ig_results[0]
+                        else:
+                            # Pick the best-matching IGDB result; skip unrelated titles
+                            ig = next(
+                                (x for x in ig_results
+                                 if _titles_similar(title, x.get("name") or "")),
+                                None,
                             )
+                            if ig is None:
+                                logger.debug(
+                                    "IGDB: no similar match for '%s' (best: '%s')",
+                                    title, ig_results[0].get("name", ""),
+                                )
                         if ig:
+                            if ig.get("id"):
+                                game.igdb_id = int(ig["id"])
                             r_val = ig.get("total_rating") or ig.get("aggregated_rating")
                             if r_val:
                                 igdb_rating = float(r_val)
@@ -622,9 +644,11 @@ async def scrape_library_game(game: Any) -> dict:
 
     # ── 1. GOG public API ──────────────────────────────────────────────────────
     async with httpx.AsyncClient(headers=GOG_GALAXY_HEADERS, follow_redirects=True, timeout=20) as client:
-        gog_id = await _search_gog_catalog(game.title or "", client)
+        # Ask for the same product as last time. Searching by title again is
+        # slower and, worse, free to land somewhere else: a sequel, a remaster,
+        # a demo. The id is written back below on a first successful match.
+        gog_id = game.gog_product_id or await _search_gog_catalog(game.title or "", client)
         if gog_id:
-            gog_id_found = gog_id
             v1, v2, rating = await asyncio.gather(
                 _fetch_gog_v1(gog_id, client),
                 _fetch_gog_v2(gog_id, client),
@@ -637,6 +661,12 @@ async def scrape_library_game(game: Any) -> dict:
 
             if v1 or v2:
                 sources["gog"] = True
+                # Recorded now rather than before the fetch. An id that answers
+                # with nothing is a wrong guess, and a stored id is asked for by
+                # number from then on instead of searching the title again, so
+                # storing it first made one bad guess permanent.
+                gog_id_found = gog_id
+                game.gog_product_id = gog_id
                 applied = _apply_gog_v1v2(game, v1, v2, rating)
                 all_applied.extend(applied)
                 logger.info(
@@ -711,23 +741,10 @@ async def scrape_library_game(game: Any) -> dict:
     }
 
 
-async def clear_library_game_metadata(game: Any) -> None:
-    """Clear all scraped metadata from a LibraryGame, preserving title, source, files."""
-    FIELDS_TO_CLEAR = [
-        "description", "description_short",
-        "developer", "publisher", "release_date",
-        "genres", "tags", "features",
-        "rating", "meta_ratings",
-        "screenshots", "videos",
-        "requirements", "languages",
-        "cover_path", "background_path", "logo_path",
-        "os_windows", "os_mac", "os_linux",
-    ]
-    # Only clear os_* if they were NOT set by actual file scan (source == 'gog' or 'custom')
-    for field in FIELDS_TO_CLEAR:
-        if field in ("os_windows", "os_mac", "os_linux"):
-            # Keep OS flags - they're often set by file scan, not scraper
-            continue
-        setattr(game, field, None)
-    # Reset rating to None explicitly (it's a float column)
-    game.rating = None
+# A third copy of the clear-metadata field list used to live here, under the same
+# name as the route in library_router. Nothing called it, and it had drifted
+# furthest of the three: no icon_path and none of the provider ids. A dead
+# duplicate that shares a name with the live one is worse than no duplicate,
+# because a search for the function lands on this one and a fix applied here
+# changes nothing at all. The list lives in one place now,
+# library_router.CLEARED_LIBRARY_FIELDS, and both routes clear from it.

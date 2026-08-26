@@ -17,6 +17,7 @@ import re
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from utils.uploads import read_upload_capped
 from config import GAMES_PATH, RESOURCES_PATH
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope as Scopes
@@ -203,9 +204,7 @@ async def upload_library_icon(
             status_code=400,
             detail=f"Unsupported format. Allowed: {', '.join(sorted(_ICON_EXTS))}",
         )
-    content = await file.read()
-    if len(content) > _MAX_ICON_BYTES:
-        raise HTTPException(status_code=413, detail="Icon too large (max 2 MB)")
+    content = await read_upload_capped(file, _MAX_ICON_BYTES, what="Icon")
 
     icons_dir = os.path.join(RESOURCES_PATH, "library-icons")
     os.makedirs(icons_dir, exist_ok=True)

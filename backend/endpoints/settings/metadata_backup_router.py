@@ -228,9 +228,22 @@ class BackupTable:
 _TABLES: tuple[BackupTable, ...] = (
     BackupTable("rom_platforms",   ("models.rom_platform",   "RomPlatform"),   ("fs_slug",)),
     BackupTable("gog_games",       ("models.gog_game",       "GogGame"),       ("gog_id",)),
-    BackupTable("library_games",   ("models.library_game",   "LibraryGame"),   ("igdb_id", "slug")),
+    # slug alone, because slug is what the table is unique on. The key read
+    # ("igdb_id", "slug") for a long time and did no harm only because the model
+    # had no igdb_id: the export walks the mapper's columns, so the id was never
+    # written into a backup and the effective key was the slug anyway. Adding
+    # the column turned the declaration real, and a saved row whose igdb_id
+    # differed from the one in the database - or was absent from either - stopped
+    # matching, was inserted instead, hit the unique index on slug, and came back
+    # as "skipped". Its artwork unpacks in a separate pass, so the files landed
+    # with no row left pointing at them.
+    BackupTable("library_games",   ("models.library_game",   "LibraryGame"),   ("slug",)),
     BackupTable("library_files",   ("models.library_file",   "LibraryFile"),   ("library_game_id", "file_path")),
-    BackupTable("library_torrents",("models.library_torrent","LibraryTorrent"),("library_game_id", "magnet")),
+    # This table has neither a library_game_id nor a magnet, and never has. A
+    # key naming columns the model does not have matches nothing, so every
+    # torrent row in every backup was written out and then skipped on the way
+    # back in. It hangs off a file and is identified by its hash.
+    BackupTable("library_torrents",("models.library_torrent","LibraryTorrent"),("file_id", "info_hash")),
     # fs_name, not fs_path. fs_path is the containing DIRECTORY - the scanner
     # sets it to the file's parent - so keying on it collapsed every ROM of a
     # platform onto one row: three hundred SNES carts in one folder matched
@@ -240,8 +253,59 @@ _TABLES: tuple[BackupTable, ...] = (
     # always used.
     BackupTable("roms",            ("models.rom",            "Rom"),           ("platform_id", "fs_name")),
     BackupTable("game_requests",   ("models.game_request",   "GameRequest"),   ("title", "platform")),
-    BackupTable("plugin_config",   ("models.plugin_config",  "PluginConfig"),  ("plugin_id", "key")),
+    # plugin_id is the unique column; "key" is a leftover from a schema where a
+    # plugin's settings were one row per setting. Naming it did no harm - a key
+    # column the model does not have is dropped - but it said something untrue
+    # about what identifies a row here.
+    BackupTable("plugin_config",   ("models.plugin_config",  "PluginConfig"),  ("plugin_id",)),
 )
+
+
+def _protect_restored_secrets(tbl, payload: dict) -> dict:
+    """Encrypt a plugin's credentials on the way back in from an archive.
+
+    A backup taken before plugin settings were encrypted holds the GitHub token
+    and the archive.org password as plain text, and this writes rows straight
+    into the table - so restoring one would put them back in the clear, where
+    they would stay until the next restart happened to notice. On a server that
+    is not restarted, that is indefinitely.
+
+    Already-encrypted values pass through untouched, including ones this
+    installation cannot read: a foreign ciphertext is unusable either way, and
+    re-encrypting it would only make it unusable twice over.
+    """
+    if tbl.name != "plugin_config" or "config_json" not in payload:
+        return payload
+
+    import json as _json
+
+    from plugins.config_crypto import CannotEncrypt, encrypt_secrets, schema_for
+
+    raw = payload.get("config_json")
+    if not raw:
+        return payload
+    try:
+        config = _json.loads(raw)
+    except (TypeError, ValueError):
+        return payload
+
+    schema = schema_for(payload.get("plugin_id") or "", payload.get("config_schema_json"))
+    try:
+        payload["config_json"] = _json.dumps(encrypt_secrets(config, schema))
+    except CannotEncrypt:
+        # Do not restore a credential we cannot protect. The rest of the row
+        # still goes in, so the plugin comes back configured except for the
+        # secret, which the admin can enter again.
+        for key in (schema or {}):
+            if isinstance(config.get(key), str):
+                config[key] = ""
+        payload["config_json"] = _json.dumps(config)
+        logger.warning(
+            "Restored plugin '%s' without its credentials: they could not be "
+            "encrypted, and restoring them in the clear is not an option.",
+            payload.get("plugin_id"),
+        )
+    return payload
 
 
 def _import_model(path: tuple[str, str]):
@@ -326,7 +390,15 @@ async def export_backup(
 
     Query params:
       include_media     true  - bundle every cover/background/screenshot/etc. (default)
-      include_settings  false - bundle app_config + plugin secrets (sensitive!)
+      include_settings  false - bundle app_config as well (sensitive!)
+
+    A word on what that switch does and does not cover. It gates `app_config`.
+    The plugin_config table is part of the metadata dump either way, and always
+    was, so this docstring's older wording ("plugin secrets") described a gate
+    that did not exist. Those credentials are encrypted at rest now, so what
+    the archive carries is ciphertext that only this installation's key opens -
+    but an archive taken before that is a plain-text copy of every plugin
+    credential, and it is worth deleting and re-taking.
     """
     include_media    = _coerce_bool(include_media)
     include_settings = _coerce_bool(include_settings)
@@ -463,15 +535,23 @@ async def _upsert_row(session, tbl: BackupTable, model: type, row: dict) -> str:
 
     Returns "inserted", "updated" or "skipped".
     """
-    key_cols = [c for c in tbl.upsert_keys if c in row and row[c] is not None]
-    if not key_cols:
+    # A key column the backup does not carry at all comes from an older schema
+    # and is dropped, which is what lets an old backup restore into a new
+    # database. A column that is present and null is matched as null rather than
+    # dropped: dropping it widened the key instead of narrowing it, so a saved
+    # torrent with no magnet would have matched the first torrent of that game
+    # and overwritten it.
+    key_cols = [c for c in tbl.upsert_keys if c in row]
+    if not key_cols or all(row[c] is None for c in key_cols):
         return "skipped"
     stmt = select(model)
     for c in key_cols:
-        stmt = stmt.where(getattr(model, c) == row[c])
+        column = getattr(model, c)
+        stmt = stmt.where(column.is_(None) if row[c] is None else column == row[c])
     existing = (await session.execute(stmt)).scalars().first()
 
     payload = {k: _coerce_value(model, k, v) for k, v in row.items() if k != "id"}
+    payload = _protect_restored_secrets(tbl, payload)
 
     # Every row inside its own savepoint. The whole restore runs in one
     # transaction, and a failed flush poisons the session: the next row's

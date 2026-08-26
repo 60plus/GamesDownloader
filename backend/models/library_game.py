@@ -41,6 +41,15 @@ class LibraryGame(Base):
     catalog_id:          Mapped[str | None] = mapped_column(String(64),  nullable=True)
     catalog_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # What each provider calls this game, remembered from the first match.
+    # Without them every re-scrape searches again by title, which is slower and,
+    # worse, free to land on a different game than last time - a sequel, a
+    # remaster, or a demo. `gog_game_id` above is something else entirely: a key
+    # into our own gog_games table, not GOG's number for the product.
+    gog_product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    steam_appid:    Mapped[int | None] = mapped_column(Integer, nullable=True)
+    igdb_id:        Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # ── Identity ──────────────────────────────────────────────────────────────
     title: Mapped[str]       = mapped_column(String(255), index=True)
     slug:  Mapped[str]       = mapped_column(String(255), unique=True, index=True)

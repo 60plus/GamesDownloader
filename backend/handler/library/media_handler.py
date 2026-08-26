@@ -424,15 +424,22 @@ async def download_collection_image(slug: str, url: str, kind: str = "cover") ->
         return url
     COLLECTION_COVERS_PATH.mkdir(parents=True, exist_ok=True)
     stem = slug if kind == "cover" else f"{slug}-{kind}"
-    for old in COLLECTION_COVERS_PATH.glob(f"{stem}.*"):
-        try:
-            old.unlink()
-        except OSError:
-            pass
     try:
         content, ctype = await fetch_media_bytes(url, headers=_HDRS, timeout=30)
         ext = _ext_from(url, ctype)
         dest = COLLECTION_COVERS_PATH / f"{stem}{ext}"
+        # After the fetch, not before it. The old file used to go first, so a
+        # collection whose scrape failed was left with no image and a row still
+        # pointing at the name of one. Clearing here also takes a previous image
+        # of a different type with it, which one written before the fetch could
+        # not do: the real extension is only known from the Content-Type.
+        for old in COLLECTION_COVERS_PATH.glob(f"{stem}.*"):
+            if old == dest or not old.is_file():
+                continue
+            try:
+                old.unlink()
+            except OSError:
+                pass
         dest.write_bytes(content)
         return f"/resources/collection-covers/{stem}{ext}?v={int(dest.stat().st_mtime)}"
     except Exception as exc:

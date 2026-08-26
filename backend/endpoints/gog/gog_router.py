@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 gog_router = APIRouter(prefix="/api/gog", tags=["gog"])
 
+# Game artwork: a 4K background is a few megabytes, so this is generous.
+# It matches the body-size middleware's default for unlisted routes.
+_MAX_GAME_ART_BYTES = 16 * 1024 * 1024
+
 # Shared sync status (in-memory, resets on restart)
 _sync_status: dict = {"running": False, "synced": 0, "error": None, "phase": None}
 
@@ -1099,9 +1103,10 @@ async def upload_media(
         filename_out = f"{media_type}{ext}"
 
     dest = os.path.join(game_dir, filename_out)
-    data = await file_obj.read()
-    with open(dest, "wb") as f:
-        f.write(data)
+    # Artwork, and it is going to disk regardless, so it goes there directly
+    # under a ceiling. This route had no size limit of any kind.
+    from utils.uploads import spool_upload_capped
+    await spool_upload_capped(file_obj, dest, _MAX_GAME_ART_BYTES, what="Image")
 
     local_path = f"/resources/games/{game_id}/{filename_out}"
 
