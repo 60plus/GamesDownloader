@@ -28,6 +28,10 @@ env:
 jobs:
   docker:
     runs-on: ubuntu-latest
+    # A cold multi-arch build takes 16 to 20 minutes, most of it arm64 under
+    # emulation. Anything past 45 is not slow, it is stuck, and without this
+    # the job would sit there until the six hour default killed it.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
