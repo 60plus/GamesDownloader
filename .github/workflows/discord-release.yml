@@ -42,8 +42,13 @@ jobs:
           AUTHOR: ${{ github.event.release.author.login }}
           ASSETS: ${{ toJSON(github.event.release.assets) }}
         run: |
-          # Truncate body to 1500 chars to fit in Discord embed
-          DESCRIPTION=$(echo "$BODY" | head -c 1500)
+          # A release note runs longer than an embed should carry. Everything
+          # above an HTML "more" marker is the short version written for the
+          # announcement; the rest stays on the release page. A note without a
+          # marker still announces, cut at the length it was cut at before.
+          DESCRIPTION=$(echo "$BODY" \
+            | awk 'index($0, "<!-- more -->") { exit } { print }' \
+            | head -c 1500)
 
           # Up to four image assets become a gallery. Extra embeds that share the
           # release URL are merged by Discord into one gallery under the main embed,
