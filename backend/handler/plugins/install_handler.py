@@ -18,6 +18,11 @@ import zipfile
 from pathlib import Path
 
 from config import GD_VERSION, PLUGINS_PATH
+from plugins.storage import (
+    carry_data_across_update,
+    purge_plugin_data,
+    valid_plugin_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -182,12 +187,12 @@ def _install_plugin_from_zip_sync(zip_path: Path) -> dict:
                     f"{GD_VERSION}. Update GamesDownloader first."
                 )
 
-        # 4. Security: plugin_id must not contain path separators or dots
+        # 4. Security: the id becomes a directory name, so it has to be a name
         plugin_id = manifest["id"]
-        if "/" in plugin_id or "\\" in plugin_id or ".." in plugin_id:
+        if not valid_plugin_id(plugin_id):
             raise ValueError(
-                f"Invalid plugin id '{plugin_id}': must not contain "
-                "path separators or '..'"
+                f"Invalid plugin id '{plugin_id}': must not contain path "
+                "separators or '..', and must not begin with a dot"
             )
 
         # 5. Install Python dependencies if requirements.txt exists
@@ -213,9 +218,30 @@ def _install_plugin_from_zip_sync(zip_path: Path) -> dict:
                 ) from exc
 
         # 6. Copy plugin directory to PLUGINS_PATH/{plugin_id}/
-        if dest_dir.exists():
-            shutil.rmtree(dest_dir)
-        shutil.copytree(plugin_root, dest_dir)
+        #
+        # The directory is replaced, not merged, so a file the old version
+        # shipped and the new one dropped does not linger and get imported.
+        # That also means everything inside it is destroyed - including the
+        # files the plugin itself wrote while it ran. Those are moved to the
+        # plugin's data directory first; see plugins/storage.py.
+        #
+        # Built beside the old one and swapped in, rather than deleting first
+        # and copying second. A copy that runs out of disk halfway used to
+        # leave no plugin at all - the working one had already been removed -
+        # with its data moved somewhere the old version would not look for it.
+        # Now a failure here leaves the installed plugin exactly as it was.
+        staging = plugins_dir / f".{plugin_id}.installing"
+        if staging.exists():
+            shutil.rmtree(staging)
+        shutil.copytree(plugin_root, staging)
+        try:
+            if dest_dir.exists():
+                carry_data_across_update(plugin_id, dest_dir, plugin_root)
+                shutil.rmtree(dest_dir)
+            staging.rename(dest_dir)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
 
         logger.info("Plugin '%s' installed to %s", plugin_id, dest_dir)
 
@@ -266,12 +292,21 @@ def list_installed_plugins() -> list[dict]:
 
 async def uninstall_plugin(plugin_id: str) -> bool:
     """Remove plugin directory. Returns True if removed, False if not found."""
-    # Security: prevent path traversal
-    if "/" in plugin_id or "\\" in plugin_id or ".." in plugin_id:
+    # The id becomes a directory to delete, so it has to be a name and nothing
+    # else. The older rule here rejected separators and '..' but allowed a
+    # leading dot, which was harmless only for as long as no dot directory
+    # existed in the plugin volume: '.' resolves to the volume itself and
+    # '.data' to every plugin's stored data, and both were reachable by an
+    # admin typing a URL.
+    if not valid_plugin_id(plugin_id):
         return False
     plugin_dir = Path(PLUGINS_PATH) / plugin_id
     if not plugin_dir.exists() or not plugin_dir.is_dir():
         return False
     shutil.rmtree(plugin_dir)
+    # Uninstalling is the one time the stored data goes too. Leaving it would
+    # keep a plugin's caches on disk for good after the user removed it, and
+    # nothing in the interface would ever mention them again.
+    purge_plugin_data(plugin_id)
     logger.info("Plugin '%s' uninstalled (directory removed)", plugin_id)
     return True

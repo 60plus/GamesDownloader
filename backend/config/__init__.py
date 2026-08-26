@@ -41,6 +41,20 @@ ROMS_PATH: Final[str] = _env("GD_ROMS_PATH", str(Path(BASE_PATH) / "games" / "ro
 GAMES_PATH: Final[str] = _env("GD_GAMES_PATH", str(Path(BASE_PATH) / "games"))
 DOWNLOADS_PATH: Final[str] = _env("GD_DOWNLOADS_PATH", str(Path(BASE_PATH) / "downloads"))
 PLUGINS_PATH: Final[str] = _env("GD_PLUGINS_PATH", str(Path(BASE_PATH) / "plugins"))
+# What a plugin writes while it runs: caches, indexes, anything it built up and
+# would rather not build again. Outside every plugin's own directory, because
+# installing a plugin replaces that directory wholesale - so data kept next to
+# the code is destroyed by the plugin's own update.
+#
+# Inside the plugin volume rather than beside it, and that is deliberate: the
+# compose file mounts named subdirectories of /data, not /data itself, so a new
+# top-level directory would live in the container's writable layer on every
+# existing installation and vanish the next time the image was replaced. A
+# fix for data loss must not need the operator to edit their compose file to
+# take effect. The leading dot keeps it out of every scan that lists plugins.
+PLUGIN_DATA_PATH: Final[str] = _env(
+    "GD_PLUGIN_DATA_PATH", str(Path(PLUGINS_PATH) / ".data")
+)
 # Emulator firmware (BIOS, Kickstarts, and the like). Kept out of RESOURCES_PATH
 # for the same reason as the saves: these are files someone supplied under their
 # own licence, and the static mount has no authentication in front of it.

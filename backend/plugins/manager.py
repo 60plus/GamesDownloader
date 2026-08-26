@@ -8,7 +8,14 @@ Plugins are loaded from:
 
 from __future__ import annotations
 
-import importlib
+# The submodule, explicitly. `import importlib` does not bring `importlib.util`
+# with it, and every plugin here is loaded through
+# `importlib.util.spec_from_file_location`. It has worked so far only because
+# something else in the import graph happens to pull that submodule in first.
+# The day it stops doing so, each plugin fails at load, the failure is caught
+# per plugin and logged, and the application comes up looking healthy with no
+# plugins at all.
+import importlib.util
 import json
 import logging
 import sys
@@ -31,6 +38,12 @@ from plugins.hookspecs import (
     RomSourceSpec,
     WidgetSpec,
 )
+
+from plugins.config_crypto import decrypt_secrets
+
+# Re-exported so a plugin finds its settings and its data directory in the same
+# place: `from plugins.manager import get_plugin_config, plugin_data_dir`.
+from plugins.storage import plugin_data_dir  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -412,9 +425,11 @@ def get_plugin_config(plugin_id: str) -> dict:
                 text("SELECT config_json FROM plugin_configs WHERE plugin_id = :pid"),
                 {"pid": plugin_id},
             ).fetchone()
-        # Parsing happens after the connection is back in the pool.
+        # Parsing happens after the connection is back in the pool. The
+        # credentials among these are stored encrypted; the plugin gets them
+        # the way it always did, in the clear, and never learns the difference.
         if row and row[0]:
-            return _json.loads(row[0])
+            return decrypt_secrets(_json.loads(row[0]))
     except Exception:
         pass
     return {}

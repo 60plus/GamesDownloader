@@ -29,7 +29,11 @@ async function main() {
   }
 
   const pluginDirs = readdirSync(PLUGINS_DIR, { withFileTypes: true })
-    .filter(d => d.isDirectory())
+    // A dot directory in the plugin volume is bookkeeping, not a plugin: the
+    // plugins' stored data lives in one. Every other scan of this directory
+    // skips them, and skipping them here too keeps the boot log from
+    // announcing an "invalid plugin ID" that is nothing of the kind.
+    .filter(d => d.isDirectory() && !d.name.startsWith('.'))
     .map(d => d.name);
 
   const manifest = {};
