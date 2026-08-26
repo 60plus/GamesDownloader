@@ -45,10 +45,9 @@ jobs:
           # A release note runs longer than an embed should carry. Everything
           # above an HTML "more" marker is the short version written for the
           # announcement; the rest stays on the release page. A note without a
-          # marker still announces, cut at the length it was cut at before.
+          # marker still announces, trimmed where the payload is built below.
           DESCRIPTION=$(echo "$BODY" \
-            | awk 'index($0, "<!-- more -->") { exit } { print }' \
-            | head -c 1500)
+            | awk 'index($0, "<!-- more -->") { exit } { print }')
 
           # Up to four image assets become a gallery. Extra embeds that share the
           # release URL are merged by Discord into one gallery under the main embed,
@@ -70,7 +69,13 @@ jobs:
           $VIDEO_URL"
           fi
 
-          # Build JSON payload using jq for safe escaping
+          # Build JSON payload using jq for safe escaping.
+          #
+          # Discord refuses the entire request if a description runs past 4096
+          # characters, so it is trimmed to 4000 with room to spare. The trim
+          # is done here rather than in the shell because jq counts characters
+          # where head counts bytes, and a cut through a multi-byte character
+          # would produce invalid JSON.
           PAYLOAD=$(jq -n \
             --arg title "$NAME" \
             --arg url "$URL" \
@@ -84,7 +89,7 @@ jobs:
               embeds: ([{
                 title: $title,
                 url: $url,
-                description: $desc,
+                description: $desc[0:4000],
                 color: 10180351,
                 fields: [
                   { name: "Tag", value: $tag, inline: true },
@@ -94,6 +99,9 @@ jobs:
               }] + $images)
             }')
 
-          curl -X POST -H "Content-Type: application/json" \
+          # Discord answers 204 on success. Without --fail-with-body a rejected
+          # payload would leave this job green with nothing posted, which is the
+          # one failure nobody would notice.
+          curl --fail-with-body -sS -X POST -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             "$WEBHOOK_URL"
