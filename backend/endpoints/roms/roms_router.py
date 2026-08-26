@@ -11,16 +11,16 @@ query / body params - otherwise FastAPI will receive "multiple values" errors.
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import os
 import zipfile
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from config import ROMS_PATH, config_manager
@@ -28,11 +28,12 @@ from decorators.auth import protected_route
 from handler.auth.scopes import Scope as Scopes
 from handler.database.rom_handler import rom_handler, rom_platform_handler
 from handler.database.save_state_handler import save_state_handler
-from handler.filesystem.rom_scanner import scan_roms_path
+from handler.filesystem.rom_scanner import SHEET_EXTENSIONS, scan_roms_path, tracks_referenced_by
 from handler.roms import rom_removal
 from handler.metadata.rom_scrape_handler import scrape_roms_batch
 from handler.metadata.rom_platform_map import PLATFORM_MAP, get_cover_aspect as _get_cover_aspect
 from utils import download_tickets
+from utils.ranged_file import content_disposition
 from utils.ratings import rom_rating_agg_of
 from utils.async_utils import note_unscanned
 
@@ -553,6 +554,17 @@ async def get_rom(request: Request, rom_id: int) -> dict:
         "fs_name_no_ext":  rom.fs_name_no_ext,
         "fs_extension":    rom.fs_extension,
         "fs_size_bytes":   rom.fs_size_bytes,
+        # Whether this file is identified by hash at all, which is what decides
+        # if the page offers to compute them.
+        "has_hashes":      bool(rom.crc_hash or rom.sha1_hash or rom.md5_hash),
+        # And the digests themselves, listed among the file's other facts. They
+        # are what a person checks a dump against, so the answer to "did that
+        # button do anything" should be readable rather than inferred from the
+        # button going away. For an archive these describe the ROM inside it,
+        # which is the thing the databases are keyed on.
+        "crc_hash":        rom.crc_hash,
+        "md5_hash":        rom.md5_hash,
+        "sha1_hash":       rom.sha1_hash,
         "name":            rom.name or rom.fs_name_no_ext,
         "slug":            rom.slug,
         "summary":         rom.summary,
@@ -713,6 +725,7 @@ async def update_rom_metadata(
             data[_field] = None
             if _field == "cover_path":
                 data["cover_url"] = None   # drop the notification fallback too
+                data["cover_source"] = None  # and stop claiming anybody chose it
             if media_dir.exists():
                 _clear_media(media_dir, _fname)
 
@@ -725,12 +738,21 @@ async def update_rom_metadata(
     # Download cover if URL provided
     if body.cover_url:
         ext = _media_ext(body.cover_url)
-        if media_dir.exists():
-            _clear_media(media_dir, "cover")
         dest = media_dir / f"cover.{ext}"
-        saved = await _download_image(body.cover_url, dest)
+        # The old cover used to be deleted here, before the request went out, so
+        # a URL that turned out to be dead cost the cover that was there. This is
+        # the worst place for that to happen: somebody sat in the editor and
+        # picked this one. _download_image now clears the slot only once the new
+        # bytes are in hand.
+        saved = await _download_image(body.cover_url, dest, replace=True)
         if saved:
             data["cover_path"] = _resource_url(platform_slug, rom_id, saved.name) + _bust
+            # Somebody sat in the editor and picked this one out of the sources
+            # panel or typed the address in, which is a choice, not a scrape.
+            data["cover_source"] = "manual"
+            # And the provider's word for what kind of picture it was goes with
+            # it: it described the cover this one replaced. See upload_rom_media.
+            data["cover_type"] = None
             # Re-read the proportions from the file we just wrote. Leaving the
             # previous value behind means the grid keeps drawing the old box
             # shape around new art, and crops whatever does not fit.
@@ -749,15 +771,21 @@ async def update_rom_metadata(
             _src = resolve_proxy_url(body.cover_url)
             data["cover_url"] = None if (not _src or _is_leaky_url(_src)) else _src
 
+    # Which slots this request has been told a person picked. Collected and
+    # written once at the end: with_manual reads the row, so two branches each
+    # building the map from it would have the second forget the first.
+    _chosen: list[str] = []
+
     # Download background if URL provided
     if body.background_url:
         ext = _media_ext(body.background_url)
-        if media_dir.exists():
-            _clear_media(media_dir, "background")
         dest = media_dir / f"background.{ext}"
-        saved = await _download_image(body.background_url, dest)
+        saved = await _download_image(body.background_url, dest, replace=True)
         if saved:
             data["background_path"] = _resource_url(platform_slug, rom_id, saved.name) + _bust
+            # Somebody typed this address in or picked it out of the sources
+            # panel, exactly like the cover above.
+            _chosen.append("background_path")
 
     # Download extra media if URLs provided
     _extra_media = [
@@ -771,12 +799,18 @@ async def update_rom_metadata(
         url_val = getattr(body, url_field)
         if url_val:
             _ext = _media_ext(url_val)
-            # Remove existing files so _download_image doesn't skip them
-            _clear_media(media_dir, fname)
             _dest = media_dir / f"{fname}.{_ext}"
-            saved = await _download_image(url_val, _dest)
+            # replace does what the deletion here used to do - get past the
+            # "already there, nothing to do" check - without the part where a
+            # failed fetch left the slot empty.
+            saved = await _download_image(url_val, _dest, replace=True)
             if saved:
                 data[f"{fname}_path"] = _resource_url(platform_slug, rom_id, saved.name) + _bust
+                _chosen.append(f"{fname}_path")
+
+    if _chosen:
+        from handler.metadata.rom_scrape_handler import with_manual
+        data["media_source"] = with_manual(rom, *_chosen)
 
     if data:
         await rom_handler.update_metadata(rom_id, data)
@@ -799,7 +833,18 @@ _UPLOAD_KINDS = {
     "wheel": "wheel_path", "bezel": "bezel_path", "steamgrid": "steamgrid_path",
     "video": "video_path",
 }
-_UPLOAD_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "mp4", "webm"}
+# Raster and video only. An SVG carries script, and uploaded art is served
+# from the unauthenticated /resources mount as image/svg+xml from our own
+# origin - today the Content-Security Policy blocks it, but /player and
+# /emulatorjs are already exempt from that policy. The libraries router
+# states the same rule for icons: raster only, SVG through the built-in
+# picker instead.
+#
+# This is an allow-list: anything absent is refused, not renamed. The route
+# used to force the extension instead, which meant an SVG was written to
+# cover.png and served as image/png behind nosniff, so it rendered nowhere
+# while the previous cover had already been deleted to make room for it.
+_UPLOAD_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "mp4", "webm"}
 
 
 @protected_route(router.post, "/{rom_id}/media/{kind}/upload", scopes=[Scopes.LIBRARY_WRITE, Scopes.ROMS_READ])
@@ -828,7 +873,10 @@ async def upload_rom_media(
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in _UPLOAD_EXTS:
-        ext = "mp4" if kind == "video" else "png"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported format. Allowed: {', '.join(sorted(_UPLOAD_EXTS))}",
+        )
 
     if kind == "screenshot":
         idx = 0
@@ -836,27 +884,64 @@ async def upload_rom_media(
             idx += 1
         dest = media_dir / f"screenshot_{idx}.{ext}"
     else:
-        _clear_media(media_dir, kind)
         dest = media_dir / f"{kind}.{ext}"
 
-    with dest.open("wb") as out:
-        while chunk := await file.read(1024 * 1024):
-            out.write(chunk)
+    # The bytes land beside the target first. Emptying the slot before they
+    # have arrived means an upload that fails half way through leaves the ROM
+    # with no artwork at all, and the leading dot keeps the partial file out of
+    # the {kind}.* glob that the clearing step walks.
+    staged = media_dir / f".{dest.name}.part"
+    try:
+        with staged.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                out.write(chunk)
+        if kind != "screenshot":
+            _clear_media(media_dir, kind)
+        staged.replace(dest)
+    except Exception:
+        staged.unlink(missing_ok=True)
+        raise
 
     url = _resource_url(platform_slug, rom_id, dest.name) + f"?v={int(_time.time())}"
     if kind == "screenshot":
         shots = list(rom.screenshots or [])
         shots.append(url)
-        await rom_handler.update_metadata(rom_id, {"screenshots": shots})
+        # One picture somebody added makes the set theirs. There is nowhere to
+        # record which of six a person put there, and a forced re-scrape writes
+        # the whole list from screenshot_0 up - so the choice is between keeping
+        # all of them and losing theirs among the rest.
+        from handler.metadata.rom_scrape_handler import with_manual
+        await rom_handler.update_metadata(rom_id, {
+            "screenshots": shots,
+            "media_source": with_manual(rom, "screenshots"),
+        })
     else:
         _upd = {_UPLOAD_KINDS[kind]: url}
         if kind == "cover":
             _upd["cover_url"] = None   # an uploaded file has no clean remote source
+            # And said outright, so a forced re-scrape leaves it alone. The
+            # empty cover_url above used to be the only sign, and a
+            # ScreenScraper cover leaves the same one.
+            _upd["cover_source"] = "manual"
+            # box-2D, box-3D and the rest describe a picture a provider sent.
+            # This is not that picture, and leaving the old word behind claims
+            # it is: box-3D renders 16/9, so a scraped 3D box replaced by hand
+            # with a flat one went on being drawn wide and cropped. It was also
+            # the only trace by which a migration could tell a scraped cover
+            # from a chosen one, and it outlived the cover it described.
+            _upd["cover_type"] = None
             # Same reason as the download path: new art, new proportions.
             from handler.metadata.rom_scrape_handler import _detect_cover_aspect
             _asp = _detect_cover_aspect(dest)
             if _asp:
                 _upd["cover_aspect"] = _asp
+        else:
+            # Every other slot says the same thing the cover says, in the map
+            # that holds the rest. Without it a forced re-scrape treated a
+            # background or a wheel somebody had gone and found as the
+            # provider's, replaced it, and deleted the file.
+            from handler.metadata.rom_scrape_handler import with_manual
+            _upd["media_source"] = with_manual(rom, _UPLOAD_KINDS[kind])
         await rom_handler.update_metadata(rom_id, _upd)
     return {"ok": True, "path": url}
 
@@ -1231,7 +1316,15 @@ async def get_rom_all_media(
                         })
                     # Detail source
                     _p_desc = gd.get("description") or gd.get("summary") or ""
-                    _p_rating = gd.get("rating")
+                    # Only a number leaves here. A provider whose rating field
+                    # means something else - TheGamesDB answers "E - Everyone",
+                    # its age rating - used to be passed through raw, and the
+                    # metadata editor formats a detail source's rating with
+                    # .toFixed(). On a string that throws during render, which
+                    # takes the whole editor down: the panel vanishes and will
+                    # not reopen until the page is reloaded.
+                    from handler.metadata.rom_scrape_handler import _numeric_rating
+                    _p_rating = _numeric_rating(pid, gd.get("rating"))
                     if _p_desc or gd.get("developer") or _p_rating is not None:
                         detail_sources.append({
                             "source":       pid,
@@ -1415,15 +1508,25 @@ async def issue_download_ticket(request: Request, rom_id: int, whole_set: bool =
     *whole_set* asks for every disk of a title that was split across floppies,
     as one archive: downloading a two-disk game one file at a time is not what
     anybody means by "download this game".
+
+    Without it the answer is this ROM alone - unless the ROM is a sheet, in
+    which case it is the sheet and its track files. A .cue on its own is two
+    kilobytes naming data the download did not include, so nobody asking for
+    one disc means only the sheet.
     """
     rom = await rom_handler.get_by_id(rom_id)
     if rom is None:
         raise HTTPException(status_code=404, detail="ROM not found")
     user_id = request.state.user.id
-    if whole_set and rom.disk_group:
-        expires_at, sig = download_tickets.issue(rom_id, user_id, kind="set")
+    members = (
+        await rom_handler.disk_set(rom_id) if whole_set
+        else await rom_handler.rom_with_tracks(rom_id)
+    )
+    if len(members) > 1:
+        kind = "set" if whole_set else "files"
+        expires_at, sig = download_tickets.issue(rom_id, user_id, kind=kind)
         return {
-            "url": f"/api/roms/{rom_id}/download-set/{user_id}/{expires_at}/{sig}",
+            "url": f"/api/roms/{rom_id}/download-{kind}/{user_id}/{expires_at}/{sig}",
             "expires_at": expires_at,
         }
     expires_at, sig = download_tickets.issue(rom_id, user_id)
@@ -1446,6 +1549,167 @@ async def download_rom_with_ticket(
     return await _rom_file_response(rom_id)
 
 
+class _ZipStream:
+    """A sink zipfile writes into that hands the bytes straight on.
+
+    Packing into a BytesIO first meant the whole title sat in memory before the
+    download could start. That was tolerable while this route only ever saw
+    floppies - ten disks of 880 kB - and stopped being tolerable the moment a
+    disc kept as a sheet plus its data started coming through here, where the
+    .bin alone is most of a gigabyte.
+
+    No `seek`, deliberately: zipfile notices, and writes a data descriptor after
+    each member instead of seeking back to patch its header.
+    """
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+        self._pos = 0
+
+    def write(self, data) -> int:
+        self._buf += data
+        self._pos += len(data)
+        return len(data)
+
+    def tell(self) -> int:
+        return self._pos
+
+    def flush(self) -> None:
+        pass
+
+    def seekable(self) -> bool:
+        return False
+
+    def drain(self) -> bytes:
+        out = bytes(self._buf)
+        self._buf.clear()
+        return out
+
+
+def _playlist_for(members) -> str:
+    """A .m3u naming the discs of a multi-disc title, in order, or "".
+
+    Without one, a two-disc game arrives as a folder of files and the emulator
+    has no idea they belong together: the player gets to disc two and has to go
+    and find it. With one, RetroArch and the cores GD runs offer disc switching
+    from the menu.
+
+    One line per disc and never per file. A line pointing at a raw .bin track
+    is not a disc, and an emulator told to load one gets a data file instead of
+    a game. RomM filters its list down to the .cue files to avoid exactly that;
+    here the rows already say which is which, so a track simply never appears.
+
+    Nothing for a single disc, however many files it takes: there is nothing to
+    switch between.
+    """
+    discs = [m.fs_name for m in members if not m.track_of]
+    if len(discs) < 2:
+        return ""
+    return "".join(f"{name}\n" for name in discs)
+
+
+def _zip_chunks(members: list[tuple[Path, str]], extra: list[tuple[str, bytes]] | None = None):
+    """A stored ZIP of *members*, a piece at a time.
+
+    Synchronous on purpose: Starlette runs a sync iterator in a worker thread,
+    so reading gigabytes off disk here does not stall the event loop.
+
+    Stored rather than deflated, as before: a disc image is already about as
+    small as it gets, and compressing it to save nothing only makes the player
+    wait longer for the download to begin.
+    """
+    stream = _ZipStream()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_STORED) as archive:
+        for path, arcname in members:
+            info = zipfile.ZipInfo.from_file(path, arcname)
+            info.compress_type = zipfile.ZIP_STORED
+            # force_zip64 because the size is not declared up front and a disc
+            # image is well past the four gigabyte mark that needs it.
+            with path.open("rb") as src, archive.open(info, "w", force_zip64=True) as dest:
+                while chunk := src.read(1024 * 1024):
+                    dest.write(chunk)
+                    if data := stream.drain():
+                        yield data
+            if data := stream.drain():
+                yield data
+        # Written from memory rather than read off the disk, because it does
+        # not exist there: it is made for this archive out of what the set is.
+        for arcname, content in extra or ():
+            archive.writestr(arcname, content)
+            if data := stream.drain():
+                yield data
+    if data := stream.drain():
+        yield data
+
+
+def _member_files(members, roms_base: str) -> list[tuple[Path, str]]:
+    """The real files behind these rows, and anything a sheet names besides.
+
+    Two kinds of file end up here. The rows are the ones the scanner collected,
+    and the rest are files a sheet points at that never became rows at all: a
+    Dreamcast rip is a .gdi beside track01.bin and track02.raw, and .raw is not
+    an extension this library claims - far too generic a name to treat as a ROM
+    on sight. It is still part of the disc, and a download without it will not
+    boot.
+
+    Blocking work, so a caller runs it off the event loop.
+    """
+    out: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+
+    def offer(path: Path, name: str) -> None:
+        if name.lower() in seen or not path.is_file():
+            return
+        # The same guard the single-file download applies. A stored path is
+        # data, and data that decides what gets read is worth distrusting.
+        resolved = os.path.realpath(str(path))
+        if not (resolved == roms_base or resolved.startswith(roms_base + os.sep)):
+            return
+        seen.add(name.lower())
+        out.append((path, name))
+
+    for row in members:
+        offer(Path(row.fs_path) / row.fs_name, row.fs_name)
+    for row in members:
+        if Path(row.fs_name).suffix.lower() not in SHEET_EXTENSIONS:
+            continue
+        directory = Path(row.fs_path)
+        named = tracks_referenced_by(directory / row.fs_name)
+        if not named:
+            continue
+        try:
+            beside = sorted(directory.iterdir())
+        except OSError:
+            continue
+        for entry in beside:
+            if entry.name.lower() in named:
+                offer(entry, entry.name)
+    return out
+
+
+async def _zip_response(rom, members) -> Response:
+    roms_base = os.path.realpath(await _get_roms_path())
+    files = await asyncio.to_thread(_member_files, members, roms_base)
+    if not files:
+        raise HTTPException(status_code=404, detail="ROM file not found on disk")
+    stem = _safe_download_name(rom.name or rom.fs_name_no_ext or str(rom.id))
+    name = stem + ".zip"
+    # A playlist only when the title really is several discs; the helper answers
+    # with nothing for a single disc, whatever it takes to store it.
+    playlist = _playlist_for(members)
+    extra = [(f"{stem}.m3u", playlist.encode("utf-8"))] if playlist else []
+    return StreamingResponse(
+        _zip_chunks(files, extra),
+        media_type="application/zip",
+        # Through the RFC 5987 helper rather than into the header raw. Headers
+        # are latin-1, and a title written in Japanese or Cyrillic survives
+        # _safe_download_name untouched - str.isalnum() is true for every letter
+        # in every script - so putting it straight into the header raised
+        # inside the server and the download answered 500.
+        headers={"Content-Disposition": content_disposition(name)},
+    )
+
+
 @router.get("/{rom_id}/download-set/{user_id}/{expires_at}/{sig}")
 async def download_disk_set_with_ticket(
     rom_id: int, user_id: int, expires_at: int, sig: str
@@ -1453,31 +1717,23 @@ async def download_disk_set_with_ticket(
     """Every disk of a title split across floppies, as one archive."""
     if not download_tickets.valid(rom_id, user_id, expires_at, sig, kind="set"):
         raise HTTPException(status_code=403, detail="This download link has expired")
-    rom = await rom_handler.get_with_platform(rom_id)
-    if rom is None or not rom.disk_group:
+    rom = await rom_handler.get_by_id(rom_id)
+    if rom is None:
         raise HTTPException(status_code=404, detail="ROM not found")
+    return await _zip_response(rom, await rom_handler.disk_set(rom_id))
 
-    disks = await rom_handler.get_disk_set(rom.platform_id, rom.disk_group)
 
-    def pack() -> bytes:
-        buf = io.BytesIO()
-        # Stored, not deflated: a disk image is already about as small as it
-        # gets, and compressing megabytes to save nothing only costs the player
-        # time waiting for the download to start.
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
-            for disk in disks:
-                path = Path(disk.fs_path) / disk.fs_name
-                if path.is_file():
-                    z.write(path, disk.fs_name)
-        return buf.getvalue()
-
-    data = await asyncio.to_thread(pack)
-    name = _safe_download_name(rom.name or rom.fs_name_no_ext or str(rom_id)) + ".zip"
-    return Response(
-        content=data,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{name}"'},
-    )
+@router.get("/{rom_id}/download-files/{user_id}/{expires_at}/{sig}")
+async def download_rom_files_with_ticket(
+    rom_id: int, user_id: int, expires_at: int, sig: str
+) -> Response:
+    """One disc that is more than one file: the sheet and the data it names."""
+    if not download_tickets.valid(rom_id, user_id, expires_at, sig, kind="files"):
+        raise HTTPException(status_code=403, detail="This download link has expired")
+    rom = await rom_handler.get_by_id(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    return await _zip_response(rom, await rom_handler.rom_with_tracks(rom_id))
 
 
 def _safe_download_name(name: str) -> str:
@@ -1497,6 +1753,75 @@ async def clear_rom_metadata(request: Request, rom_id: int) -> dict:
     return {"ok": True}
 
 
+#: ROMs whose checksums are being computed right now. Each one holds a thread
+#: from the default executor for the length of a whole-file read, and that is
+#: the same pool the scanner and every other `to_thread` in the app share, so a
+#: handful of unguarded clicks on 40 GB discs would stop the application's
+#: filesystem work rather than merely slow it. The scan route next door refuses
+#: a second run the same way.
+_hashing_roms: set[int] = set()
+
+
+@protected_route(router.post, "/{rom_id}/hashes", scopes=[Scopes.ROMS_WRITE])
+async def compute_rom_hashes(request: Request, rom_id: int) -> dict:
+    """Read this one file and record its checksums, whatever the ceiling says.
+
+    The hashing ceiling in Settings > ROMs stops a scan from reading enormous
+    files, which is what makes a first scan of a disc library finish. This is
+    the other half of it: when you do want a particular file identified by
+    hash, you ask here and that size limit does not apply, because you asked.
+
+    The archive guard still does. A member that declares more than
+    MAX_MEMBER_BYTES is refused here as everywhere else: that ceiling is about
+    what an archive is allowed to make us read, not about what the operator
+    would rather not spend, and asking politely does not make a bomb safe.
+    """
+    from handler.filesystem.rom_scanner import _compute_hashes
+
+    rom = await rom_handler.get_with_platform(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+
+    path = Path(rom.fs_path) / rom.fs_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="ROM file not found on disk")
+
+    # Same guard, and the same reason, as the download route above: fs_path is
+    # a stored string, and a row can point outside the ROM directory through a
+    # symlink or after the library path was changed under it. Reading a file we
+    # would refuse to serve, and publishing its digest to a scraper, is not a
+    # smaller thing than serving it.
+    roms_base = os.path.realpath(await _get_roms_path())
+    resolved = os.path.realpath(str(path))
+    if not (resolved == roms_base or resolved.startswith(roms_base + os.sep)):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if rom_id in _hashing_roms:
+        raise HTTPException(
+            status_code=409, detail="This file is already being read"
+        )
+    _hashing_roms.add(rom_id)
+    try:
+        crc, md5, sha1 = await asyncio.to_thread(_compute_hashes, path)
+    finally:
+        _hashing_roms.discard(rom_id)
+
+    if not (crc or md5 or sha1):
+        # Nothing came back, and the row is left exactly as it was. The two
+        # cases behind this are a read that failed and a format that carries no
+        # usable digest, and `_compute_hashes` cannot tell them apart - but
+        # writing empties would be wrong for both. It would null good values on
+        # a transient read error, and the answer here is a refusal, not a
+        # result. Saying so is what stops the button reappearing in silence.
+        raise HTTPException(
+            status_code=422,
+            detail="Could not compute checksums for this file",
+        )
+
+    await rom_handler.set_hashes(rom_id, crc, md5, sha1)
+    return {"ok": True, "has_hashes": True}
+
+
 @protected_route(router.post, "/platforms/{slug}/clear-metadata", scopes=[Scopes.ROMS_WRITE])
 async def clear_platform_metadata(request: Request, slug: str) -> dict:
     """Clear scraped metadata for ALL ROMs on a platform."""
@@ -1514,6 +1839,27 @@ async def clear_all_roms_metadata(request: Request) -> dict:
     return {"ok": True, "cleared": count}
 
 
+async def removable_tracks(members) -> list[Path]:
+    """The data files a delete of *members* may actually take with it.
+
+    unrowed_tracks reads the sheets and answers with everything they name that
+    is not a member of this set. That is only most of the answer: it knows the
+    set being deleted and knows nothing about the rest of the library, so a file
+    holding another entry's row looks from there exactly like an orphan. The
+    database settles it, and files that turn out to be somebody's entry stay.
+
+    Both the preview and the delete go through here, so the number in the
+    question is the number of files the answer removes.
+    """
+    candidates = await asyncio.to_thread(rom_removal.unrowed_tracks, members)
+    if not candidates:
+        return []
+    owned = await rom_handler.fs_names_with_rows(
+        members[0].platform_id, [p.name for p in candidates]
+    )
+    return [p for p in candidates if p.name.lower() not in owned]
+
+
 @protected_route(router.get, "/{rom_id}/removal", scopes=[Scopes.ROMS_WRITE])
 async def rom_removal_preview(request: Request, rom_id: int) -> dict:
     """What deleting this ROM would take with it.
@@ -1523,17 +1869,28 @@ async def rom_removal_preview(request: Request, rom_id: int) -> dict:
     several rows that only mean anything together, and the saves that go with
     them may belong to people other than whoever is looking.
     """
-    disks = await rom_handler.disk_set(rom_id)
-    if not disks:
+    members = await rom_handler.disk_set(rom_id)
+    if not members:
         raise HTTPException(status_code=404, detail="ROM not found")
     states, saves = 0, 0
-    for disk in disks:
-        states += len(await save_state_handler.list_states_for_rom(disk.id))
-        saves += len(await save_state_handler.list_saves_for_rom(disk.id))
+    for member in members:
+        states += len(await save_state_handler.list_states_for_rom(member.id))
+        saves += len(await save_state_handler.list_saves_for_rom(member.id))
+    # Track files are not disks and must not be counted as any: the warning
+    # says "this title is N disks", and a single-disc rip kept as a sheet plus
+    # its data is one disc however many files it takes.
+    spoken_for = await asyncio.to_thread(rom_removal.spoken_for_elsewhere, members)
+    extra = [m.fs_name for m in members
+             if m.track_of and m.fs_name.lower() not in spoken_for]
+    extra += [p.name for p in await removable_tracks(members)]
     return {
-        "disks": [{"id": d.id, "name": d.fs_name, "number": d.disk_number} for d in disks],
+        "disks": [
+            {"id": d.id, "name": d.fs_name, "number": d.disk_number}
+            for d in members if not d.track_of
+        ],
+        "files": extra,
         "saves": states + saves,
-        "on_disk": any((Path(d.fs_path) / d.fs_name).is_file() for d in disks),
+        "on_disk": any((Path(m.fs_path) / m.fs_name).is_file() for m in members),
     }
 
 
@@ -1556,6 +1913,14 @@ async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) 
         raise HTTPException(status_code=404, detail="ROM not found")
 
     result = rom_removal.Removal()
+    # Worked out while the sheets are still on disk. Once the .cue is unlinked
+    # nothing is left to say which data files belonged to it, and those files
+    # have no row of their own to be reached by.
+    orphans = await removable_tracks(disks) if delete_files else []
+    # Files another sheet in the directory still names. A track that became a row
+    # of its own is a member of this set and would otherwise go with it, leaving
+    # the sheet that survives naming a file that is not there.
+    spoken_for = await asyncio.to_thread(rom_removal.spoken_for_elsewhere, disks)
     for disk in disks:
         platform = await rom_platform_handler.get_by_id(disk.platform_id)
         slug = platform.slug if platform else "unknown"
@@ -1566,12 +1931,17 @@ async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) 
 
         if await asyncio.to_thread(rom_removal.delete_media_dir, slug, disk.id):
             result.media_dirs += 1
-        if delete_files and await asyncio.to_thread(rom_removal.delete_rom_file, disk):
+        if delete_files and await asyncio.to_thread(
+            partial(rom_removal.delete_rom_file, disk, spoken_for=spoken_for)
+        ):
             result.rom_files += 1
 
         if await rom_handler.delete(disk.id):
             result.roms += 1
             result.names.append(disk.fs_name)
+
+    if orphans:
+        result.rom_files += await asyncio.to_thread(rom_removal.delete_paths, orphans)
 
     logger.info("Deleted %d ROM row(s), %d file(s), %d save(s): %s",
                 result.roms, result.rom_files, result.saves, ", ".join(result.names))

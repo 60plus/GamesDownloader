@@ -54,6 +54,22 @@
             <span class="sr-unit">GiB</span>
           </div>
         </div>
+
+        <div class="sr-divider" />
+
+        <div class="sr-row"
+          @mouseenter="setHint(t('rhint.hash_max_title'), t('rhint.hash_max_body'))"
+          @mouseleave="clearHint"
+        >
+          <div class="sr-row-label">
+            <span class="sr-label">{{ t('roms.hash_max') }}</span>
+            <span class="sr-sub">{{ t('roms.hash_max_hint') }}</span>
+          </div>
+          <div class="sr-row-control sr-row-control--num">
+            <input v-model.number="hashMaxGiB" type="number" min="0" max="512" step="0.5" class="sr-input" />
+            <span class="sr-unit">GiB</span>
+          </div>
+        </div>
       </div>
 
       <div class="sr-actions">
@@ -459,6 +475,9 @@ const form = ref({
   // Placeholder only, so the field never flashes a zero. load() replaces it
   // with the ceiling the server actually enforces.
   max_rom_bytes:      64 * GIB,
+  // 0 means no ceiling: hash every file, however large. That is the default
+  // and what every library did before this setting existed.
+  hash_max_bytes:     0,
 })
 const saving   = ref(false)
 const savedMsg = ref('')
@@ -474,6 +493,23 @@ const maxRomGiB = computed({
   },
 })
 
+// Same unit, opposite meaning for zero: here it means no ceiling at all, and
+// that is why the rounding needs care. A ceiling set by hand below 1 GiB
+// rounds to 0 on the way in, and 0 says "hash everything" - so simply showing
+// the rounded number and writing it back turned a 200 MiB ceiling into no
+// ceiling the next time anything on this page was saved. The setter only
+// touches the stored value when the number on screen actually changed.
+const hashMaxGiB = computed({
+  get: () => Math.round(((form.value.hash_max_bytes || 0) / GIB) * 100) / 100,
+  set: (v: number) => {
+    const n = Number(v)
+    const shown = Math.round(((form.value.hash_max_bytes || 0) / GIB) * 100) / 100
+    if (!Number.isFinite(n)) { form.value.hash_max_bytes = 0; return }
+    if (n === shown) return
+    form.value.hash_max_bytes = n > 0 ? Math.round(n * GIB) : 0
+  },
+})
+
 async function load() {
   try {
     const { data } = await client.get('/settings/roms')
@@ -481,6 +517,7 @@ async function load() {
     form.value.auto_scan_on_start = data.auto_scan_on_start ?? false
     form.value.launchbox_enabled  = data.launchbox_enabled  ?? true
     form.value.max_rom_bytes      = data.max_rom_bytes      ?? 64 * GIB
+    form.value.hash_max_bytes     = data.hash_max_bytes     ?? 0
   } catch { /* ignore */ }
 }
 

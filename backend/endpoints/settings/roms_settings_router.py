@@ -12,6 +12,7 @@ from config import ROMS_PATH
 from config import config_manager
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope as Scopes
+from handler.filesystem import rom_scanner
 from handler.roms import rom_source_handler
 
 router = APIRouter(prefix="/api/settings/roms", tags=["settings-roms"])
@@ -24,6 +25,7 @@ class RomSettingsBody(BaseModel):
     auto_scan_on_start: bool = False
     launchbox_enabled: bool = True
     max_rom_bytes: int = 0
+    hash_max_bytes: int = 0
 
 
 @protected_route(router.get, "", scopes=[Scopes.SETTINGS_READ])
@@ -37,6 +39,8 @@ async def get_rom_settings(request: Request) -> dict:
         # built-in default, and a screen showing a different number from the one
         # the download obeys would be worse than showing nothing.
         "max_rom_bytes":      rom_source_handler.max_rom_bytes(),
+        # Same reasoning: report the ceiling the scan actually obeys.
+        "hash_max_bytes":     rom_scanner.hash_ceiling_bytes(),
     }
 
 
@@ -53,6 +57,8 @@ async def save_rom_settings(request: Request, body: RomSettingsBody) -> dict:
         "launchbox_enabled":  body.launchbox_enabled,
         # 0 means "no override": fall back to the built-in ceiling.
         "max_rom_bytes":      max(body.max_rom_bytes, 0),
+        # 0 here means something else: no ceiling at all, hash everything.
+        "hash_max_bytes":     max(body.hash_max_bytes, 0),
     })
     config_manager.save_section("roms", cfg)
     return {"ok": True}
