@@ -7,6 +7,11 @@
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 httpx>=0.27.0
+# The database layer, tested against a database rather than around one. The
+# handlers take a session as a keyword argument, so a test can build the tables
+# from the models in memory and call them directly - no factory to patch and
+# nothing global to reset. Test-only: production runs on MariaDB through PyMySQL.
+aiosqlite>=0.20.0
 # Not only for CI. One of the suite's tests runs ruff's F rules, so an
 # undefined name is caught by the same command that runs during work rather
 # than only by a workflow on a repository this branch is not pushed to. Pinned

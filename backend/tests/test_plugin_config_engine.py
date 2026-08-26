@@ -54,14 +54,71 @@ def test_the_dead_dispose_is_gone():
 
 
 def test_the_connection_goes_back_before_the_json_is_parsed():
+    """Parsing (and now decrypting) happens after the `with` closes, so the
+    pooled connection is not held for the length of it.
+
+    Read from the parse tree rather than by counting characters around the
+    call: a wrapper around the parse used to move it past a fixed-width window
+    and fail this on a change that kept it exactly where it belongs."""
+    import ast
+    import textwrap
+
     source = inspect.getsource(get_plugin_config)
-    with_line = source.index("with _sync_engine().connect()")
-    parse_line = source.index("_json.loads")
-    # The parse sits outside the with-block, i.e. at a shallower indent than
-    # the statements inside it.
-    tail = source[parse_line - 60:parse_line]
-    assert "        if row and row[0]:" in tail or "\n        if row" in tail
-    assert with_line < parse_line
+    # The connection is still borrowed from the pool by a context manager. The
+    # first version of this test asserted that by searching for the literal
+    # text, and rewriting it as a parse-tree check quietly dropped the check
+    # altogether: a body that opened the connection and never closed it passed.
+    # The pool holds two, so that would wedge every plugin after two reads.
+    assert "with _sync_engine().connect()" in source
+
+    tree = ast.parse(textwrap.dedent(source))
+    inside_with = {
+        node
+        for stmt in ast.walk(tree)
+        if isinstance(stmt, ast.With)
+        for body_stmt in stmt.body
+        for node in ast.walk(body_stmt)
+    }
+    parses = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "loads"
+    ]
+    assert parses, "the helper no longer parses the stored config"
+    for node in parses:
+        assert node not in inside_with, "the JSON is parsed while the connection is held"
+
+
+def test_the_loader_imports_the_submodule_it_actually_uses():
+    """Every plugin is loaded through `importlib.util.spec_from_file_location`,
+    and `import importlib` does not make `importlib.util` available.
+
+    Verified in a clean interpreter: `import importlib; hasattr(importlib,
+    "util")` is False. It has worked here only because something else in the
+    import graph pulls that submodule in first, which is luck rather than a
+    decision. If that ever stops, every plugin fails at load, each failure is
+    caught and logged separately, and the server comes up looking healthy with
+    no plugins at all.
+
+    Asserted on the parse tree rather than the text, because the contract being
+    checked is literally the presence of that import statement.
+    """
+    import ast
+    from pathlib import Path
+
+    import plugins.manager as manager_module
+
+    tree = ast.parse(Path(manager_module.__file__).read_text(encoding="utf-8"))
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert "importlib.util" in imported, (
+        "plugins/manager.py must import importlib.util itself"
+    )
 
 
 def test_the_contract_plugins_depend_on_is_unchanged():

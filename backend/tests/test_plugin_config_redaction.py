@@ -1,7 +1,9 @@
 """Plugin config secrets stay with the people who can manage plugins.
 
-Plugin config is stored cleartext and holds credentials - the PC Ports catalogue
-keeps a GitHub token in it. PLUGINS_READ is a base-user scope (the plugin list
+Plugin config holds credentials - the PC Ports catalogue keeps a GitHub token
+in it. They are encrypted at rest (see test_plugin_config_encryption.py) and
+decrypted before the API answers, so this layer is what decides who receives
+them. PLUGINS_READ is a base-user scope (the plugin list
 feeds themes and the translate button), so `GET /api/plugins` and
 `/{id}/config` reach ordinary users; the secret VALUES must not. These pin the
 rule: an admin (PLUGINS_WRITE) sees everything, a plain reader loses every field

@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from config import GD_VERSION, PLUGINS_PATH
 from decorators.auth import protected_route
+from utils.uploads import spool_upload_capped
 from handler.auth.scopes import Scope
 # Imported at module level on purpose: it pulls in models.catalog_entry, and a
 # model that is not imported before startup is missing from Base.metadata, so
@@ -47,6 +48,12 @@ from handler.plugins.install_handler import (
     uninstall_plugin,
 )
 from models.plugin_config import PluginConfig
+from plugins.config_crypto import (
+    CannotEncrypt,
+    decrypt_secrets,
+    encrypt_secrets,
+    schema_for,
+)
 from plugins.manager import plugin_manager
 from schemas.plugin import PluginConfigUpdate, PluginInfo
 from sqlalchemy import select
@@ -54,6 +61,10 @@ from sqlalchemy import select
 logger = logging.getLogger(__name__)
 
 plugins_router = APIRouter(prefix="/api/plugins", tags=["plugins"])
+
+# Matches the ceiling the body-size middleware applies to this route, so the
+# two cannot drift into disagreeing about what is acceptable.
+_MAX_PLUGIN_ZIP_BYTES = 256 * 1024 * 1024
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -134,8 +145,10 @@ def _redact_config(
 ) -> dict | None:
     """Withhold secret config values from readers who cannot manage plugins.
 
-    Plugin config is stored cleartext and routinely holds credentials - the PC
-    Ports catalogue keeps a GitHub token here. PLUGINS_READ is a base-user scope
+    Plugin config routinely holds credentials - the PC Ports catalogue keeps a
+    GitHub token here. Those values are encrypted at rest, but they are
+    decrypted before this runs, because a plugin reading its own settings needs
+    them usable; this decides who the API hands them to. PLUGINS_READ is a base-user scope
     (themes and the translate button both need the plugin list), so a plain user
     reaching GET /api/plugins or /{id}/config must not receive those secrets;
     only PLUGINS_WRITE (admin) sees the real values. Fields the schema types as
@@ -172,7 +185,7 @@ def _merge_plugin_info(
     if db_row:
         if db_row.config_json:
             try:
-                config = json.loads(db_row.config_json)
+                config = decrypt_secrets(json.loads(db_row.config_json))
             except json.JSONDecodeError:
                 config = None
         if config_schema is None and db_row.config_schema_json:
@@ -229,11 +242,12 @@ async def install_plugin(request: Request, file: UploadFile) -> dict:
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="File must be a .zip archive")
 
-    # Write upload to a temp file
+    # Straight to the temp file under a ceiling. This used to pull the whole
+    # archive into memory and write it back out unchanged, with no limit of any
+    # kind on how big that archive was allowed to be.
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-        content = await file.read()
-        tmp.write(content)
         tmp_path = Path(tmp.name)
+    await spool_upload_capped(file, tmp_path, _MAX_PLUGIN_ZIP_BYTES, what="Plugin archive")
 
     try:
         manifest = await install_plugin_from_zip(tmp_path)
@@ -363,7 +377,7 @@ async def get_plugin_config(request: Request, plugin_id: str) -> dict:
     config_schema = None
     if db_row.config_json:
         try:
-            config = json.loads(db_row.config_json)
+            config = decrypt_secrets(json.loads(db_row.config_json))
         except json.JSONDecodeError:
             config = None
     if db_row.config_schema_json:
@@ -403,7 +417,29 @@ async def update_plugin_config(
                 raise HTTPException(
                     status_code=404, detail="Plugin not found in database"
                 )
-            row.config_json = json.dumps(config_data)
+            # The schema names which of these are credentials, and those are
+            # encrypted before they touch the table. Resolved by the same
+            # helper the startup pass uses, so the two cannot disagree about
+            # which fields are secrets.
+            schema = schema_for(plugin_id, row.config_schema_json)
+            previous = None
+            if row.config_json:
+                try:
+                    previous = json.loads(row.config_json)
+                except json.JSONDecodeError:
+                    previous = None
+            try:
+                row.config_json = json.dumps(
+                    encrypt_secrets(config_data, schema, previous=previous)
+                )
+            except CannotEncrypt as exc:
+                # Nothing is written. Reporting success while destroying the
+                # credential that was there is the one outcome worse than
+                # refusing the save.
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Settings not saved: {exc}",
+                ) from exc
 
     return {"ok": True}
 
@@ -411,8 +447,9 @@ async def update_plugin_config(
 @plugins_router.get("/{plugin_id}/logo")
 async def get_plugin_logo(plugin_id: str) -> FileResponse:
     """Serve plugin logo file (PNG or SVG)."""
-    # Security: prevent path traversal
-    if "/" in plugin_id or "\\" in plugin_id or ".." in plugin_id:
+    # Security: prevent path traversal, and dot names for the reason given on
+    # the asset route below.
+    if "/" in plugin_id or "\\" in plugin_id or ".." in plugin_id or plugin_id.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid plugin ID")
 
     plugin_dir = Path(PLUGINS_PATH) / plugin_id
@@ -434,6 +471,38 @@ async def get_plugin_logo(plugin_id: str) -> FileResponse:
     raise HTTPException(status_code=404, detail="Logo not found")
 
 
+#: What a plugin may have served under, by extension. An allow-list rather than
+#: a guess, because the answer decides how a browser treats the bytes.
+#:
+#: Two of these are the difference between a plugin working and not. A browser
+#: refuses to `import()` a module handed to it as application/octet-stream, and
+#: `WebAssembly.instantiateStreaming` accepts application/wasm and nothing else.
+#: Any plugin carrying an emulator is blocked on those two lines: Ruffle for
+#: Flash, js-dos for DOS. Everything else here is ordinary theme artwork, and
+#: .jpeg and .gif were simply missing beside the .jpg that was already listed.
+ASSET_MEDIA_TYPES: dict[str, str] = {
+    ".webp": "image/webp",
+    ".png":  "image/png",
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif":  "image/gif",
+    ".svg":  "image/svg+xml",
+    ".ico":  "image/x-icon",
+    ".xml":  "application/xml",
+    ".json": "application/json",
+    ".css":  "text/css",
+    ".js":   "text/javascript",
+    ".mjs":  "text/javascript",
+    ".wasm": "application/wasm",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+    ".mp3":  "audio/mpeg",
+    ".ogg":  "audio/ogg",
+    ".mp4":  "video/mp4",
+    ".webm": "video/webm",
+}
+
+
 @plugins_router.get("/{plugin_id}/assets/{file_path:path}")
 async def get_plugin_asset(plugin_id: str, file_path: str) -> FileResponse:
     """Serve static asset files from a plugin's assets/ directory.
@@ -441,8 +510,11 @@ async def get_plugin_asset(plugin_id: str, file_path: str) -> FileResponse:
     Theme plugins use this to serve artwork, icons, metadata XML etc.
     Only files inside the plugin's assets/ subdirectory are served.
     """
-    # Security: prevent path traversal
-    if "/" in plugin_id or "\\" in plugin_id or ".." in plugin_id:
+    # Security: prevent path traversal. A leading dot is refused as well: the
+    # plugin volume keeps its own bookkeeping in dot directories (the plugins'
+    # stored data lives in one), none of which is a plugin and none of which
+    # should be reachable through a route that serves files without auth.
+    if "/" in plugin_id or "\\" in plugin_id or ".." in plugin_id or plugin_id.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid plugin ID")
     if ".." in file_path:
         raise HTTPException(status_code=400, detail="Invalid path")
@@ -459,13 +531,7 @@ async def get_plugin_asset(plugin_id: str, file_path: str) -> FileResponse:
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    # Determine media type from extension
-    ext = target.suffix.lower()
-    media_types = {
-        ".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg",
-        ".svg": "image/svg+xml", ".xml": "application/xml", ".json": "application/json",
-    }
-    media_type = media_types.get(ext, "application/octet-stream")
+    media_type = ASSET_MEDIA_TYPES.get(target.suffix.lower(), "application/octet-stream")
 
     return FileResponse(
         target, media_type=media_type,
@@ -1449,7 +1515,7 @@ async def get_plugin_i18n():
     if not plugins_dir.exists():
         return merged
     for d in sorted(plugins_dir.iterdir()):
-        if not d.is_dir():
+        if not d.is_dir() or d.name.startswith("."):
             continue
         i18n_file = d / "i18n.json"
         if not i18n_file.exists():
@@ -1673,7 +1739,11 @@ async def translate_text_endpoint(request: Request) -> dict:
             )
             row = result.scalar_one_or_none()
             if row and row.config_json:
-                cfg = json.loads(row.config_json)
+                # Only two language codes are read out of this, neither of them
+                # a secret - but every read of that column goes through the
+                # same door, because the wiki tells plugin authors exactly that
+                # and core should not be the exception.
+                cfg = decrypt_secrets(json.loads(row.config_json))
                 if not from_lang:
                     from_lang = cfg.get("from_lang", "en")
                 if not to_lang:
