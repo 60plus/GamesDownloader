@@ -36,12 +36,37 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
           TAG: ${{ github.event.release.tag_name }}
-          NAME: ${{ github.event.release.name }}
-          URL: ${{ github.event.release.html_url }}
-          BODY: ${{ github.event.release.body }}
           AUTHOR: ${{ github.event.release.author.login }}
-          ASSETS: ${{ toJSON(github.event.release.assets) }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          FALLBACK_URL: ${{ github.event.release.html_url }}
+          FALLBACK_NAME: ${{ github.event.release.name }}
+          FALLBACK_BODY: ${{ github.event.release.body }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # The event payload freezes the release as it stood the instant it was
+          # published: assets uploaded a moment later are simply not in it, a
+          # note corrected afterwards is not either, and a re-run replays that
+          # same frozen copy. Read the release now instead, and keep the payload
+          # only as the fallback for when the API cannot be reached.
+          REL=$(curl -sS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            || echo 'null')
+          if echo "$REL" | jq -e 'type == "object" and has("assets")' >/dev/null 2>&1; then
+            ASSETS=$(echo "$REL" | jq '.assets')
+            BODY=$(echo "$REL" | jq -r '.body // ""')
+            URL=$(echo "$REL" | jq -r '.html_url')
+            NAME=$(echo "$REL" | jq -r '.name // .tag_name')
+            echo "Read the release live: $(echo "$ASSETS" | jq 'length') assets."
+          else
+            ASSETS='[]'
+            BODY="$FALLBACK_BODY"
+            URL="$FALLBACK_URL"
+            NAME="$FALLBACK_NAME"
+            echo "::warning::Could not read the release; falling back to the event payload, without assets."
+          fi
+
           # A release note runs longer than an embed should carry. Everything
           # above an HTML "more" marker is the short version written for the
           # announcement; the rest stays on the release page. A note without a
