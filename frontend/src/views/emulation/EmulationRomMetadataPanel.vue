@@ -231,7 +231,7 @@
               <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
                 <label class="mep-upload-btn-sm">
                   {{ uploadingKind === 'cover' ? t('library.uploading') : t('meta.upload_file') }}
-                  <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('cover', $event)" />
+                  <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('cover', $event)" />
                 </label>
                 <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('cover', '')">{{ t('meta.clear') }}</button>
               </div>
@@ -285,7 +285,7 @@
               <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
                 <label class="mep-upload-btn-sm">
                   {{ uploadingKind === 'background' ? t('library.uploading') : t('meta.upload_file') }}
-                <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('background', $event)" />
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('background', $event)" />
                 </label>
                 <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('background', '')">{{ t('meta.clear') }}</button>
               </div>
@@ -360,7 +360,7 @@
               <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
                 <label class="mep-upload-btn-sm">
                   {{ uploadingKind === 'screenshot' ? t('library.uploading') : t('meta.upload_file') }}
-                  <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('screenshot', $event)" />
+                  <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('screenshot', $event)" />
                 </label>
               </div>
             </div>
@@ -412,7 +412,7 @@
               <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
                 <label class="mep-upload-btn-sm">
                   {{ uploadingKind === 'support' ? t('library.uploading') : t('meta.upload_file') }}
-                <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('support', $event)" />
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('support', $event)" />
                 </label>
                 <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('support', '')">{{ t('meta.clear') }}</button>
               </div>
@@ -469,7 +469,7 @@
               <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
                 <label class="mep-upload-btn-sm">
                   {{ uploadingKind === 'bezel' ? t('library.uploading') : t('meta.upload_file') }}
-                <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('bezel', $event)" />
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('bezel', $event)" />
                 </label>
                 <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('bezel', '')">{{ t('meta.clear') }}</button>
               </div>
@@ -531,7 +531,7 @@
               <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
                 <label class="mep-upload-btn-sm">
                   {{ uploadingKind === 'wheel' ? t('library.uploading') : t('meta.upload_file') }}
-                <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('wheel', $event)" />
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('wheel', $event)" />
                 </label>
                 <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('wheel', '')">{{ t('meta.clear') }}</button>
               </div>
@@ -589,7 +589,7 @@
               <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
                 <label class="mep-upload-btn-sm">
                   {{ uploadingKind === 'steamgrid' ? t('library.uploading') : t('meta.upload_file') }}
-                <input type="file" accept="image/*" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('steamgrid', $event)" />
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" style="display:none" :disabled="!!uploadingKind" @change="onMediaFile('steamgrid', $event)" />
                 </label>
                 <button class="mep-clear-btn-sm" style="margin-left:6px" @click="setSelected('steamgrid', '')">{{ t('meta.clear') }}</button>
               </div>
@@ -733,9 +733,9 @@
                   <span v-if="src.developer"    class="mep-detail-chip"><b>{{ t('meta.developer') }}:</b> {{ src.developer }}</span>
                   <span v-if="src.publisher"    class="mep-detail-chip"><b>{{ t('meta.publisher') }}:</b> {{ src.publisher }}</span>
                   <span v-if="src.release_year" class="mep-detail-chip"><b>{{ t('meta.release_year') }}:</b> {{ src.release_year }}</span>
-                  <span v-if="src.rating != null" class="mep-detail-chip">
+                  <span v-if="detailRating(src)" class="mep-detail-chip">
                     <b>{{ src.source === 'ss' ? 'SS' : src.source === 'igdb' ? 'IGDB' : src.source === 'lb' ? 'LB' : src.source_name }}:</b>
-                    {{ src.source === 'igdb' ? Math.round(src.rating) + '/100' : src.source === 'ss' ? src.rating + '/20' : src.rating.toFixed(1) + '/10' }}
+                    {{ detailRating(src) }}
                   </span>
                   <span v-if="src.genres?.length"   class="mep-detail-chip"><b>{{ t('meta.genres') }}:</b> {{ src.genres.slice(0,4).join(', ') }}</span>
                   <span v-if="src.regions?.length"  class="mep-detail-chip"><b>{{ t('meta.regions') }}:</b> {{ src.regions.join(', ') }}</span>
@@ -1137,7 +1137,18 @@ function pluginRatingsFromRows(): Record<string, { name?: string; rating?: numbe
     const v = r.value
     if (v == null || Number.isNaN(Number(v))) continue
     const prev = (props.rom.plugin_ratings || {})[r.key] || {}
-    out[r.key] = { ...prev, rating: Number(v) }
+    // The name and the logo travel with the rating, because the game's page
+    // renders exactly what is stored. Filling a rating in here for a provider
+    // that had none used to write `{rating: 5.7}` and nothing else, and that
+    // came out as a bare number with no label and an empty square where the
+    // provider's icon belongs. This panel looks the name up from the provider
+    // list, so it never noticed; the page has no such list.
+    out[r.key] = {
+      ...prev,
+      name: prev.name || r.name,
+      logo_url: prev.logo_url || r.logo,
+      rating: Number(v),
+    }
   }
   return out
 }
@@ -1222,6 +1233,25 @@ const hasChanges = computed(() => {
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
 function switchTab(id: TabId) { activeTab.value = id }
+
+/** A detail source's rating, formatted, or '' when it is not a number.
+ *
+ * This used to be written inline as `src.rating.toFixed(1)`. A plugin decides
+ * what its own rating field holds, and TheGamesDB's is the age rating, so it
+ * answers "E - Everyone" - a string has no .toFixed, the expression throws
+ * while the Details tab renders, and Vue takes the whole editor down with it.
+ * The panel disappeared mid-edit and would not reopen until the page was
+ * reloaded, which is a great deal of damage for one missing guard.
+ */
+function detailRating(src: any): string {
+  const raw = src?.rating
+  if (raw == null) return ''
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return ''
+  if (src.source === 'igdb') return `${Math.round(n)}/100`
+  if (src.source === 'ss') return `${n}/20`
+  return `${n.toFixed(1)}/10`
+}
 
 // ── Search ─────────────────────────────────────────────────────────────────────
 async function searchGames() {
