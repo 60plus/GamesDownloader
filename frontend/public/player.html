@@ -493,7 +493,7 @@
       <button class="gd-picker-tab" id="gd-tab-saves" onclick="switchTab('saves')">Battery Saves</button>
     </div>
     <div class="gd-picker-list" id="gd-picker-list"></div>
-    <div class="gd-menu-hint"><kbd>↑↓</kbd> Navigate &nbsp;·&nbsp; <kbd>A</kbd> Load &nbsp;·&nbsp; <kbd>X</kbd> Delete &nbsp;·&nbsp; <kbd>◀▶</kbd> Tabs &nbsp;·&nbsp; <kbd>B</kbd> Close</div>
+    <div class="gd-menu-hint"><kbd>↑↓</kbd> Navigate &nbsp;·&nbsp; <kbd>A</kbd> Load &nbsp;·&nbsp; <kbd>X</kbd> Delete (twice) &nbsp;·&nbsp; <kbd>◀▶</kbd> Tabs &nbsp;·&nbsp; <kbd>B</kbd> Close</div>
   </div>
 </div>
 
@@ -1828,6 +1828,7 @@ function _onVisibilityChange() {
 
 // ── State picker ─────────────────────────────────────────────────────────────
 function switchTab(tab) {
+  _disarmDelete();   // an armed delete does not follow you to the other list
   pickerMode = tab;
   document.getElementById('gd-tab-states').classList.toggle('active', tab === 'states');
   document.getElementById('gd-tab-saves').classList.toggle('active', tab === 'saves');
@@ -1977,6 +1978,7 @@ async function openPicker(mode) {
 }
 
 function closePicker() {
+  _disarmDelete();   // nor does it wait here for the next time this is opened
   document.getElementById('gd-state-picker').classList.remove('visible');
   if (window.EJS_emulator) window.EJS_emulator.play();
   if (IS_AMIGA) amigaPost({ gdSnap: 'pause', on: false });
@@ -2236,8 +2238,43 @@ async function autoResume() {
   } catch { /* best-effort resume - a failure just starts the game fresh */ }
 }
 
+// One press used to be the whole of it. The bin, the X key and X on the pad all
+// land here, and a battery save is the entire progress in a game with nothing
+// behind it - so browsing the list from the sofa, a thumb resting in the wrong
+// place ended somebody's playthrough with no question asked at all.
+//
+// The rest of the app asks for a tick in a dialog. There is no dialog here, and
+// ticking a checkbox with a thumbstick would be worse than the problem. Pressing
+// again is the same idea in a form a pad already speaks: one deliberate second
+// act, and nothing happens if it does not come.
+//
+// Armed per item AND per list. The two lists are separate tables, so a state and
+// a save can both be numbered 5 - and arming on one, switching tabs and pressing
+// again would otherwise delete the other one outright.
+let _delArmed = null;
+let _delArmedAt = 0;
+const DEL_ARM_MS = 4000;
+
+function _disarmDelete() { _delArmed = null; }
+
 async function deleteItem(id) {
   const type = pickerMode === 'states' ? 'states' : 'saves';
+  const key  = type + ':' + id;
+  const now  = Date.now();
+
+  if (_delArmed !== key || now - _delArmedAt > DEL_ARM_MS) {
+    _delArmed = key;
+    _delArmedAt = now;
+    const items = (pickerMode === 'states' ? cachedStates : cachedSaves) || [];
+    const item  = items.find((i) => i.id === id);
+    const name  = item ? item.file_name : 'this file';
+    gdToast(type === 'saves'
+      ? `Press again to delete the battery save ${name}. Everything saved inside the game goes with it.`
+      : `Press again to delete ${name}. This cannot be undone.`);
+    return;
+  }
+
+  _delArmed = null;
   const r = await fetch(`${API_BASE}/api/savestates/${type}/${id}`, {
     method: 'DELETE',
     headers: authHeaders(),
@@ -2865,8 +2902,18 @@ function installFirmwareHook(files) {
   window.EJS_gameID        = 'gd_' + ROM_ID;
   window.EJS_color         = '#a78bfa';
   window.EJS_startOnLoaded = true;
-  // Threads: opt-in via Settings (requires COOP/COEP headers - set by middleware)
-  if (localStorage.getItem('gd_ejs_threads') === '1') {
+  // Threads. Two cores are built to need them, and that is a property of the
+  // core rather than a preference, so it is not left to a switch: EmulatorJS
+  // refuses to start without, showing "Error for site owner" and writing the
+  // real reason only to the console. To the person trying to play, the game is
+  // simply broken. The list is EmulatorJS's own (`requiresThreads`), and both
+  // spellings are covered because we hand over the platform name while it
+  // resolves that to a core: psp becomes ppsspp, dos becomes dosbox_pure.
+  //
+  // The Settings switch stays, as a way to turn threads on for everything else.
+  // COOP/COEP come from SecurityHeadersMiddleware, which covers /player.
+  const CORES_NEEDING_THREADS = ['psp', 'ppsspp', 'dos', 'dosbox_pure'];
+  if (CORES_NEEDING_THREADS.includes(EJS_CORE) || localStorage.getItem('gd_ejs_threads') === '1') {
     window.EJS_threads = true;
   }
   // Diagnostics: opt-in via Settings. EmulatorJS forwards the core's own log to

@@ -345,7 +345,14 @@ function createSafeSocketStore() {
     closeRomMetadataEditor,
     // Styled in-app dialogs (same look in every theme) so plugins never have
     // to fall back to the browser-native window.confirm()/alert() popups.
-    // confirm(msg, {title?, danger?, confirmText?, cancelText?}) -> Promise<boolean>
+    // confirm(msg, {title?, danger?, confirmText?, cancelText?, image?,
+    //               requireTick?}) -> Promise<boolean>
+    // requireTick (1.0.32) keeps the confirm button dead until a checkbox is
+    // ticked. For questions that destroy something no scraper can fetch again:
+    // files, saves, a library entry. The label comes from the core's own
+    // translations, so a theme asking this way has nothing to translate. Do not
+    // reach for it on every question - a tick in front of a reversible action
+    // teaches people to tick without reading.
     confirm: (msg: string, opts?: Record<string, unknown>) => useDialog().gdConfirm(msg, opts as any),
     alert: (msg: string, opts?: Record<string, unknown>) => useDialog().gdAlert(msg, opts as any),
     // openAbout() - the shared About dialog (logo, version, Discord invite);

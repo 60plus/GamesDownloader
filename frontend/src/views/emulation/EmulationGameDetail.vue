@@ -156,11 +156,16 @@
                   <span class="gd-ext-lbl">LB</span>
                 </div>
               </div>
+              <!-- The name and the logo are read from what was stored, and an
+                   entry saved from the metadata editor used to carry neither:
+                   the tile then showed a bare number beside an empty square.
+                   The editor fills both in now, and these fall back for rows
+                   written before it did. -->
               <div v-for="(pr, pid) in (rom.plugin_ratings || {})" :key="pid" class="gd-ext-score">
-                <img :src="pr.logo_url" class="gd-ext-ico" width="42" height="42" :alt="pr.name" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                <img v-if="pr.logo_url" :src="pr.logo_url" class="gd-ext-ico" width="42" height="42" :alt="pr.name || String(pid)" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <div class="gd-ext-info">
                   <span class="gd-ext-val">{{ ratingVal(pr.rating).toFixed(1) }}<span class="gd-ext-max">/10</span></span>
-                  <span class="gd-ext-lbl">{{ pr.name }}</span>
+                  <span class="gd-ext-lbl">{{ pr.name || String(pid).toUpperCase() }}</span>
                 </div>
               </div>
             </div>
@@ -199,6 +204,17 @@
                   <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
                 </svg>
                 {{ scraping ? t('detail.scraping') : t('detail.scrape') }}
+              </button>
+
+              <!-- Only for a file that is not identified by hash: either the
+                   scan skipped it for its size, or its format carries none.
+                   For everything else there is nothing to ask for. -->
+              <button v-if="isAdmin && rom && rom.has_hashes === false" class="gd-btn-ghost"
+                :disabled="hashing" @click="computeHashes" :title="t('detail.compute_hashes_hint')">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" :class="{ spin: hashing }">
+                  <path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/>
+                </svg>
+                {{ hashing ? t('detail.computing_hashes') : t('detail.compute_hashes') }}
               </button>
 
               <button v-if="canEdit" class="gd-btn-danger" :disabled="clearing" @click="onClearMetadata" :title="t('detail.clear_metadata')">
@@ -394,6 +410,17 @@
               <span class="gd-di"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span>
               <span class="gd-dk">{{ t('detail.file_size') }}</span>
               <span class="gd-dv gd-mono">{{ formatSize(rom.fs_size_bytes) }}</span>
+              <!-- What a dump is checked against. For an archive these are the
+                   ROM inside it, which is what the databases are keyed on. -->
+              <template v-if="rom.has_hashes">
+                <span class="gd-di"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/></svg></span>
+                <span class="gd-dk">{{ t('detail.checksums') }}</span>
+                <span class="gd-dv gd-mono gd-checksums">
+                  <span v-if="rom.crc_hash"><b>CRC32</b> {{ rom.crc_hash }}</span>
+                  <span v-if="rom.md5_hash"><b>MD5</b> {{ rom.md5_hash }}</span>
+                  <span v-if="rom.sha1_hash"><b>SHA1</b> {{ rom.sha1_hash }}</span>
+                </span>
+              </template>
               <template v-if="rom.platform_name">
                 <span class="gd-di"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="7" width="20" height="13" rx="5"/><path d="M7 12.5h2m-1-1v2M15.5 12.5h2"/><path d="M7 7l1.5-3h7L17 7"/></svg></span>
                 <span class="gd-dk">{{ t('library.platform_label') }}</span>
@@ -570,6 +597,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import client from '@/services/api/client'
 import { useDialog } from '@/composables/useDialog'
+import { useNotifications } from '@/composables/useNotifications'
+const { error: notifyError, success: notifySuccess } = useNotifications()
 import { useCoverTilt } from '@/composables/useCoverTilt'
 const { coverTilt, sheenStyle, onCoverMove, onCoverLeave } = useCoverTilt()
 import { useI18n } from '@/i18n'
@@ -612,6 +641,9 @@ interface RomDetail {
   fs_name_no_ext: string | null
   fs_extension: string
   fs_size_bytes: number
+  /** Whether this file is identified by checksum at all. False when the scan
+   *  skipped it for its size, or when its format carries none. */
+  has_hashes?: boolean
   name: string
   slug: string | null
   summary: string | null
@@ -629,7 +661,12 @@ interface RomDetail {
   ss_score: number | null
   igdb_rating: number | null
   lb_rating: number | null
-  plugin_ratings: Record<string, { name: string; rating: number; logo_url: string }> | null
+  // Optional on purpose: an entry saved from the metadata editor before it
+  // learned to carry them has the rating and nothing else.
+  plugin_ratings: Record<string, { name?: string; rating?: number; logo_url?: string }> | null
+  crc_hash: string | null
+  md5_hash: string | null
+  sha1_hash: string | null
   player_count: string | null
   hltb_main_s:     number | null
   hltb_extra_s:    number | null
@@ -664,6 +701,7 @@ const pubLogoFailed    = ref(false)
 const wheelFailed      = ref(false)
 const scraping      = ref(false)
 const clearing      = ref(false)
+const hashing       = ref(false)
 const deleting      = ref(false)
 const showEditPanel = ref(false)
 
@@ -912,6 +950,30 @@ async function onClearMetadata() {
   }
 }
 
+// Reading a file that the scan declined to read, because this time somebody
+// asked for it. It can take a while on a large image, so the button says so
+// while it runs and the page reloads afterwards to drop it.
+//
+// The failure has to be spoken. A file can be unreadable, or be a format that
+// carries no usable digest, and then the server refuses; swallowing that left
+// the button sitting there after the spinner, with nothing said, and clicking
+// it again did the same nothing.
+async function computeHashes() {
+  if (!rom.value) return
+  hashing.value = true
+  try {
+    await client.post(`/roms/${rom.value.id}/hashes`)
+    await fetchRom()
+    // Said out loud. The button disappearing is the only other sign that
+    // anything happened, and that reads as easily like a failure as a success.
+    notifySuccess(t('detail.compute_hashes_done'))
+  } catch {
+    notifyError(t('detail.compute_hashes_failed'))
+  } finally {
+    hashing.value = false
+  }
+}
+
 // Removing a ROM asks twice, and the first question is built from what the
 // server says would actually go. Two things make this destructive and neither
 // is visible on the page: a floppy title is several entries that only work
@@ -919,7 +981,7 @@ async function onClearMetadata() {
 async function onDelete() {
   if (!rom.value) return
   const id = rom.value.id
-  let preview: { disks: { name: string }[]; saves: number; on_disk: boolean }
+  let preview: { disks: { name: string }[]; files: string[]; saves: number; on_disk: boolean }
   try {
     preview = (await client.get(`/roms/${id}/removal`)).data
   } catch {
@@ -934,13 +996,30 @@ async function onDelete() {
   if (preview.saves > 0) {
     lines.push(t('detail.delete_rom_saves').replace('{n}', String(preview.saves)))
   }
-  if (!await gdConfirm(lines.join('\n\n'), { danger: true, title: t('detail.delete_rom') })) return
+  // The tick belongs on this question and not on the one about the file below.
+  // Saves, scraped artwork and the entry itself go the moment this is answered,
+  // whichever way the next one is answered - and a save is the one thing here
+  // that cannot be fetched again from anywhere.
+  if (!await gdConfirm(lines.join('\n\n'), {
+    danger: true,
+    title: t('detail.delete_rom'),
+    requireTick: true,
+  })) return
 
   // Only worth asking when there is a file to ask about, and the answer that
   // keeps it is the one on the cancel button.
   let withFiles = false
   if (preview.on_disk) {
-    withFiles = await gdConfirm(t('detail.delete_rom_files_body'), {
+    // The data files behind a sheet belong to this question and not the one
+    // above: they go with the file or they stay with it, and until now the
+    // count sat on the question that acts whichever way it is answered - so the
+    // sentence somebody had to tick to acknowledge was untrue for every CD rip
+    // in the library.
+    const fileLines = [t('detail.delete_rom_files_body')]
+    if (preview.files?.length) {
+      fileLines.push(t('detail.delete_rom_tracks').replace('{n}', String(preview.files.length)))
+    }
+    withFiles = await gdConfirm(fileLines.join('\n\n'), {
       danger: true,
       title: t('detail.delete_rom_files_title'),
       confirmText: t('detail.delete_files_yes'),
@@ -1406,6 +1485,10 @@ onUnmounted(() => {
 .gd-dlist > .gd-dk:last-of-type { border-bottom: none; }
 .gd-dlist > .gd-dk:last-of-type + .gd-dv { border-bottom: none; }
 .gd-mono { font-family: monospace; font-size: var(--fs-sm, 12px); }
+/* Three long hex strings. Stacked, each labelled, and allowed to break rather
+   than pushing the details table sideways on a narrow window. */
+.gd-checksums { display: flex; flex-direction: column; gap: 2px; word-break: break-all; }
+.gd-checksums b { font-weight: 600; opacity: .55; margin-right: 6px; font-family: inherit; }
 .gd-company-cell { display: flex; align-items: center; gap: var(--space-2, 8px); flex-wrap: wrap; }
 .gd-company-logo { max-height: 22px; max-width: 100px; object-fit: contain; filter: invert(1) brightness(1.2); opacity: .85; }
 .gd-meta-company-logo { max-height: 60px; max-width: 140px; object-fit: contain; filter: invert(1) brightness(1.4); opacity: .75; vertical-align: middle; }

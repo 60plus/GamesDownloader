@@ -71,6 +71,15 @@
             <button v-if="activeLib !== 'games'" class="cov-btn" :class="{ 'cov-btn--spin': scraping }" :disabled="scraping" @click="onScrapeClick" :title="activeLib === 'roms' ? 'Scrape ROM metadata' : 'Refresh data from GOG'">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             </button>
+            <!-- Only for a ROM that is not identified by hash: the scan skipped
+                 it for its size, or its format carries none. -->
+            <button v-if="isAdmin && activeLib === 'roms' && game && game.has_hashes === false"
+                    class="cov-btn" :class="{ 'cov-btn--spin': hashing }" :disabled="hashing"
+                    @click="computeHashes" :title="t('detail.compute_hashes_hint')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/>
+              </svg>
+            </button>
             <button v-if="isAdmin" class="cov-btn cov-btn--danger" :disabled="clearing" @click="onClearClick" :title="t('detail.clear_metadata')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
             </button>
@@ -665,7 +674,7 @@ const emit = defineEmits<{ (e: 'deleted'): void }>()
 interface LibFile {
   id: number; filename: string; display_name: string
   file_type: string; os: string; version: string | null
-  size_bytes: number | null; file_path: string; source: string; is_available: boolean
+  size_bytes: number | null; file_path?: string; source: string; is_available: boolean
 }
 
 interface GameData {
@@ -675,6 +684,9 @@ interface GameData {
   source?: string; gog_game_id?: number | null; catalog_origin?: string | null
   /** The library game a GOG listing became, once a build was pulled. */
   library_game_id?: number | null
+  /** ROMs only: whether the file is identified by checksum. False when the
+   *  scan skipped it for its size, or its format carries none. */
+  has_hashes?: boolean
   release_date?: string; rating?: number; genres?: string[]; tags?: string[]
   rating_agg?: number   // blended 0-5 score - the one shown as the star
   cover_url?: string; cover_path?: string; background_url?: string; background_path?: string
@@ -738,6 +750,7 @@ const libDlSelected    = ref<Set<number>>(new Set())
 const libDownloading   = ref(false)
 const showScrapeDialog = ref(false)
 const clearing         = ref(false)
+const hashing          = ref(false)
 const deleting         = ref(false)
 const packageOpen      = ref(false)
 const packablePlatforms = ref<string[]>([])
@@ -1095,6 +1108,9 @@ async function onDeleteClick() {
   if (!game.value || deleting.value) return
   const id = game.value.id
   const isRom = props.activeLib === 'roms'
+  // Counted here and asked about below: the data files a sheet names go
+  // with the file or stay with it, so they belong to the second question.
+  let trackFiles = 0
   const lines = [t('detail.delete_body').replace('{name}', game.value.title)]
   let onDisk = (game.value.files?.length ?? 0) > 0
 
@@ -1104,18 +1120,27 @@ async function onDeleteClick() {
       onDisk = p.on_disk
       if (p.disks.length > 1) lines.push(t('detail.delete_rom_disks').replace('{n}', String(p.disks.length)))
       if (p.saves > 0) lines.push(t('detail.delete_rom_saves').replace('{n}', String(p.saves)))
+      trackFiles = p.files?.length ?? 0
     } catch {
       notifyError(t('detail.delete_failed'))
       return
     }
   }
 
-  if (!await gdConfirm(lines.join('\n\n'), { danger: true, title: t('common.delete') })) return
+  // The point of no return is this question: saves and scraped artwork go
+  // either way, and only the file on disk waits for the next one.
+  if (!await gdConfirm(lines.join('\n\n'), {
+    danger: true,
+    title: t('common.delete'),
+    requireTick: true,
+  })) return
 
   let withFiles = false
   if (onDisk) {
+    const fileLines = [isRom ? t('detail.delete_rom_files_body') : t('detail.delete_files_body')]
+    if (trackFiles) fileLines.push(t('detail.delete_rom_tracks').replace('{n}', String(trackFiles)))
     withFiles = await gdConfirm(
-      isRom ? t('detail.delete_rom_files_body') : t('detail.delete_files_body'),
+      fileLines.join('\n\n'),
       {
         danger: true,
         title: isRom ? t('detail.delete_rom_files_title') : t('detail.delete_files_title'),
@@ -1160,6 +1185,21 @@ async function clearMetadata() {
   } catch {
     notifyError(`Failed to clear metadata for "${title}".`)
   } finally { clearing.value = false }
+}
+
+// Reading a file the scan declined to read, because this time somebody asked.
+// Large images take a while, hence the spinning state; the button disappears
+// on reload, once the ROM has its checksums.
+async function computeHashes() {
+  if (!game.value || hashing.value) return
+  hashing.value = true
+  try {
+    await client.post(`/roms/${game.value.id}/hashes`)
+    await loadGame(game.value.id)
+    notifySuccess(t('detail.compute_hashes_done'))
+  } catch {
+    notifyError(t('detail.compute_hashes_failed'))
+  } finally { hashing.value = false }
 }
 
 // ── API ──────────────────────────────────────────────────────────────────────

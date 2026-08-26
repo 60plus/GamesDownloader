@@ -35,6 +35,15 @@
             <div class="gd-dlg-message">{{ dialogState.message }}</div>
           </div>
 
+          <!-- The deliberate tick, for the few questions that take files off
+               the disk or wipe a whole platform's scraped work. It sits under
+               the sentence that says what goes, so arming the button means
+               having looked at it. -->
+          <label v-if="guarded" class="gd-dlg-tick">
+            <input type="checkbox" v-model="ticked" ref="tickRef" />
+            <span>{{ t('common.confirm_understand') }}</span>
+          </label>
+
           <!-- Buttons -->
           <div class="gd-dlg-actions">
             <button
@@ -45,6 +54,7 @@
             <button
               class="gd-dlg-btn"
               :class="dialogState.danger ? 'gd-dlg-btn--danger' : 'gd-dlg-btn--primary'"
+              :disabled="guarded && !ticked"
               @click="confirm"
               ref="confirmBtnRef"
             >{{ dialogState.confirmText }}</button>
@@ -57,25 +67,41 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { dialogState } from '@/composables/useDialog'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 
 const confirmBtnRef = ref<HTMLButtonElement | null>(null)
+const tickRef = ref<HTMLInputElement | null>(null)
 
 // Cleared whenever the picture changes, so one broken image does not leave every
 // later dialog showing the fallback icon.
 const imageBroken = ref(false)
 watch(() => dialogState.image, () => { imageBroken.value = false })
 
-// Auto-focus confirm button when dialog opens
+// An alert has only an OK button, so there is nothing to hold back.
+const guarded = computed(() => dialogState.requireTick && dialogState.type === 'confirm')
+const ticked = ref(false)
+
+// Focus goes to the confirm button, except on a guarded question, where it goes
+// to the box that has to be ticked first - the next thing to do, and reachable
+// with the space bar. Landing on a disabled button instead would leave the
+// keyboard with nowhere to go.
 watch(() => dialogState.visible, async (v) => {
-  if (v) {
-    await nextTick()
-    confirmBtnRef.value?.focus()
-  }
+  if (!v) return
+  // Reset before anything is shown: the state behind this dialog is a singleton
+  // and a tick left over from the last question would arm this one on sight.
+  ticked.value = false
+  await nextTick()
+  if (guarded.value) tickRef.value?.focus()
+  else confirmBtnRef.value?.focus()
 })
 
 function confirm() {
+  // Guards the button, the Enter key and anything else that gets here.
+  if (guarded.value && !ticked.value) return
   dialogState.visible = false
   dialogState.resolve?.(true)
   dialogState.resolve = null
@@ -92,7 +118,10 @@ function onBackdrop() {
   cancel()
 }
 
-// Keyboard: Enter = confirm, Escape = cancel
+// Keyboard: Enter = confirm, Escape = cancel. On a guarded question Enter is
+// swallowed rather than passed through - confirm() refuses it anyway, and
+// letting it fall through would tick the box that happens to have focus and
+// then need a second Enter, which reads as the key having done nothing twice.
 function onKeydown(e: KeyboardEvent) {
   if (!dialogState.visible) return
   if (e.key === 'Escape') { e.preventDefault(); cancel() }
@@ -170,6 +199,36 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   white-space: pre-wrap;
 }
 
+/* The deliberate tick. Glass rather than a solid panel, like every other
+   surface in here, and it reads as part of the sentence above it. */
+.gd-dlg-tick {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 0 24px 16px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid color-mix(in srgb, #f87171 28%, transparent);
+  background: color-mix(in srgb, #f87171 10%, transparent);
+  font-size: 12.5px; line-height: 1.5;
+  color: var(--text, #e2e8f0);
+  cursor: pointer;
+  text-align: left;
+  user-select: none;
+}
+.gd-dlg-tick input {
+  flex: none;
+  width: 15px; height: 15px;
+  margin: 1px 0 0;
+  accent-color: #f87171;
+  cursor: pointer;
+}
+.gd-dlg-tick:hover {
+  background: color-mix(in srgb, #f87171 16%, transparent);
+}
+.gd-dlg-tick input:focus-visible {
+  outline: 2px solid var(--pl, #7c3aed);
+  outline-offset: 2px;
+}
+
 /* Actions */
 .gd-dlg-actions {
   display: flex; gap: var(--space-2, 8px); padding: 0 24px 20px;
@@ -219,6 +278,18 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 .gd-dlg-btn:focus-visible {
   outline: 2px solid var(--pl, #7c3aed);
   outline-offset: 2px;
+}
+
+/* Waiting for the tick. Still legible, plainly not ready. */
+.gd-dlg-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.gd-dlg-btn:disabled:hover {
+  background: rgba(248, 113, 113, 0.15);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #f87171;
 }
 
 /* Transition */

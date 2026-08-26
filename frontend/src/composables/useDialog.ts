@@ -24,6 +24,19 @@ export interface DialogOptions {
    *  Nullable because art off the API is `string | null`, and making every
    *  caller launder that into undefined would be noise. */
   image?:       string | null
+  /** Make the confirm button wait for a deliberate tick.
+   *
+   *  For the handful of actions that take files off the disk or wipe the
+   *  scraped work of a whole platform: the button stays disabled, and Enter
+   *  does nothing, until the box is ticked. One extra click, on the sentence
+   *  that says what goes.
+   *
+   *  A tick rather than typing a word on purpose. Typing means the word is
+   *  either English for everybody or translated per language and then compared
+   *  against the translation, and the themes carry eight languages. A tick
+   *  needs one label, and it is the core dialog that renders it, so a theme
+   *  asking through `__GD__.ui.confirm` gets this for nothing. */
+  requireTick?: boolean
 }
 
 interface DialogState {
@@ -35,6 +48,7 @@ interface DialogState {
   confirmText: string
   cancelText:  string
   image:       string
+  requireTick: boolean
   resolve:     ((value: boolean) => void) | null
 }
 
@@ -48,6 +62,7 @@ export const dialogState = reactive<DialogState>({
   confirmText: 'OK',
   cancelText:  'Cancel',
   image:       '',
+  requireTick: false,
   resolve:     null,
 })
 
@@ -65,6 +80,9 @@ export function useDialog() {
       // picture from an earlier dialog would otherwise sit above an unrelated
       // question.
       dialogState.image       = opts.image       ?? ''
+      // Assigned every time for the same reason as the picture above: left as
+      // it was, one guarded question would arm the next, unrelated one.
+      dialogState.requireTick = opts.requireTick ?? false
       dialogState.resolve     = resolve
     })
   }
@@ -79,6 +97,7 @@ export function useDialog() {
       dialogState.confirmText = opts.confirmText ?? t('common.ok')
       dialogState.cancelText  = ''
       dialogState.image       = opts.image       ?? ''
+      dialogState.requireTick = false   // nothing to guard: an alert only says OK
       dialogState.resolve     = (v) => resolve()
     })
   }

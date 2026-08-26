@@ -39,6 +39,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from decorators.auth import protected_route
+from utils.uploads import read_upload_capped
 from handler.auth.scopes import Scope as Scopes
 from handler.config.config_handler import config_handler
 from handler.database.rom_handler import rom_handler, rom_platform_handler
@@ -366,15 +367,14 @@ async def upload_state(
     if not 1 <= slot <= _MAX_SLOT:
         raise HTTPException(status_code=400, detail=f"Slot must be 1-{_MAX_SLOT}")
 
-    data = await stateFile.read()
+    data = await read_upload_capped(stateFile, _MAX_FILE_SIZE, what="State file")
     if not data:
         raise HTTPException(status_code=400, detail="Empty state file")
-    if len(data) > _MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="State file too large (max 64 MB)")
 
-    ss_data = await screenshotFile.read() if screenshotFile else b""
-    if len(ss_data) > _MAX_SHOT_SIZE:
-        raise HTTPException(status_code=413, detail="Screenshot too large (max 4 MB)")
+    ss_data = (
+        await read_upload_capped(screenshotFile, _MAX_SHOT_SIZE, what="Screenshot")
+        if screenshotFile else b""
+    )
 
     existing = await save_state_handler.get_state_by_slot(user_id, rom_id, slot)
     # Replacing a slot frees the old bytes, so only the growth counts against
@@ -522,11 +522,9 @@ async def upload_save(
     user_id = request.state.user.id
     rom = await _get_rom_or_404(rom_id)
 
-    data = await saveFile.read()
+    data = await read_upload_capped(saveFile, _MAX_FILE_SIZE, what="Save file")
     if not data:
         raise HTTPException(status_code=400, detail="Empty save file")
-    if len(data) > _MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="Save file too large (max 64 MB)")
 
     content_hash  = hashlib.md5(data).hexdigest()
     platform_slug = rom.platform.fs_slug if rom.platform else "unknown"
@@ -885,15 +883,18 @@ async def import_saves(
     """
     results: list[dict] = []
     for f in files:
-        raw = await f.read()
+        try:
+            raw = await read_upload_capped(f, _MAX_FILE_SIZE, what="File")
+        except HTTPException:
+            # This route reports per file rather than failing the batch, so one
+            # oversized member becomes a row like any other rejection.
+            results.append({"name": f.filename or "?", "status": "error",
+                            "detail": "file too large (max 64 MB)"})
+            continue
         name = (f.filename or "").lower()
         if not raw:
             results.append({"name": f.filename or "?", "status": "error",
                             "detail": "empty file"})
-            continue
-        if len(raw) > _MAX_FILE_SIZE:
-            results.append({"name": f.filename or "?", "status": "error",
-                            "detail": "file too large (max 64 MB)"})
             continue
 
         if name.endswith(".zip") or raw[:2] == b"PK":

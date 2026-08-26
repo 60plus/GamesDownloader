@@ -626,6 +626,11 @@ async function ejectCard(bs: GameSaveItem, gameName: string, art?: string | null
       confirmText: t("profile.confirm_eject_go", "Take it out"),
       cancelText:  t("common.cancel", "Cancel"),
       danger:      true,
+      // Ticked too, even though the server usually puts the card back. Usually
+      // is the whole problem: whatever this browser has played since it last
+      // sent the card up exists nowhere else, and this button is the only one
+      // on the tile that can throw it away.
+      requireTick: true,
       // The same cartridge the battery tile shows, so the question is obviously
       // about the card in front of you. The dialog falls back to its own icon
       // when a game has no art.
@@ -719,6 +724,11 @@ async function del(kind: "state" | "save", id: number, gameName: string,
     danger:      true,
     confirmText: t("common.delete", "Delete"),
     cancelText:  t("common.cancel", "Cancel"),
+    // The bin sits between download and eject, close enough that a slip of the
+    // hand lands on it, and nothing behind this recovers a save the way a
+    // rescrape recovers a cover. So the button stays dead until the tick says
+    // the question was read.
+    requireTick: true,
     // Show what is about to go: a slot's own screenshot, or the cartridge the
     // battery save came out of. Falls back to the warning icon without art.
     image:       art,

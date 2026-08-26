@@ -852,7 +852,7 @@ async function publishToLibrary(pendingDownload = false) {
 async function deleteFromLibrary() {
   if (!game.value || !publishedId.value || publishLoading.value) return
   if (!await gdConfirm(t('detail.delete_body').replace('{name}', game.value.title),
-                       { danger: true, title: t('common.delete') })) return
+                       { danger: true, title: t('common.delete'), requireTick: true })) return
   const withFiles = await gdConfirm(t('detail.delete_files_body'), {
     danger: true,
     title: t('detail.delete_files_title'),

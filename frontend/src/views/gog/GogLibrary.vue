@@ -77,9 +77,13 @@
           <div class="gd-confirm-body">
             {{ t('library.clear_confirm_body') }}
           </div>
+          <label class="gd-clearall-tick">
+            <input type="checkbox" v-model="clearAllTicked" />
+            <span>{{ t('common.confirm_understand') }}</span>
+          </label>
           <div class="gd-confirm-actions">
             <button class="gd-confirm-btn gd-confirm-btn--ghost" @click="showClearAllDialog = false">{{ t('common.cancel') }}</button>
-            <button class="gd-confirm-btn gd-confirm-btn--danger" :disabled="clearingAll" @click="clearAllMetadata">
+            <button class="gd-confirm-btn gd-confirm-btn--danger" :disabled="clearingAll || !clearAllTicked" @click="clearAllMetadata">
               {{ clearingAll ? t('library.clearing') : t('library.clear_all') }}
             </button>
           </div>
@@ -411,6 +415,9 @@ const metadataGame = ref<Game | null>(null)
 
 // ── Clear all metadata ──────────────────────────────────────────────────────
 const showClearAllDialog = ref(false)
+// Reset every time the panel opens, so a tick never survives into a later ask.
+const clearAllTicked     = ref(false)
+watch(showClearAllDialog, v => { if (v) clearAllTicked.value = false })
 const clearingAll        = ref(false)
 
 // ── Alphabet ───────────────────────────────────────────────────────────────
@@ -1078,4 +1085,23 @@ function openGame(game: Game) {
   .size-group { display: none; }
   .cover-grid { gap: 10px; --cover-min: 120px; }
 }
+
+/* The deliberate tick before wiping a whole library's scraped work. Same shape
+   as the one in the shared dialog, drawn here because this panel is its own. */
+.gd-clearall-tick {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid color-mix(in srgb, #f87171 28%, transparent);
+  background: color-mix(in srgb, #f87171 10%, transparent);
+  font-size: 12.5px; line-height: 1.5;
+  color: var(--text, #e2e8f0);
+  text-align: left; cursor: pointer; user-select: none;
+}
+.gd-clearall-tick input {
+  flex: none; width: 15px; height: 15px; margin: 1px 0 0;
+  accent-color: #f87171; cursor: pointer;
+}
+.gd-clearall-tick:hover { background: color-mix(in srgb, #f87171 16%, transparent); }
 </style>

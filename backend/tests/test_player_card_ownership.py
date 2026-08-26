@@ -118,3 +118,66 @@ def test_decyzje_o_zapisach_licza_kazdy_bajt(zrodlo):
         blok = blok[:blok.index("\n}")]
         assert "_quickHash" not in blok, f"{nazwa} decyduje o zapisie na probce bajtow"
         assert "_fullHash" in blok, f"{nazwa} nie liczy pelnego skrotu"
+
+
+# ── Kasowanie zapisu w odtwarzaczu ────────────────────────────────────────────
+#
+# Bin, klawisz X i X na padzie wolaja jedna funkcje, i ta funkcja kasowala od
+# razu. Zapis bateryjny to caly postep w grze, a w couch mode liste przeglada
+# sie padem, wiec kciuk w zlym miejscu konczyl czyjas rozgrywke bez jednego
+# pytania. Reszta aplikacji prosi o odhaczenie w oknie; tutaj okna nie ma i
+# odhaczanie checkboxa drazkiem byloby gorsze od problemu, wiec drugie
+# nacisniecie jest ta sama intencja w formie, ktora pad juz rozumie.
+#
+# Te asercje czytaja plik i lapia usuniecie straznika, nie subtelny blad w jego
+# logice. Sama logika byla sprawdzona osobno: wycinek zrodla uruchomiony w node
+# z atrapami, siedem przypadkow, i to samo powtorzone z wylaczonym straznikiem,
+# zeby zobaczyc, ze testy potrafia spasc. Rozroznienie jest celowe - patrz
+# test_manual_cover_survives, gdzie test czytajacy zrodlo przechodzil przy
+# naprawie, ktora niczego nie naprawiala.
+
+
+def _blok_delete(zrodlo: str) -> str:
+    poczatek = zrodlo.index("async function deleteItem")
+    blok = zrodlo[poczatek:]
+    return blok[:blok.index("\n}")]
+
+
+def test_kasowanie_w_odtwarzaczu_uzbraja_sie_przed_skasowaniem(zrodlo):
+    blok = _blok_delete(zrodlo)
+    assert "_delArmed" in blok, "kasowanie idzie od razu, bez drugiego nacisniecia"
+    uzbraja = blok.index("_delArmed = key")
+    kasuje = blok.index("method: 'DELETE'")
+    assert uzbraja < kasuje, "straznik stoi za zadaniem kasujacym, wiec niczego nie chroni"
+
+
+def test_uzbrojenie_pamieta_ktora_liste(zrodlo):
+    """Stany i zapisy to osobne tabele i numeruja sie niezaleznie, wiec obie
+    listy moga miec pozycje o tym samym id. Klucz na samym id pozwolilby
+    uzbroic na stanie 5, przelaczyc zakladke i skasowac zapis 5 od razu."""
+    blok = _blok_delete(zrodlo)
+    assert "type + ':' + id" in blok, "uzbrojenie na samym id, kolizja miedzy tabelami"
+
+
+def test_uzbrojenie_nie_przezywa_zmiany_kontekstu(zrodlo):
+    """Wyjscie z wybieraka albo przejscie na druga liste konczy zamiar. Inaczej
+    nacisniecie sekundy pozniej, juz gdzie indziej, trafia w cel z poprzedniego
+    ekranu."""
+    for nazwa in ("switchTab", "closePicker"):
+        poczatek = zrodlo.index("function " + nazwa)
+        blok = zrodlo[poczatek:]
+        blok = blok[:blok.index("\n}")]
+        assert "_disarmDelete()" in blok, f"{nazwa} zostawia uzbrojone kasowanie"
+
+
+def test_okno_uzbrojenia_jest_skonczone(zrodlo):
+    """Uzbrojenie bez wygasania to zwykle kasowanie odlozone w czasie: wraca sie
+    do listy po minucie, naciska raz i jest po zapisie."""
+    assert "DEL_ARM_MS" in zrodlo, "uzbrojenie nie wygasa"
+
+
+def test_uzytkownik_dowiaduje_sie_ze_ma_nacisnac_ponownie(zrodlo):
+    """Bez tego pierwsze nacisniecie wyglada jak martwy przycisk, a to sie konczy
+    naciskaniem mocniej."""
+    assert "Press again to delete" in zrodlo
+    assert "Delete (twice)" in zrodlo, "podpowiedz sterowania nadal obiecuje jedno nacisniecie"

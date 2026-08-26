@@ -649,7 +649,7 @@ interface LibFile {
   language: string | null
   version: string | null
   size_bytes: number | null
-  file_path: string
+  file_path?: string
   source: string
   is_available: boolean
 }
@@ -1090,7 +1090,7 @@ async function republishGame() {
 async function deleteGame() {
   if (!game.value) return
   if (!await gdConfirm(t('detail.delete_body').replace('{name}', game.value.title),
-                       { danger: true, title: t('common.delete') })) return
+                       { danger: true, title: t('common.delete'), requireTick: true })) return
   // Offer to also remove the downloaded files from disk. This frees space and,
   // for GOG games, the server clears the "owned" mark either way. Only ask when
   // the game actually has files on disk.

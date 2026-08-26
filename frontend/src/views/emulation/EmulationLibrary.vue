@@ -519,7 +519,10 @@ async function fetchPlatformInfo() {
 }
 
 async function onClearPlatformMetadata() {
-  if (!await gdConfirm(`Clear all scraped metadata for ${platform.value?.name || 'this platform'}? File info and hashes are preserved.`, { danger: true })) return
+  if (!await gdConfirm(
+    `Clear all scraped metadata for ${platform.value?.name || 'this platform'}? File info and hashes are preserved.`,
+    { danger: true, requireTick: true },
+  )) return
   clearingAll.value = true; actionMsg.value = ''
   try {
     const { data } = await client.post(`/roms/platforms/${platformSlug.value}/clear-metadata`)

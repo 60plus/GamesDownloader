@@ -941,7 +941,11 @@ async function dropTorrent(a: AnyTorrent, withData: boolean) {
   const ok = await gdConfirm(
     withData ? t('transmission.remove_data_confirm', { name: a.name })
              : t('transmission.remove_confirm', { name: a.name }),
-    { title: t('common.remove'), danger: true },
+    // Ticked only on the branch that takes the file with it. Removing a torrent
+    // and leaving its data is a stop-seeding button, and putting a tick in front
+    // of the harmless one teaches people to tick without reading, which is
+    // precisely what would then happen on the branch that does delete.
+    { title: t('common.remove'), danger: true, requireTick: withData },
   )
   if (!ok) return
   busy.value = a.id
