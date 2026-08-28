@@ -135,6 +135,41 @@ def scan_candidates(scan_dir: Path) -> list[Path]:
     ]
 
 
+# Subchannel data, which a disc image does not carry and a PAL PlayStation game
+# from 1998 onwards may refuse to run without. Matched to a disc by name rather
+# than by being named in a sheet, because nothing names them: Redump publishes
+# one .sbi per disc called exactly what the image is called, and a rip made
+# with the full subchannel has a .sub beside it instead.
+#
+# Deliberately not ROM extensions. These belong to a disc; on the shelf of
+# their own they are 452 bytes of nothing.
+SUBCHANNEL_EXTENSIONS = (".sbi", ".sub")
+
+
+def subchannel_files_for(directory, disc_names) -> list[Path]:
+    """The subchannel files sitting beside these discs, if any.
+
+    Without the .sbi a LibCrypt protected disc boots, fails its check and
+    hangs on a black screen, and the only word about it is a core log line
+    nobody reads. Carrying the file is the whole fix; the core finds it by
+    name once it is in the same directory.
+    """
+    stems = {Path(n).stem.lower() for n in disc_names}
+    if not stems:
+        return []
+    out = []
+    try:
+        entries = sorted(Path(directory).iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if entry.suffix.lower() not in SUBCHANNEL_EXTENSIONS:
+            continue
+        if entry.stem.lower() in stems and entry.is_file():
+            out.append(entry)
+    return out
+
+
 def tracks_by_sheet(rom_files) -> dict[str, str]:
     """Which files are track data, and which sheet each one belongs to.
 

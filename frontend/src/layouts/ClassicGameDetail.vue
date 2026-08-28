@@ -250,7 +250,7 @@
                   :class="{ 'cdisk--current': d.current }"
                   :title="d.name"
                 >
-                  <button v-if="ejsCore" class="cdisk-btn" :title="t('detail.play_disk')" @click="requestPlay(d.id)">
+                  <button v-if="ejsCore" class="cdisk-btn" :title="t('detail.play_disk')" @click="requestPlay(d.id, false)">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
                       <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
@@ -266,9 +266,50 @@
                   </button>
                 </div>
               </div>
+              <!-- A playlist is what lets the emulator offer the swap itself
+                   rather than making somebody come back here between discs.
+                   Offered only when the discs have none: one may have come down
+                   beside them, or been written by hand on a handheld. -->
+              <div class="cdisks" v-if="diskSet.length > 1">
+                <button
+                  v-if="isAdmin && !(game as any).playlist"
+                  class="cdisk-m3u"
+                  :disabled="writingPlaylist"
+                  :title="t('detail.write_playlist_hint')"
+                  @click="writePlaylist"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                    <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+                    <line x1="8" y1="18" x2="14" y2="18"/><circle cx="4" cy="6" r="1"/>
+                    <circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>
+                  </svg>
+                  {{ writingPlaylist ? t('detail.writing_playlist') : t('detail.write_playlist') }}
+                </button>
+                <span v-else-if="(game as any).playlist" class="cdisk-m3u cdisk-m3u--have"
+                      :title="(game as any).playlist">
+                  {{ t('detail.has_playlist') }}
+                </span>
+
+                <!-- CHD is one file per disc where a rip is a sheet and its
+                     tracks, about half the size, and the emulator opens it
+                     without unpacking anything. -->
+                <button
+                  v-if="isAdmin && (game as any).chd_convertible"
+                  class="cdisk-m3u"
+                  :disabled="converting"
+                  :title="t('detail.convert_chd_hint')"
+                  @click="convertToChd"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/>
+                  </svg>
+                  {{ t('detail.convert_chd') }}
+                </button>
+
+              </div>
             </template>
             <div class="icard-row"><span class="icard-label">{{ t('detail.extension') }}: </span><span class="icard-val">{{ game.fs_extension || '-' }}</span></div>
-            <div class="icard-row"><span class="icard-label">{{ t('detail.size') }}: </span><span class="icard-val">{{ game.fs_size_bytes ? formatSize(game.fs_size_bytes) : '-' }}</span></div>
+            <div class="icard-row"><span class="icard-label">{{ t('detail.size') }}: </span><span class="icard-val">{{ titleBytes ? formatSize(titleBytes) : '-' }}</span></div>
             <div class="icard-row"><span class="icard-label">{{ t('detail.players') }}: </span><span class="icard-val">{{ game.player_count || '-' }}</span></div>
             <template v-if="game.regions?.length">
               <div class="icard-head" style="margin-top:10px">
@@ -648,6 +689,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
 import { sanitizeHtml } from '@/utils/sanitize'
 import { getEjsCore } from '@/utils/ejsCores'
+import { romActions } from '@/lib/romSourceActions'
 import { formatBytes } from '@/utils/format'
 const formatSize = (b: number | null | undefined) => formatBytes(b, '-')
 
@@ -1187,6 +1229,58 @@ async function clearMetadata() {
   } finally { clearing.value = false }
 }
 
+const writingPlaylist = ref(false)
+
+// Writing the playlist into the library, beside the discs. It is a real file
+// rather than something assembled per launch, so it is still there when the
+// shelf is copied to a handheld and when RetroArch opens the folder.
+async function writePlaylist() {
+  if (!game.value || writingPlaylist.value) return
+  writingPlaylist.value = true
+  try {
+    const { data } = await client.post(`/roms/${game.value.id}/playlist`)
+    await loadGame(game.value.id)
+    notifySuccess(t('detail.write_playlist_done').replace('{name}', data.name))
+  } catch {
+    notifyError(t('detail.write_playlist_failed'))
+  } finally { writingPlaylist.value = false }
+}
+
+// Asked before the work starts rather than offered afterwards: converting a
+// four disc set with both copies on disk is 3.5 GB where the answer is 1.9 GB.
+// Two questions because the dialog answers yes or no and this needs three
+// outcomes: convert and delete, convert and keep, or do neither.
+const converting = ref(false)
+
+async function convertToChd() {
+  if (!game.value || converting.value) return
+  if (!await gdConfirm(t('detail.convert_chd_body'), {
+    title: t('detail.convert_chd_title'),
+    confirmText: t('detail.convert_chd'),
+  })) return
+
+  const deleteSource = await gdConfirm(
+    `${t('detail.convert_chd_delete')}
+
+${t('detail.convert_chd_keep')}`,
+    {
+      title: t('detail.convert_chd_title'),
+      confirmText: t('common.yes'),
+      cancelText: t('common.no'),
+    },
+  )
+
+  converting.value = true
+  try {
+    await romActions.convertToChd(game.value.id, deleteSource)
+    notifySuccess(t('detail.convert_chd_started'))
+  } catch (err: any) {
+    notifyError(err?.response?.data?.detail || t('detail.convert_chd_failed'))
+  } finally {
+    converting.value = false
+  }
+}
+
 // Reading a file the scan declined to read, because this time somebody asked.
 // Large images take a while, hence the spinning state; the button disappears
 // on reload, once the ROM has its checksums.
@@ -1335,13 +1429,28 @@ const ejsCore = computed(() =>
 
 // Only a ROM that belongs to a disk set is ever listed here, and the scanner
 // assigns the group and the number together - so a disk always has both.
-const diskSet = computed<{ id: number; number: number; name: string; current: boolean }[]>(
+const diskSet = computed<
+  { id: number; number: number; name: string; current: boolean; size?: number }[]
+>(
   () => (game.value as any)?.disks || []
 )
+// Every disc at once is the price of letting the emulator switch between them,
+// so the button says what it costs rather than finding out after the download.
+const diskSetBytes = computed(() =>
+  diskSet.value.reduce((sum, d) => sum + (d.size || 0), 0))
+// What the game weighs, which for a title split across discs is all of them.
+// The row names disc one, so its size alone answered a question nobody asked.
+const titleBytes = computed(() =>
+  diskSet.value.length > 1 ? diskSetBytes.value : (game.value?.fs_size_bytes || 0))
 
 // Which disk the machine starts from. Null means the one this entry names,
 // which is disk 1 for every ordinary set.
 const pendingDisk = ref<number | null>(null)
+// Whether to load every disc of the set rather than the one that was clicked.
+// Opt in per launch: it is what makes the emulator able to switch discs on its
+// own, and it is also well over a gigabyte held in the tab for a four disc
+// PlayStation title, which is comfortable on a desktop and hopeless on a phone.
+const pendingWholeSet = ref(false)
 
 const playerUrl = computed(() => {
   if (!game.value || !ejsCore.value) return ''
@@ -1354,11 +1463,22 @@ const playerUrl = computed(() => {
   })
   if (g.bezel_path && bezelEnabled.value) p.set('bezel_url', g.bezel_path)
   if (pendingDisk.value) p.set('disk', String(pendingDisk.value))
+  if (pendingWholeSet.value) p.set('discs', 'all')
   return `/player.html?${p.toString()}`
 })
 
-function requestPlay(diskId?: number) {
+// Play, for a title split across discs, means the whole title. Nobody wants
+// disc one of four on its own, and the discs are listed right below for the
+// sets that put a level editor or a second scenario on a later one.
+//
+// wholeSet stays a parameter because the per-disc buttons pass false: they
+// exist precisely to start from one disc.
+function requestPlay(diskId?: number, wholeSet?: boolean) {
   pendingDisk.value = diskId ?? null
+  pendingWholeSet.value = wholeSet ?? (
+    diskId === undefined && diskSet.value.length > 1 &&
+    !!(game.value as any)?.set_loads_whole
+  )
   const saved = localStorage.getItem(PREF_KEY_EMU) as 'full' | 'window' | 'tab' | null
   // Load bezel pref for this specific game (default off)
   if (game.value?.bezel_path && game.value.id) {
@@ -1762,6 +1882,18 @@ onUnmounted(() => window.removeEventListener('message', onPlayerMessage))
 span.cdisk-btn { cursor: default; }
 span.cdisk-btn:hover { background: none; color: var(--pl-light, #a78bfa); }
 .cdisk-dl { padding: 2px 7px; border-left: 1px solid color-mix(in srgb, var(--pl) 35%, transparent); }
+/* Glass like every other chip here, never a solid fill. */
+.cdisk-m3u {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px;
+  border-radius: 5px; cursor: pointer;
+  background: color-mix(in srgb, var(--pl) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl) 35%, transparent);
+  color: var(--text, #fff); font-size: 11px; font-weight: 600;
+  transition: background .15s;
+}
+.cdisk-m3u:hover:not(:disabled) { background: color-mix(in srgb, var(--pl) 30%, transparent); }
+.cdisk-m3u:disabled { opacity: .55; cursor: default; }
+.cdisk-m3u--have { cursor: default; opacity: .62; background: none; }
 
 /* Language flags - flag-icons sprite, name on :title tooltip.
    The wrapper carries the size + hover transform; the inner `<span class="fi fi-XX">`

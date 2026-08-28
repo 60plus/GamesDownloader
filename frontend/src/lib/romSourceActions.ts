@@ -270,11 +270,51 @@ export async function listJobs(): Promise<Array<Record<string, unknown>>> {
   return (data?.jobs || []) as Array<Record<string, unknown>>;
 }
 
-/** The `window.__GD__.roms` namespace (general ROM primitives). */
-export const romActions = { import: importRom };
+/** Convert a title's discs to CHD: one file per disc, about half the size,
+ *  and the emulator opens it without unpacking anything.
+ *
+ *  Returns at once with the job; it reports itself over the `chd:convert`
+ *  event, which is on the list a theme may subscribe to. `deleteSource` is
+ *  the person's choice, taken before the work starts: false keeps the discs,
+ *  moved one directory down so the next scan does not file them as a second
+ *  copy of the same game. */
+export async function convertToChd(
+  romId: number, deleteSource = false,
+): Promise<Record<string, unknown>> {
+  const { data } = await client.post(`/roms/${romId}/convert-chd`, {
+    delete_source: deleteSource,
+  });
+  return data as Record<string, unknown>;
+}
+
+/** Conversions the server still knows about, so a reloaded page finds them. */
+export async function listChdJobs(): Promise<Array<Record<string, unknown>>> {
+  const { data } = await client.get("/roms/convert-chd/jobs");
+  return (data || []) as Array<Record<string, unknown>>;
+}
+
+/** Stop a running conversion, or drop a finished one from the list. */
+export async function cancelChdJob(jobId: number): Promise<void> {
+  await client.delete(`/roms/convert-chd/jobs/${jobId}`);
+}
+
+/** The `window.__GD__.roms` namespace (general ROM primitives).
+ *
+ *  The conversion is here rather than left to each theme to reach for by URL:
+ *  Vapor already hardcodes three ROM routes it should not know about, and one
+ *  more would be one more place to change when the route moves. */
+export const romActions = {
+  import: importRom,
+  convertToChd,
+  listChdJobs,
+  cancelChdJob,
+};
 
 export default {
   list, platforms, listRoms, download, route, platformArt,
   previewEntry, previewKey,
   pauseJob, resumeJob, retryJob, cancelJob, listJobs, refreshSource,
+  // The tray shows conversions beside downloads and stops them the same way,
+  // so it reaches for these through the same default import.
+  listChdJobs, cancelChdJob,
 };

@@ -240,7 +240,7 @@
             <!-- File info row -->
             <div class="gd-file-info-row">
               <span class="gd-file-name">{{ rom.fs_name }}</span>
-              <span class="gd-file-size">{{ formatSize(rom.fs_size_bytes) }}</span>
+              <span class="gd-file-size">{{ formatSize(titleBytes) }}</span>
             </div>
 
             <!-- Disks of a title split across floppies. Playing always inserts
@@ -256,7 +256,7 @@
                 :class="{ 'gd-disk--current': d.current }"
                 :title="d.name"
               >
-                <button v-if="ejsCore" class="gd-disk-btn" :title="t('detail.play_disk')" @click="requestPlay(d.id)">
+                <button v-if="ejsCore" class="gd-disk-btn" :title="t('detail.play_disk')" @click="requestPlay(d.id, false)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
                     <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
@@ -271,6 +271,48 @@
                   </svg>
                 </button>
               </div>
+
+              <!-- A playlist is what lets the emulator offer the swap itself
+                   rather than making somebody come back here between discs.
+                   Offered only when the discs have none: one may have come
+                   down beside them, or been written by hand on a handheld, and
+                   writing over it would be the wrong answer. -->
+              <button
+                v-if="isAdmin && diskSet.length > 1 && !rom?.playlist"
+                class="gd-disk-m3u"
+                :disabled="writingPlaylist"
+                :title="t('detail.write_playlist_hint')"
+                @click="writePlaylist"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+                  <line x1="8" y1="18" x2="14" y2="18"/><circle cx="4" cy="6" r="1"/>
+                  <circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>
+                </svg>
+                {{ writingPlaylist ? t('detail.writing_playlist') : t('detail.write_playlist') }}
+              </button>
+              <span v-else-if="rom?.playlist" class="gd-disk-m3u gd-disk-m3u--have" :title="rom.playlist">
+                {{ t('detail.has_playlist') }}
+              </span>
+
+              <!-- CHD is one file per disc where a rip is a sheet and its
+                   tracks, about half the size, and the emulator opens it
+                   without unpacking anything. Offered only where it would
+                   work: a title already in CHD, or a zipped cartridge ROM,
+                   does not get the button. -->
+              <button
+                v-if="isAdmin && rom?.chd_convertible"
+                class="gd-disk-m3u"
+                :disabled="converting"
+                :title="t('detail.convert_chd_hint')"
+                @click="convertToChd"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/>
+                </svg>
+                {{ t('detail.convert_chd') }}
+              </button>
+
             </div>
 
           </div>
@@ -409,7 +451,7 @@
               <span class="gd-dv gd-mono">{{ rom.fs_extension.toUpperCase() }}</span>
               <span class="gd-di"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span>
               <span class="gd-dk">{{ t('detail.file_size') }}</span>
-              <span class="gd-dv gd-mono">{{ formatSize(rom.fs_size_bytes) }}</span>
+              <span class="gd-dv gd-mono">{{ formatSize(titleBytes) }}</span>
               <!-- What a dump is checked against. For an archive these are the
                    ROM inside it, which is what the databases are keyed on. -->
               <template v-if="rom.has_hashes">
@@ -597,6 +639,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import client from '@/services/api/client'
 import { useDialog } from '@/composables/useDialog'
+import { romActions } from '@/lib/romSourceActions'
 import { useNotifications } from '@/composables/useNotifications'
 const { error: notifyError, success: notifySuccess } = useNotifications()
 import { useCoverTilt } from '@/composables/useCoverTilt'
@@ -628,6 +671,9 @@ interface RomDisk {
   id: number
   number: number
   name: string
+  /** Bytes on disk. Only used to put the weight of the whole set on the
+   *  button that loads it. */
+  size?: number | null
   current: boolean
 }
 
@@ -644,6 +690,17 @@ interface RomDetail {
   /** Whether this file is identified by checksum at all. False when the scan
    *  skipped it for its size, or when its format carries none. */
   has_hashes?: boolean
+  /** The name of an .m3u in the library that names these discs, or null when
+   *  they have none. Only ever set for a title with discs to switch between. */
+  playlist?: string | null
+  /** Whether the player can put every disc of the set into the emulator.
+   *  True for a bare image and for a zip, which it unpacks on the way in;
+   *  false for a .7z it cannot open and for a sheet whose tracks are not
+   *  library rows and so would not be fetched with it. */
+  set_loads_whole?: boolean
+  /** Whether every disc is something chdman can be handed. Asked of the files
+   *  rather than of their names, so a zipped cartridge ROM says no. */
+  chd_convertible?: boolean
   name: string
   slug: string | null
   summary: string | null
@@ -737,10 +794,24 @@ const resumeSave = computed(() => String(route.query.save || ''))
 // A title split across floppies is one library entry; the rest of its disks are
 // hidden everywhere else and only reachable from here.
 const diskSet = computed<RomDisk[]>(() => rom.value?.disks || [])
+// Every disc at once is the price of letting the emulator switch between
+// them, so the button says what it costs rather than finding out later.
+const diskSetBytes = computed(() =>
+  diskSet.value.reduce((sum, d) => sum + (d.size || 0), 0))
+// What the game weighs, which for a title split across discs is all of them.
+// The row names disc one, so showing its size alone answered a question
+// nobody asked: a four disc set read as 480 MB when it is nearer 1.5 GB.
+const titleBytes = computed(() =>
+  diskSet.value.length > 1 ? diskSetBytes.value : (rom.value?.fs_size_bytes || 0))
 
 // Which disk the machine should start from, chosen from that list. Null means
 // the one the entry itself names, which is disk 1 for every ordinary set.
 const pendingDisk = ref<number | null>(null)
+// Whether to load every disc of the set rather than the one that was clicked.
+// Opt in per launch: it is what makes the emulator able to switch discs on its
+// own, and it is also well over a gigabyte held in the tab for a four disc
+// PlayStation title, which is comfortable on a desktop and hopeless on a phone.
+const pendingWholeSet = ref(false)
 
 const playerUrl = computed(() => {
   if (!rom.value || !ejsCore.value) return ''
@@ -754,11 +825,24 @@ const playerUrl = computed(() => {
   if (wantResume.value) p.set('resume', '1')
   if (wantResume.value && resumeSave.value) p.set('save', resumeSave.value)
   if (pendingDisk.value) p.set('disk', String(pendingDisk.value))
+  if (pendingWholeSet.value) p.set('discs', 'all')
   return `/player.html?${p.toString()}`
 })
 
-function requestPlay(diskId?: number) {
+// Play, for a title split across discs, means the whole title. Nobody wants
+// disc one of four on its own, and the discs are listed right below for the
+// sets that put a level editor or a second scenario on a later one. Being the
+// default rather than a second button beside it is what keeps the page from
+// growing a control for every way of starting the same game.
+//
+// wholeSet is still a parameter, because the per-disc buttons pass false: they
+// exist precisely to start from one disc. A set that cannot be loaded whole
+// falls back to a single disc on its own, which is what set_loads_whole says.
+function requestPlay(diskId?: number, wholeSet?: boolean) {
   pendingDisk.value = diskId ?? null
+  pendingWholeSet.value = wholeSet ?? (
+    diskId === undefined && diskSet.value.length > 1 && !!rom.value?.set_loads_whole
+  )
   const saved = localStorage.getItem(PREF_KEY) as 'full' | 'window' | 'tab' | null
   // Load bezel pref for this specific game (default on)
   if (rom.value?.bezel_path && rom.value.id) {
@@ -958,6 +1042,63 @@ async function onClearMetadata() {
 // carries no usable digest, and then the server refuses; swallowing that left
 // the button sitting there after the spinner, with nothing said, and clicking
 // it again did the same nothing.
+const writingPlaylist = ref(false)
+
+// Writing the playlist into the library, beside the discs. It is a real file
+// rather than something assembled per launch, so it is still there when the
+// shelf is copied to a handheld and when RetroArch opens the folder.
+async function writePlaylist() {
+  if (!rom.value) return
+  writingPlaylist.value = true
+  try {
+    const { data } = await client.post(`/roms/${rom.value.id}/playlist`)
+    await fetchRom()
+    notifySuccess(t('detail.write_playlist_done', { name: data.name }))
+  } catch {
+    notifyError(t('detail.write_playlist_failed'))
+  } finally {
+    writingPlaylist.value = false
+  }
+}
+
+// Asked before the work starts rather than offered afterwards. Converting a
+// four disc set with both copies on disk is 3.5 GB where the answer is 1.9 GB,
+// and nobody wants to find that out at the end.
+//
+// Two questions rather than one dialog with a checkbox, because the dialog
+// GD has answers yes or no and this needs three outcomes: convert and delete,
+// convert and keep, or do neither. Nothing is started until both are answered.
+const converting = ref(false)
+
+async function convertToChd() {
+  if (!rom.value || converting.value) return
+  if (!await gdConfirm(t('detail.convert_chd_body'), {
+    title: t('detail.convert_chd_title'),
+    confirmText: t('detail.convert_chd'),
+  })) return
+
+  const deleteSource = await gdConfirm(
+    `${t('detail.convert_chd_delete')}\n\n${t('detail.convert_chd_keep')}`,
+    {
+      title: t('detail.convert_chd_title'),
+      confirmText: t('common.yes'),
+      cancelText: t('common.no'),
+    },
+  )
+
+  converting.value = true
+  try {
+    // Through __GD__ rather than by URL: the themes reach the same primitive
+    // and none of them has to know where the route lives.
+    await romActions.convertToChd(rom.value.id, deleteSource)
+    notifySuccess(t('detail.convert_chd_started'))
+  } catch (err: any) {
+    notifyError(err?.response?.data?.detail || t('detail.convert_chd_failed'))
+  } finally {
+    converting.value = false
+  }
+}
+
 async function computeHashes() {
   if (!rom.value) return
   hashing.value = true
@@ -1394,6 +1535,19 @@ onUnmounted(() => {
 .gd-disk-btn--static { cursor: default; }
 .gd-disk-btn--static:hover { background: none; color: rgba(255,255,255,.72); }
 .gd-disk-dl { padding: 4px 7px; border-left: 1px solid color-mix(in srgb, var(--pl) 26%, transparent); color: rgba(255,255,255,.5); }
+
+/* Glass like every other chip on this page, never a solid fill. */
+.gd-disk-m3u {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px;
+  border-radius: 6px; cursor: pointer;
+  background: color-mix(in srgb, var(--pl) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl) 26%, transparent);
+  color: rgba(255,255,255,.72); font-size: 11px; font-weight: 600;
+  transition: background .15s, color .15s;
+}
+.gd-disk-m3u:hover:not(:disabled) { background: color-mix(in srgb, var(--pl) 26%, transparent); color: #fff; }
+.gd-disk-m3u:disabled { opacity: .55; cursor: default; }
+.gd-disk-m3u--have { cursor: default; opacity: .62; background: none; }
 
 .spin { animation: gd-spin .8s linear infinite; }
 

@@ -594,6 +594,11 @@ const RESUME_SAVE     = params.get('save') || '';
 // Which disk of a multi-floppy Amiga title goes in the first drive. The whole
 // set is inserted either way; this only decides what the machine boots from.
 const BOOT_DISK       = params.get('disk') || '';
+// Load every disc of the set rather than the one entry that was clicked, so
+// the core's own disc control has something to switch between. Opt in, never
+// the default: a four disc PlayStation title is well over a gigabyte held in
+// the tab at once, which is fine on a desktop and hopeless on a phone.
+const WHOLE_SET       = params.get('discs') === 'all';
 
 const API_BASE   = '';
 const TOKEN      = localStorage.getItem('gd3_token') || '';
@@ -665,14 +670,15 @@ function _fmtMB(n) { return (n / 1048576).toFixed(1) + ' MB'; }
 
 // Download progress. total === 0 means the size is unknown, so we stay sweeping
 // rather than showing a bar that cannot be trusted.
-function setProgress(received, total) {
+function setProgress(received, total, title) {
   const bar  = document.getElementById('gd-bar');
   const fill = document.getElementById('gd-bar-fill');
+  const what = title || 'Downloading ROM…';
   if (!bar || !fill) return;
-  if (!total) { bar.classList.add('indet'); setLoad('Downloading ROM…', _fmtMB(received)); return; }
+  if (!total) { bar.classList.add('indet'); setLoad(what, _fmtMB(received)); return; }
   bar.classList.remove('indet');
   fill.style.width = Math.min(100, (received / total) * 100).toFixed(1) + '%';
-  setLoad('Downloading ROM…', `${_fmtMB(received)} / ${_fmtMB(total)}`);
+  setLoad(what, `${_fmtMB(received)} / ${_fmtMB(total)}`);
 }
 
 function setIndeterminate(title, sub) {
@@ -835,6 +841,80 @@ async function fetchRomBlobUrl() {
   }
   setProgress(received, total || received);
   return URL.createObjectURL(new Blob(chunks, { type }));
+}
+
+// Every disc of a multi-disc title, fetched into memory so they can be handed
+// to the emulator's own filesystem. Deliberately NOT through EmulatorJS: its
+// extractor copies each extracted byte out of the worker heap one at a time
+// from JavaScript, which is why a large archive parks the bar at 99% for
+// minutes. Here the progress figure is the real one.
+//
+// A disc that arrives as an archive is opened here rather than written as it
+// came: the core opens a disc image, not a .zip. That is what the set of a
+// zipped title depends on, and it is why the playlist the emulator is handed
+// names the .cue inside each archive while the one in the library names the
+// archive - each describes the place it will be read from.
+async function fetchDiscSet(disks) {
+  const total = disks.length;
+  const out = [];
+  for (let i = 0; i < total; i++) {
+    const disk = disks[i];
+    const which = `disc ${i + 1} of ${total}`;
+    const archived = /\.zip$/i.test(disk.name || '');
+    setLoad(`Downloading ${which}…`, disk.name || '');
+    const resp = await fetch(`${API_BASE}/api/roms/stream/${disk.id}`, {
+      headers: authHeaders(),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} on disc ${i + 1}`);
+    const size = Number(resp.headers.get('Content-Length')) || 0;
+
+    let chunks = [], received = 0;
+    if (!resp.body || typeof resp.body.getReader !== 'function') {
+      const whole = new Uint8Array(await resp.arrayBuffer());
+      chunks = [whole];
+      received = whole.length;
+    } else {
+      const reader = resp.body.getReader();
+      let lastPaint = 0;
+      setProgress(0, size, `Downloading ${which}…`);
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        const now = performance.now();
+        if (now - lastPaint > 80) {
+          setProgress(received, size, `Downloading ${which}…`);
+          lastPaint = now;
+        }
+      }
+      setProgress(received, size || received, `Downloading ${which}…`);
+    }
+
+    if (archived) {
+      // Held as a Blob rather than as one buffer: the browser may keep it on
+      // disk, so the packed disc need not sit in memory beside the unpacked
+      // one. Dropped as soon as the members are out.
+      const blob = new Blob(chunks);
+      chunks = [];
+      setLoad(`Unpacking ${which}…`, disk.name || '');
+      const members = await readZipBlob(blob, (done, whole) =>
+        setProgress(done, whole, `Unpacking ${which}…`));
+      if (!members.length) {
+        throw new Error(`There is nothing to play inside ${disk.name}`);
+      }
+      for (const m of members) out.push(m);
+    } else {
+      // One flat buffer per disc, so handing it over can be a move rather than
+      // another full-size copy.
+      const flat = new Uint8Array(received);
+      let at = 0;
+      for (const c of chunks) { flat.set(c, at); at += c.length; }
+      chunks = [];
+      out.push({ name: disk.name, data: flat });
+    }
+  }
+  return out;
 }
 
 // ── Fetch states/saves ───────────────────────────────────────────────────────
@@ -2727,6 +2807,135 @@ async function startAmiga(romMetaP) {
   }
 }
 
+// ── Archive reader (deflate) ─────────────────────────────────────────────────
+// A disc that comes down as a .zip has to be opened before it can be put into
+// the emulator's filesystem, because the core opens a disc image and not an
+// archive. EmulatorJS has an extractor of its own and this road deliberately
+// avoids it: it copies every extracted byte out of the worker's heap one at a
+// time from JavaScript, 740 million round trips for one PlayStation disc, and
+// that is why its bar parks at "Decompress Game Data 99%" for minutes.
+// DecompressionStream is built into the browser, native, and needs no library.
+//
+// Reads from a Blob rather than from a buffer on purpose. The browser is free
+// to keep a Blob on disk, so the packed copy need not be resident in memory
+// while the unpacked one is being built beside it - and an unpacked disc is
+// already most of a gigabyte.
+async function _inflateBlob(piece, rawSize, onProgress) {
+  const reader = piece.stream()
+    .pipeThrough(new DecompressionStream('deflate-raw'))
+    .getReader();
+  // Allocated once from the size the archive declares, so the disc is built in
+  // place instead of being collected in pieces and then copied into one array.
+  // The archive being wrong about it is not something to fall over on, so the
+  // buffer grows if it has to, and the honest length is returned either way.
+  let out = rawSize > 0 ? new Uint8Array(rawSize) : new Uint8Array(0);
+  let at = 0, lastPaint = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (at + value.length > out.length) {
+      const grown = new Uint8Array(Math.max(at + value.length, out.length * 2));
+      grown.set(out.subarray(0, at));
+      out = grown;
+    }
+    out.set(value, at);
+    at += value.length;
+    const now = performance.now();
+    if (onProgress && now - lastPaint > 80) { onProgress(at, rawSize); lastPaint = now; }
+  }
+  if (onProgress) onProgress(at, rawSize || at);
+  return at === out.length ? out : out.slice(0, at);
+}
+
+async function readZipBlob(blob, onProgress) {
+  const size = blob.size;
+  const tailLen = Math.min(65558, size);
+  const tail = new Uint8Array(await blob.slice(size - tailLen).arrayBuffer());
+  const tdv = new DataView(tail.buffer);
+  let eocd = -1;
+  for (let i = tail.length - 22; i >= 0; i--) {
+    if (tdv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('Not an archive');
+  let count  = tdv.getUint16(eocd + 10, true);
+  let cdSize = tdv.getUint32(eocd + 12, true);
+  let cdOff  = tdv.getUint32(eocd + 16, true);
+
+  // Sixty four bit record, when a count or an offset did not fit in the
+  // classic one. A PlayStation disc never needs it; a DVD image does.
+  if (count === 0xFFFF || cdSize === 0xFFFFFFFF || cdOff === 0xFFFFFFFF) {
+    const loc = eocd - 20;
+    if (loc >= 0 && tdv.getUint32(loc, true) === 0x07064b50) {
+      const at = Number(tdv.getBigUint64(loc + 8, true));
+      const z64 = new DataView(await blob.slice(at, at + 56).arrayBuffer());
+      if (z64.getUint32(0, true) === 0x06064b50) {
+        count  = Number(z64.getBigUint64(32, true));
+        cdSize = Number(z64.getBigUint64(40, true));
+        cdOff  = Number(z64.getBigUint64(48, true));
+      }
+    }
+  }
+
+  const cd  = new Uint8Array(await blob.slice(cdOff, cdOff + cdSize).arrayBuffer());
+  const cdv = new DataView(cd.buffer);
+  const dec = new TextDecoder();
+  const entries = [];
+  let off = 0;
+  for (let n = 0; n < count; n++) {
+    if (off + 46 > cd.length || cdv.getUint32(off, true) !== 0x02014b50) break;
+    const method   = cdv.getUint16(off + 10, true);
+    let   compSize = cdv.getUint32(off + 20, true);
+    let   rawSize  = cdv.getUint32(off + 24, true);
+    const nameLen  = cdv.getUint16(off + 28, true);
+    const extraLen = cdv.getUint16(off + 30, true);
+    const commLen  = cdv.getUint16(off + 32, true);
+    let   local    = cdv.getUint32(off + 42, true);
+    const name = dec.decode(cd.subarray(off + 46, off + 46 + nameLen));
+    // Whichever of the three did not fit is carried in the extra field, in
+    // this order, and only the ones that overflowed are present.
+    if (compSize === 0xFFFFFFFF || rawSize === 0xFFFFFFFF || local === 0xFFFFFFFF) {
+      let ex = off + 46 + nameLen;
+      const exEnd = ex + extraLen;
+      while (ex + 4 <= exEnd) {
+        const id = cdv.getUint16(ex, true), len = cdv.getUint16(ex + 2, true);
+        if (id === 0x0001) {
+          let a = ex + 4;
+          if (rawSize  === 0xFFFFFFFF) { rawSize  = Number(cdv.getBigUint64(a, true)); a += 8; }
+          if (compSize === 0xFFFFFFFF) { compSize = Number(cdv.getBigUint64(a, true)); a += 8; }
+          if (local    === 0xFFFFFFFF) { local    = Number(cdv.getBigUint64(a, true)); a += 8; }
+          break;
+        }
+        ex += 4 + len;
+      }
+    }
+    off += 46 + nameLen + extraLen + commLen;
+    // A folder entry has no content, and a Mac resource fork is named after
+    // the disc it sits beside - both would land in the emulator as files.
+    if (name.endsWith('/') || name.startsWith('__MACOSX/')) continue;
+    entries.push({ name, method, compSize, rawSize, local });
+  }
+
+  const out = [];
+  for (const e of entries) {
+    const head = new DataView(await blob.slice(e.local, e.local + 30).arrayBuffer());
+    if (head.getUint32(0, true) !== 0x04034b50) {
+      throw new Error('Damaged archive entry: ' + e.name);
+    }
+    // The local header repeats the name and may carry a different extra field
+    // from the central one, so the data starts past whatever this copy says.
+    const start = e.local + 30 + head.getUint16(26, true) + head.getUint16(28, true);
+    const piece = blob.slice(start, start + e.compSize);
+    if (e.method === 0) {
+      out.push({ name: e.name, data: new Uint8Array(await piece.arrayBuffer()) });
+    } else if (e.method === 8) {
+      out.push({ name: e.name, data: await _inflateBlob(piece, e.rawSize, onProgress) });
+    } else {
+      throw new Error('Unsupported compression in ' + e.name);
+    }
+  }
+  return out;
+}
+
 // ── Firmware archive reader ──────────────────────────────────────────────────
 // The server packs firmware with no compression on purpose, so reading it back
 // needs nothing but offsets: the alternative is shipping an inflate just to
@@ -2767,13 +2976,38 @@ function readStoredZip(buf) {
 // the core has not looked at it yet: EmulatorJS fires it after mounting and
 // before it downloads the ROM. Registering through a property setter catches
 // the emulator the instant EmulatorJS assigns it, with no polling.
-function installFirmwareHook(files) {
+// Files placed into the emulator's own filesystem before the core starts.
+// BIOS images came first and discs of a multi-disc set now travel the same
+// road, which is why this takes a list rather than firmware specifically.
+//
+// It must stay a single installation: it owns the `EJS_emulator` accessor
+// outright, so a second one would replace the first and quietly drop whatever
+// that one was carrying. Everything to place goes in one call.
+function installFsHook(files) {
   let _emu;
   Object.defineProperty(window, 'EJS_emulator', {
     configurable: true,
     get() { return _emu; },
     set(v) {
       _emu = v;
+      // EmulatorJS 4.2.3 crashes on any title with more than one disc, and
+      // only on those. startGame() calls setupDisksMenu() before
+      // setupSettingsMenu(), the disc menu writes the selected disc through
+      // menuOptionChanged() into this.allSettings, and this.allSettings is
+      // created by setupSettingsMenu() four lines later. The result is
+      //   TypeError: Cannot set properties of undefined (setting 'disk')
+      // and a game that never starts, having already loaded the discs and put
+      // the first one in the tray. Single-disc content never enters the
+      // branch, which is why the bug survived.
+      //
+      // Creating the objects early costs nothing: setupSettingsMenu replaces
+      // both a moment later, so nothing we put there is meant to survive.
+      // Done here rather than by patching the vendored file, which would mean
+      // owning a fork of it and re-testing every core on every update.
+      try {
+        if (!v.allSettings) v.allSettings = {};
+        if (!v.settings) v.settings = {};
+      } catch (err) { console.warn('Could not pre-arm the settings objects', err); }
       try {
         v.on('saveDatabaseLoaded', (FS) => {
           for (const f of files) {
@@ -2784,11 +3018,19 @@ function installFirmwareHook(files) {
               dir += '/' + parts[i];
               try { FS.mkdir(dir); } catch {}
             }
-            try { FS.writeFile('/' + f.name, f.data); }
-            catch (err) { console.warn('Could not place firmware', f.name, err); }
+            try {
+              // canOwn hands the buffer over instead of copying it. For a BIOS
+              // that is housekeeping; for a disc it is the difference between
+              // holding a set once and holding it twice.
+              FS.writeFile('/' + f.name, f.data, f.canOwn ? { canOwn: true } : undefined);
+            } catch (err) {
+              console.warn('Could not place', f.name, err);
+            }
+            f.data = null;   // our reference, dropped either way
           }
+          files.length = 0;
         });
-      } catch (err) { console.warn('Could not hook firmware delivery', err); }
+      } catch (err) { console.warn('Could not hook file delivery', err); }
     },
   });
 }
@@ -2835,8 +3077,33 @@ function installFirmwareHook(files) {
 
 
   let romUrl;
+  // What the emulator is handed as the game. For one disc that is the disc.
+  // For a whole set it is a playlist of a few hundred bytes, and the discs
+  // themselves go into the emulator's filesystem below - EmulatorJS only
+  // recognises a playlist by extension, and only sees extensions on the
+  // members of an archive, so the playlist arrives inside a tiny one.
+  const fsFiles = [];
   try {
-    romUrl = await fetchRomBlobUrl();
+    if (WHOLE_SET) {
+      const meta = await romMetaP;
+      const disks = (meta && meta.disks) || [];
+      if (disks.length > 1) {
+        for (const d of await fetchDiscSet(disks)) {
+          fsFiles.push({ name: d.name, data: d.data, canOwn: true });
+        }
+        setIndeterminate('Preparing playlist…', '');
+        const pl = await fetch(`${API_BASE}/api/roms/${ROM_ID}/playlist.zip`,
+                               { headers: authHeaders() });
+        if (!pl.ok) throw new Error(`HTTP ${pl.status} on the playlist`);
+        romUrl = URL.createObjectURL(await pl.blob());
+      } else {
+        // Asked for the set and there is no set. Play the disc rather than
+        // refusing: the request was for this game, not for a feature.
+        romUrl = await fetchRomBlobUrl();
+      }
+    } else {
+      romUrl = await fetchRomBlobUrl();
+    }
   } catch (err) {
     showError('Failed to load ROM', err.message || 'Could not fetch the ROM file.');
     return;
@@ -2854,12 +3121,38 @@ function installFirmwareHook(files) {
       { headers: authHeaders() },
     );
     if (fwRes.ok && fwRes.status !== 204) {
-      const files = readStoredZip(new Uint8Array(await fwRes.arrayBuffer()));
-      if (files.length) installFirmwareHook(files);
+      for (const f of readStoredZip(new Uint8Array(await fwRes.arrayBuffer()))) {
+        fsFiles.push(f);
+      }
     }
   } catch (err) {
     console.warn('Could not fetch firmware', err);
   }
+
+  // Subchannel data, when this disc has any. A PAL PlayStation disc protected
+  // with LibCrypt boots, fails its check and hangs on a black screen without
+  // the matching .sbi beside it, and says so only in a core log line nobody
+  // reads. It is 452 bytes, it is not a library row, and nothing else here
+  // would carry it. Most discs answer 204 and cost nothing.
+  try {
+    const scRes = await fetch(
+      `${API_BASE}/api/roms/${ROM_ID}/sidecars.zip${WHOLE_SET ? '?whole_set=true' : ''}`,
+      { headers: authHeaders() },
+    );
+    if (scRes.ok && scRes.status !== 204) {
+      for (const f of readStoredZip(new Uint8Array(await scRes.arrayBuffer()))) {
+        fsFiles.push(f);
+      }
+    }
+  } catch (err) {
+    console.warn('Could not fetch subchannel data', err);
+  }
+
+  // One installation, carrying firmware and discs together: the hook owns the
+  // EJS_emulator accessor, so a second one would replace the first. Always
+  // installed, even with nothing to place, because it also arms the settings
+  // objects EmulatorJS forgets to create before its disc menu writes to them.
+  installFsHook(fsFiles);
 
   // ── EmulatorJS config ────────────────────────────────────────────────────
   window.EJS_player        = '#game';
@@ -2902,6 +3195,23 @@ function installFirmwareHook(files) {
   window.EJS_gameID        = 'gd_' + ROM_ID;
   window.EJS_color         = '#a78bfa';
   window.EJS_startOnLoaded = true;
+  // A set loaded from a playlist boots to a black screen and needs a reset
+  // before it runs. Reported by the player, not found here: the disc is put
+  // in the tray as the core is already reading, so the machine looks at an
+  // empty drive, and pressing Restart makes it look again.
+  //
+  // EmulatorJS has this case built in. softLoad is a number of seconds after
+  // which it calls gameManager.restart() by itself, which is the button press
+  // without the person having to know to make it. Four seconds is past the
+  // BIOS logo and before anyone would have reached for the mouse.
+  //
+  // Only for a whole set, because a single disc reaches the core as the game
+  // itself and starts on its own; and not when resuming a savestate, because
+  // the state carries the machine's own idea of what is in the drive and a
+  // reset partway through loading it would throw that away.
+  if (WHOLE_SET && !RESUME) {
+    window.EJS_softLoad = 4;
+  }
   // Threads. Two cores are built to need them, and that is a property of the
   // core rather than a preference, so it is not left to a switch: EmulatorJS
   // refuses to start without, showing "Error for site owner" and writing the
