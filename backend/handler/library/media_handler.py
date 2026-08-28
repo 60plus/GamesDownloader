@@ -264,7 +264,17 @@ def _clear_video_dir(game_id: int) -> Path:
 def _video_format(quality: str) -> str:
     """yt-dlp format string for the requested quality, falling back down the
     ladder (e.g. 1080 -> 720 -> 480 -> whatever is left) when the source has
-    no stream at that height. Merged streams need ffmpeg (in the image)."""
+    no stream at that height. Merged streams need ffmpeg (in the image).
+
+    The "+" selectors are not optional and must not be traded away to get
+    ffmpeg out of the image. That was tried. Measured from inside the image on
+    2026-08-28, YouTube offered 53 formats for one video and 48 for another,
+    and none of them carried video and audio together: the pre-merged streams
+    that a no-ffmpeg download would need are not served any more, at 720p or
+    at any other height. A ladder without a "+" does not quietly fetch
+    something smaller, it fails with "Requested format is not available" and
+    no trailer downloads at all. See test_trailer_download.py.
+    """
     if quality == "best":
         return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
     try:

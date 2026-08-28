@@ -8,9 +8,16 @@ backend/**/__pycache__/
 frontend/dist/
 backend/static/
 
-# Environment
+# Environment. Every variant, not just the plain name: the file that gets
+# committed by accident is never .env itself, it is the copy somebody made
+# beside it before an upgrade. A rule matching one exact name leaves every
+# one of those visible to `git add -A`, in the same directory as the real
+# thing, in a repository that pushes to a public remote.
 .env
-*.env.local
+.env.*
+*.env
+*.env.*
+!.env.example
 
 # IDE
 .vscode/

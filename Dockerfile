@@ -59,19 +59,75 @@ FROM python:3.13-slim
 
 # System deps + Node.js (for plugin .vue compilation on startup)
 # Combined into one layer to reduce image size
+#
+# `upgrade` runs before the installs because the base image is rebuilt on its
+# own schedule and this one is not. Between the two there is always a window
+# in which Debian has published a security fix that the base does not yet
+# carry, and a build that never upgrades never takes it. Today that window
+# holds openssl and nothing else: the upgrade moves three packages.
+#
+# gosu is deliberately absent, and removing it was the single largest
+# improvement available here. It is one small Go binary, called once at
+# startup to step down from root, and it carries a statically linked Go
+# runtime into the image along with 46 advisories against Go's networking and
+# TLS libraries - code gosu never enters. Debian will not rebuild it against a
+# newer Go on this timescale, so those advisories stay as long as the binary
+# does. setpriv does the same job, ships in util-linux, and is already here
+# because Debian installs util-linux everywhere. See entrypoint.sh.
+#
+# ffmpeg, by contrast, has to stay, and it is worth writing down why because
+# it looks so removable. One feature needs it: yt-dlp gluing together the
+# separate video and audio streams YouTube serves, for the trailer download
+# in the metadata editor. It is expensive company - it brings the critical
+# libtiff advisory in through gdk-pixbuf and three more in cjson through
+# librist - so it was removed, and that broke every trailer button. Measured
+# from inside the image on 2026-08-28: of the 53 and 48 formats YouTube
+# offered for two videos, none carried video and audio together. The
+# pre-merged streams a no-ffmpeg download would need are simply not served
+# any more. If this is worth another attempt, the way through is a smaller
+# ffmpeg carrying only the mp4 muxer, pinned by checksum like EmulatorJS.
+#
+# Node stays on NodeSource, and that was tested rather than assumed. Debian
+# ships 20.19.2 with its own security backports, which sounded strictly
+# better than NodeSource's un-backported 22.23.2, and Vite 8 accepts it
+# (^20.19.0 || >=22.12.0). Built and measured on 2026-08-28, it went the
+# other way: critical advisories against the image went from 7 to 11.
+#
+# Debian unbundles what node vendors, so node-undici arrives as its own
+# package carrying two criticals and eight highs of its own, and it cannot be
+# dropped - removing it removes nodejs. NodeSource keeps the same undici
+# inside the binary where a scanner cannot see it, so part of that difference
+# is honesty rather than exposure. What is not ambiguous: 20 is an older LTS
+# line than 22, both answer "no fix available", and the swap saved 40 MB
+# rather than the 225 MB the package listing suggested.
+#
+# The `clamav` package is gone too. It carries clamscan, sigtool and clambc,
+# none of which this project ever invokes: scanning goes through clamd over
+# its socket and updates through freshclam, which come from clamav-daemon and
+# clamav-freshclam. clamav-daemon does not depend on it.
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     curl \
-    gosu \
-    clamav \
     clamav-daemon \
     transmission-daemon \
     transmission-cli \
     ffmpeg \
     lhasa \
+    mame-tools \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# mame-tools ships nine programs and GD uses one of them. The other eight are
+# emulator-side tooling for cassettes, floppies and cartridge images, and they
+# are what pulls MAME's GPL-2.0-or-later format library into the picture -
+# chdman itself carries a BSD-3-Clause header. Dropping them keeps the image
+# to what it actually runs, and the package's own copyright file stays where
+# apt put it either way.
+RUN set -eu; \
+    cd /usr/bin; \
+    rm -f castool floptool imgtool jedutil ldresample ldverify romcmp unidasm; \
+    command -v chdman >/dev/null || { echo "chdman missing after install"; exit 1; }
 
 # Plugin compiler: Vite + Vue (cached layer - rarely changes).
 # Versions pinned to the known-good set. npm has a long-standing bug where it
@@ -92,6 +148,18 @@ RUN cd /app/plugin-compiler \
     && ls node_modules/@rolldown/binding-*/*.node >/dev/null 2>&1 \
        || { echo "FATAL: rolldown native binding failed to install"; exit 1; }
 
+# npm has now done the only job it has here, and everything past this point
+# reaches node directly: entrypoint.sh runs compile-theme-plugins.mjs, and
+# nothing in the backend shells out to npm. What would otherwise stay behind
+# is npm's own dependency tree, which accounted for 16 advisories against the
+# published image including a critical one in tar. node and the compiler's
+# node_modules are untouched; only the package manager goes.
+RUN set -eu; \
+    rm -rf /usr/lib/node_modules/npm /usr/bin/npm /usr/bin/npx; \
+    command -v node >/dev/null || { echo "node missing after npm removal"; exit 1; }; \
+    node -e 'process.exit(0)'; \
+    ! command -v npm >/dev/null
+
 # ClamAV configuration
 COPY docker/clamd.conf /etc/clamav/clamd.conf
 COPY docker/freshclam.conf /etc/clamav/freshclam.conf
@@ -106,6 +174,13 @@ COPY backend/requirements.txt .
 # against it; the application's own dependencies have none.
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
+
+# The licences themselves, which the image has never carried. The comment on
+# the vAmigaWeb layer below sends the reader to NOTICE.md for the source link
+# GPL-3.0 requires, and until now that file was not in the image at all: a
+# pointer to something nobody running this could open. Both licences travel
+# with the thing they cover.
+COPY LICENSE LICENSE-ASSETS NOTICE.md /app/
 
 # Backend source (changes frequently - keep last)
 COPY backend/ .

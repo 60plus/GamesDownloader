@@ -188,8 +188,22 @@ if [ "${PUID}" -gt 0 ] && [ "${PGID}" -gt 0 ]; then
     fi
     # Fix data directory ownership so the app can write to volumes
     chown -R "${PUID}:${PGID}" /data 2>/dev/null || true
-    # Drop privileges and execute the main process
-    exec gosu "${PUID}:${PGID}" "$@"
+    # Drop privileges and execute the main process.
+    #
+    # setpriv rather than gosu. gosu is a Go program, and shipping it meant
+    # shipping a Go runtime with 46 advisories against networking and TLS code
+    # for the sake of one exec. setpriv comes from util-linux, which Debian
+    # installs everywhere, so the replacement was already in the image.
+    #
+    # --init-groups reproduces the supplementary groups gosu granted, and it
+    # needs a passwd entry for the uid - which the useradd above creates. gosu
+    # accepted a bare numeric uid without one, so where that entry is missing
+    # the groups are cleared instead: a setpriv that simply failed here would
+    # mean the container never starts at all.
+    _GD_GROUPS=--init-groups
+    getent passwd "${PUID}" >/dev/null 2>&1 || _GD_GROUPS=--clear-groups
+    exec setpriv --reuid="${PUID}" --regid="${PGID}" "${_GD_GROUPS}" \
+        --inh-caps=-all "$@"
 fi
 
 # PUID/PGID not set - run as current user (root by default)
