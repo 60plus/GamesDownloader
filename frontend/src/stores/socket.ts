@@ -12,6 +12,7 @@ export const useSocketStore = defineStore("socket", () => {
   const downloadJobUpdate = ref<Record<string, unknown> | null>(null);
   const downloadJobCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const packagingCallbacks: Array<(data: Record<string, unknown>) => void> = [];
+  const chdCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const urlUploadCallbacks: Array<(kind: string, data: Record<string, unknown>) => void> = [];
   const romSourceCallbacks: Array<(kind: string, data: Record<string, unknown>) => void> = [];
   const dashboardQueueCallbacks: Array<(data: Record<string, unknown>) => void> = [];
@@ -21,6 +22,15 @@ export const useSocketStore = defineStore("socket", () => {
   function onDownloadJob(cb: (data: Record<string, unknown>) => void) {
     downloadJobCallbacks.push(cb);
     return () => { const i = downloadJobCallbacks.indexOf(cb); if (i >= 0) downloadJobCallbacks.splice(i, 1) }
+  }
+
+  // A CHD conversion reports over chd:convert, one payload carrying the whole
+  // job: status, overall percent and how many discs of the set are done. Same
+  // shape as onPackaging because it is the same kind of thing - long local
+  // work with a progress bar, not a transfer.
+  function onChdConvert(cb: (data: Record<string, unknown>) => void) {
+    chdCallbacks.push(cb);
+    return () => { const i = chdCallbacks.indexOf(cb); if (i >= 0) chdCallbacks.splice(i, 1) }
   }
 
   function onPackaging(cb: (data: Record<string, unknown>) => void) {
@@ -112,6 +122,9 @@ export const useSocketStore = defineStore("socket", () => {
     socket.value.on("download:packaging", (data) => {
       packagingCallbacks.forEach(cb => cb(data));
     });
+    socket.value.on("chd:convert", (data) => {
+      chdCallbacks.forEach(cb => cb(data));
+    });
     socket.value.on("upload:url_progress", (data) => {
       urlUploadCallbacks.forEach(cb => cb("progress", data));
     });
@@ -159,5 +172,5 @@ export const useSocketStore = defineStore("socket", () => {
     liveSubs = 0;
   }
 
-  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onUrlUpload, onRomSource, onDashboardQueue, onDashboardHealth, connect, disconnect, reconnectWithFreshToken };
+  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onChdConvert, onUrlUpload, onRomSource, onDashboardQueue, onDashboardHealth, connect, disconnect, reconnectWithFreshToken };
 });

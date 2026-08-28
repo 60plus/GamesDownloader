@@ -11,6 +11,7 @@ query / body params - otherwise FastAPI will receive "multiple values" errors.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import zipfile
@@ -28,8 +29,14 @@ from decorators.auth import protected_route
 from handler.auth.scopes import Scope as Scopes
 from handler.database.rom_handler import rom_handler, rom_platform_handler
 from handler.database.save_state_handler import save_state_handler
-from handler.filesystem.rom_scanner import SHEET_EXTENSIONS, scan_roms_path, tracks_referenced_by
-from handler.roms import rom_removal
+from handler.filesystem.rom_scanner import (
+    SHEET_EXTENSIONS,
+    scan_roms_path,
+    subchannel_files_for,
+    tracks_referenced_by,
+)
+from handler.roms import chd_jobs, rom_removal
+from handler.roms.chd_convert import convertible_disc, disc_inside_archive
 from handler.metadata.rom_scrape_handler import scrape_roms_batch
 from handler.metadata.rom_platform_map import PLATFORM_MAP, get_cover_aspect as _get_cover_aspect
 from utils import download_tickets
@@ -285,6 +292,48 @@ async def stream_rom(request: Request, rom_id: int):
     )
 
 
+# ── CHD conversion (literal paths, before /{rom_id}) ──────────────────────────
+
+class _ConvertRequest(BaseModel):
+    # Asked before the work starts rather than offered afterwards: converting
+    # a four disc set with both copies on disk is 3.5 GB where the answer is
+    # 1.9 GB, and nobody wants to find that out at the end. False keeps the
+    # discs, moved one directory down so the next scan does not file them as
+    # a second copy of the same game.
+    delete_source: bool = False
+
+
+@protected_route(router.get, "/convert-chd/jobs", scopes=[Scopes.ROMS_READ])
+async def list_chd_jobs(request: Request) -> list[dict]:
+    """Conversions this server knows about, so a refreshed page finds them."""
+    return chd_jobs.list_jobs()
+
+
+@protected_route(router.delete, "/convert-chd/jobs/{job_id}", scopes=[Scopes.ROMS_WRITE])
+async def cancel_chd_job(request: Request, job_id: int) -> dict:
+    return await chd_jobs.cancel(job_id)
+
+
+@protected_route(router.post, "/{rom_id}/convert-chd", scopes=[Scopes.ROMS_WRITE])
+async def convert_rom_to_chd(
+    request: Request, rom_id: int, body: _ConvertRequest | None = None,
+) -> dict:
+    """Convert this title's discs to CHD, as one job for the whole set.
+
+    CHD is one file per disc where a rip is a sheet and its tracks, about half
+    the size, and the emulator opens it without unpacking anything: a four
+    disc PlayStation set is 1.6 GB in the browser rather than 2.7 GB, which is
+    the difference between comfortable and up against the tab's ceiling.
+
+    Returns at once with the job. It runs in the background and reports itself
+    to the download tray, because a disc takes half a minute and a set takes
+    several, and a request held open for that long is a request that dies on
+    somebody's proxy.
+    """
+    return await chd_jobs.start(
+        rom_id, delete_source=bool(body and body.delete_source))
+
+
 # ── Home literal routes (MUST be before /{rom_id} to avoid route capture) ──────
 
 def _rom_rating_agg(rom) -> float | None:
@@ -538,12 +587,41 @@ async def get_rom(request: Request, rom_id: int) -> dict:
                 "id": d.id,
                 "number": d.disk_number,
                 "name": d.fs_name,
+                # What loading the whole set would cost. The page puts it on
+                # the button, because holding every disc at once is the price
+                # of letting the emulator switch between them.
+                "size": d.fs_size_bytes,
                 "current": d.id == rom.id,
             }
             for d in await rom_handler.get_disk_set(rom.platform_id, rom.disk_group)
         ]
+    # Whether these discs already have a playlist, which is what decides if the
+    # page offers to write one. Only asked for a title that has discs to switch
+    # between, so an ordinary game costs no filesystem call at all.
+    playlist = None
+    if len(disks) > 1:
+        playlist = await asyncio.to_thread(
+            _existing_playlist, Path(rom.fs_path), [d["name"] for d in disks]
+        )
+
+    # Whether the page may offer to convert this to CHD. Asked of the files
+    # rather than of their names: a zipped cartridge ROM has the extension of
+    # an archived disc and nothing inside worth converting, and finding that
+    # out a minute into the job is the wrong moment. One small read per disc,
+    # off the event loop, and only the discs this title actually has.
+    convert_names = [d["name"] for d in disks] or [rom.fs_name]
+    chd_convertible = await asyncio.to_thread(
+        lambda: all(convertible_disc(Path(rom.fs_path) / n) for n in convert_names)
+    )
+
     return {
         "disks":           disks,
+        "playlist":        playlist,
+        # Whether the page may offer to load the whole set. False for archived
+        # discs and for sheets, which cannot reach the emulator that way and
+        # would fail only after the entire set had downloaded.
+        "set_loads_whole": _set_loads_whole([d["name"] for d in disks]),
+        "chd_convertible": chd_convertible,
         "id":              rom.id,
         "platform_id":     rom.platform_id,
         "platform_slug":    rom.platform.slug    if rom.platform else None,
@@ -1586,7 +1664,14 @@ class _ZipStream:
         return out
 
 
-def _playlist_for(members) -> str:
+# What the disc inside an archive is called. Lives with the rest of the disc
+# format knowledge rather than here: the conversion asks the same question, of
+# the same files, and two answers to it would be one answer too many. Kept
+# under the old private name so the playlist below reads as it always did.
+_disc_inside_archive = disc_inside_archive
+
+
+def _playlist_for(members, resolve_in=None) -> str:
     """A .m3u naming the discs of a multi-disc title, in order, or "".
 
     Without one, a two-disc game arrives as a folder of files and the emulator
@@ -1601,10 +1686,22 @@ def _playlist_for(members) -> str:
 
     Nothing for a single disc, however many files it takes: there is nothing to
     switch between.
+
+    With *resolve_in* set to the directory the discs live in, an archived disc
+    is named by the image inside it rather than by the archive. The two callers
+    want different answers and both are right: the copy written into the
+    library describes that folder, where the file really is a .zip, and the
+    copy handed to the browser describes the emulator's filesystem, where the
+    player will have unpacked it.
     """
     discs = [m.fs_name for m in members if not m.track_of]
     if len(discs) < 2:
         return ""
+    if resolve_in is not None:
+        discs = [
+            _disc_inside_archive(Path(resolve_in) / name) or name
+            for name in discs
+        ]
     return "".join(f"{name}\n" for name in discs)
 
 
@@ -1684,6 +1781,18 @@ def _member_files(members, roms_base: str) -> list[tuple[Path, str]]:
         for entry in beside:
             if entry.name.lower() in named:
                 offer(entry, entry.name)
+
+    # And the subchannel data, which no sheet names because nothing names it:
+    # it is matched to a disc by having the same name. A PAL PlayStation disc
+    # protected with LibCrypt boots and hangs on a black screen without it, so
+    # a download that leaves it behind is a download that does not run.
+    # getattr, not row.track_of: this function has only ever needed a path and
+    # a name, and callers - including its tests - build rows with just those.
+    discs = [row.fs_name for row in members
+             if not getattr(row, "track_of", None)]
+    for directory in {Path(row.fs_path) for row in members}:
+        for entry in subchannel_files_for(directory, discs):
+            offer(entry, entry.name)
     return out
 
 
@@ -1822,6 +1931,208 @@ async def compute_rom_hashes(request: Request, rom_id: int) -> dict:
     return {"ok": True, "has_hashes": True}
 
 
+# A disc the emulator can be handed as one file, exactly as it sits on disk.
+_SELF_CONTAINED_DISC = {".chd", ".iso", ".img", ".pbp", ".cso", ".exe"}
+
+# And a disc the player can open on the way in. DecompressionStream is built
+# into the browser and speaks deflate, which is a zip and nothing else: a .7z
+# or a .rar would mean shipping a decoder, so those stay out.
+_UNPACKABLE_ARCHIVE = {".zip"}
+
+
+def _set_loads_whole(disc_names) -> bool:
+    """Whether the player can put every disc of this set in place.
+
+    Loading the whole set is what lets the core change discs on its own, and
+    it works by putting one file per disc into the emulator's filesystem. A
+    zip is fine, because the player unpacks it there; a .7z is not, and
+    neither is a sheet, because the .cue is a library row and its .bin is not,
+    so only the sheet would arrive.
+
+    Either failure lands after the entire set has downloaded, which is the
+    worst possible place to find out, so the page asks this before offering
+    the button.
+    """
+    names = list(disc_names)
+    if not names:
+        return False
+    allowed = _SELF_CONTAINED_DISC | _UNPACKABLE_ARCHIVE
+    return all(Path(n).suffix.lower() in allowed for n in names)
+
+
+def _playlists_naming(directory, disc_names) -> list[Path]:
+    """Every playlist in *directory* that names any of these discs.
+
+    By content rather than by name, because the useful question is whether the
+    discs have a playlist, not whether they have ours. One that came down
+    beside them, or that somebody wrote by hand on a handheld, counts the same:
+    for the button, because writing a second one over the top would be the
+    wrong answer; and for deletion, because a playlist naming discs that are
+    gone is just as broken whoever wrote it.
+    """
+    discs = {n.lower() for n in disc_names}
+    if len(discs) < 2:
+        return []
+    try:
+        candidates = sorted(Path(directory).glob("*.m3u"))
+    except OSError:
+        return []
+    out = []
+    for entry in candidates:
+        try:
+            lines = entry.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        # A line may carry a `path|Label` suffix, and may be written with
+        # either separator by whatever wrote it. Only the file name is
+        # compared. GD never writes a label - PCSX-ReARMed hands the whole
+        # line to the filesystem - but other tools do.
+        named = {
+            line.split("|", 1)[0].strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
+            for line in lines if line.strip() and not line.startswith("#")
+        }
+        if named & discs:
+            out.append(entry)
+    return out
+
+
+def _existing_playlist(directory, disc_names) -> str | None:
+    """The name of a playlist naming these discs, or None. For the page."""
+    found = _playlists_naming(directory, disc_names)
+    return found[0].name if found else None
+
+
+@protected_route(router.get, "/{rom_id}/sidecars.zip", scopes=[Scopes.ROMS_READ])
+async def rom_sidecars(request: Request, rom_id: int, whole_set: bool = False) -> Response:
+    """Subchannel data for this disc, or for the whole set, as a small archive.
+
+    A disc reaches the emulator's filesystem because it is a library row and
+    the player fetches it by id. Its subchannel file is not a row - it is 452
+    bytes matched to the disc by name - so nothing would carry it, and a PAL
+    PlayStation disc protected with LibCrypt hangs on a black screen without
+    it, saying so only in a core log line nobody sees.
+
+    204 when there is nothing, which is most discs, so the player skips the
+    transfer entirely rather than unpacking an archive to find it empty. The
+    firmware bundle already answers that way.
+    """
+    rom = await rom_handler.get_by_id(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+
+    if whole_set:
+        members = await rom_handler.disk_set(rom_id)
+        names = [m.fs_name for m in members if not m.track_of]
+    else:
+        names = [rom.fs_name]
+
+    directory = Path(rom.fs_path)
+    roms_base = os.path.realpath(await _get_roms_path())
+    resolved = os.path.realpath(str(directory))
+    if not (resolved == roms_base or resolved.startswith(roms_base + os.sep)):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    found = await asyncio.to_thread(subchannel_files_for, directory, names)
+    if not found:
+        return Response(status_code=204)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as archive:
+        for entry in found:
+            archive.write(entry, arcname=entry.name)
+    return Response(content=buf.getvalue(), media_type="application/zip")
+
+
+@protected_route(router.get, "/{rom_id}/playlist.zip", scopes=[Scopes.ROMS_READ])
+async def rom_playlist_archive(request: Request, rom_id: int) -> Response:
+    """The playlist alone, zipped, as the thing the browser loads as the game.
+
+    EmulatorJS recognises a playlist by its extension and only sees extensions
+    on the members of an archive, so the playlist has to arrive inside one.
+    Putting the discs in there as well is the thing to avoid: its extractor
+    copies every extracted byte out of the worker's heap one at a time from
+    JavaScript, which for a four disc PlayStation set is 2.65 GiB and several
+    full-size copies. The discs reach the emulator's filesystem by another
+    road, written there directly; this is a few hundred bytes.
+
+    The names in it are the ones the emulator will see, which for an archived
+    disc is the image inside rather than the .zip: the player unpacks on the
+    way in, so the .zip never exists on that side.
+    """
+    rom = await rom_handler.get_by_id(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+
+    # Reading inside the archives means touching files, so this route needs the
+    # same guard as the ones that serve them.
+    directory = Path(rom.fs_path)
+    roms_base = os.path.realpath(await _get_roms_path())
+    resolved = os.path.realpath(str(directory))
+    if not (resolved == roms_base or resolved.startswith(roms_base + os.sep)):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    members = await rom_handler.disk_set(rom_id)
+    body = await asyncio.to_thread(_playlist_for, members, directory)
+    if not body:
+        raise HTTPException(
+            status_code=422,
+            detail="This title is a single disc; there is nothing to switch between",
+        )
+
+    stem = _safe_download_name(rom.name or rom.fs_name_no_ext or str(rom.id))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr(f"{stem}.m3u", body)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": content_disposition(f"{stem}.zip")},
+    )
+
+
+@protected_route(router.post, "/{rom_id}/playlist", scopes=[Scopes.ROMS_WRITE])
+async def write_rom_playlist(request: Request, rom_id: int) -> dict:
+    """Write an .m3u naming this title's discs, into the library beside them.
+
+    GD has been able to put a playlist inside a download since 1.0.32, but that
+    copy exists for the length of one transfer. This one is part of the
+    library: it survives the next scan, it travels when the shelf is copied to
+    a handheld, and RetroArch finds it without being told.
+
+    Deliberately plain, one filename per line. Some frontends read a
+    `path|Label` syntax and some hand the whole line to the filesystem and find
+    nothing, so a file written into someone's library is the compatible kind.
+    Labels belong where we know they are read.
+    """
+    rom = await rom_handler.get_by_id(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+
+    members = await rom_handler.disk_set(rom_id)
+    body = _playlist_for(members)
+    if not body:
+        raise HTTPException(
+            status_code=422,
+            detail="This title is a single disc; there is nothing to switch between",
+        )
+
+    directory = Path(rom.fs_path)
+    name = _safe_download_name(rom.name or rom.fs_name_no_ext or str(rom.id)) + ".m3u"
+    target = directory / name
+
+    # The same guard, and the same reason, as the download and hashing routes:
+    # fs_path is a stored string, and a row can point outside the ROM directory
+    # through a symlink or after the library path was changed under it. This
+    # one writes, so it matters more here than anywhere else.
+    roms_base = os.path.realpath(await _get_roms_path())
+    resolved = os.path.realpath(str(directory))
+    if not (resolved == roms_base or resolved.startswith(roms_base + os.sep)):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    await asyncio.to_thread(target.write_text, body, encoding="utf-8")
+    return {"ok": True, "name": name, "discs": len(body.splitlines())}
+
+
 @protected_route(router.post, "/platforms/{slug}/clear-metadata", scopes=[Scopes.ROMS_WRITE])
 async def clear_platform_metadata(request: Request, slug: str) -> dict:
     """Clear scraped metadata for ALL ROMs on a platform."""
@@ -1883,6 +2194,19 @@ async def rom_removal_preview(request: Request, rom_id: int) -> dict:
     extra = [m.fs_name for m in members
              if m.track_of and m.fs_name.lower() not in spoken_for]
     extra += [p.name for p in await removable_tracks(members)]
+    # A playlist naming these discs goes with them. It is not a library row and
+    # no sheet names it, so nothing else here would reach it, and one left
+    # behind names discs that are not there.
+    extra += [p.name for p in await asyncio.to_thread(
+        _playlists_naming, Path(members[0].fs_path),
+        [m.fs_name for m in members if not m.track_of],
+    )]
+    # And the subchannel data, which belongs to these discs and to nothing
+    # else. It has no row, so nothing else would list it either.
+    extra += [p.name for p in await asyncio.to_thread(
+        subchannel_files_for, Path(members[0].fs_path),
+        [m.fs_name for m in members if not m.track_of],
+    )]
     return {
         "disks": [
             {"id": d.id, "name": d.fs_name, "number": d.disk_number}
@@ -1917,6 +2241,16 @@ async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) 
     # nothing is left to say which data files belonged to it, and those files
     # have no row of their own to be reached by.
     orphans = await removable_tracks(disks) if delete_files else []
+    # And the playlist naming this set, on the same terms as the discs: it is
+    # neither a row nor a file any sheet names, so nothing else would reach it,
+    # and one left behind points at discs that have gone.
+    if delete_files:
+        names = [d.fs_name for d in disks if not d.track_of]
+        orphans = list(orphans) + await asyncio.to_thread(
+            _playlists_naming, Path(disks[0].fs_path), names,
+        ) + await asyncio.to_thread(
+            subchannel_files_for, Path(disks[0].fs_path), names,
+        )
     # Files another sheet in the directory still names. A track that became a row
     # of its own is a member of this set and would otherwise go with it, leaving
     # the sheet that survives naming a file that is not there.

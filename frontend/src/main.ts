@@ -108,6 +108,9 @@ const PLUGIN_SOCKET_EVENTS = new Set([
   "romsource:download_complete",
   "romsource:download_error",
   "romsource:download_state",
+  // Disc conversion to CHD (__GD__.roms.convertToChd), one payload carrying
+  // the whole job ({ id, rom_id, status, percent, done_discs, total_discs }).
+  "chd:convert",
 ]);
 
 function createPluginEventBridge() {

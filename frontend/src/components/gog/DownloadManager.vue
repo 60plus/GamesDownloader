@@ -3,12 +3,12 @@
   <div class="dm-tray" :class="{ 'dm-tray--open': expanded, 'dm-tray--has-active': hasActive, 'dm-tray--inline': inline }">
 
     <!-- ── Header bar (always visible when there are jobs) ───────────────── -->
-    <div v-if="jobs.length > 0 || packagingList.length > 0 || urlList.length > 0 || romList.length > 0" class="dm-header" @click="expanded = !expanded">
+    <div v-if="jobs.length > 0 || packagingList.length > 0 || urlList.length > 0 || romList.length > 0 || chdList.length > 0" class="dm-header" @click="expanded = !expanded">
       <div class="dm-header-left">
         <!-- Animated icon when downloading -->
         <div class="dm-status-dot" :class="dotClass" />
         <span class="dm-header-title">{{ t('download.downloads') }}</span>
-        <span class="dm-badge">{{ jobs.length + packagingList.length + urlList.length + romList.length }}</span>
+        <span class="dm-badge">{{ jobs.length + packagingList.length + urlList.length + romList.length + chdList.length }}</span>
       </div>
 
       <!-- Active download quick-info (collapsed view) -->
@@ -26,7 +26,52 @@
 
     <!-- ── Expanded job list ───────────────────────────────────────────────── -->
     <Transition name="dm-slide">
-      <div v-if="expanded && (jobs.length > 0 || packagingList.length > 0 || urlList.length > 0 || romList.length > 0)" class="dm-body">
+      <div v-if="expanded && (jobs.length > 0 || packagingList.length > 0 || urlList.length > 0 || romList.length > 0 || chdList.length > 0)" class="dm-body">
+
+        <!-- Disc conversion to CHD. Local work like packaging, but it can be
+             stopped: a four disc set is several minutes and somebody may want
+             the machine back. -->
+        <div v-for="cv in chdList" :key="cv.id" class="dm-job" :class="`dm-job--${pkClass(cv.status)}`">
+          <div class="dm-job-head">
+            <div class="dm-job-info">
+              <span class="dm-job-title">{{ cv.title }}</span>
+              <span class="dm-job-sep">·</span>
+              <span class="dm-job-file">{{ t('chd.title') }}</span>
+            </div>
+            <div class="dm-job-actions">
+              <button
+                v-if="cv.status === 'converting' || cv.status === 'queued'"
+                class="dm-act"
+                :title="t('chd.cancel')"
+                @click="cancelChd(cv)"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                  <line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="dm-progress-track">
+            <div
+              class="dm-progress-fill"
+              :class="`dm-progress-fill--${pkClass(cv.status)}`"
+              :style="{ width: cv.status === 'completed' ? '100%' : `${Math.max(2, cv.percent)}%` }"
+            />
+          </div>
+          <div class="dm-job-stats">
+            <span class="dm-stat dm-stat--status" :class="`dm-status--${pkClass(cv.status)}`">
+              {{ chdStatusText(cv) }}
+            </span>
+            <span v-if="cv.total_discs > 1" class="dm-stat">
+              {{ t('chd.disc_n_of', { n: Math.min(cv.done_discs + 1, cv.total_discs), total: cv.total_discs }) }}
+            </span>
+            <span v-if="cv.status === 'completed' && cv.saved_bytes > 0" class="dm-stat">
+              {{ t('chd.saved', { size: formatBytes(cv.saved_bytes, '-') }) }}
+            </span>
+            <span v-if="cv.error" class="dm-stat dm-stat--error">{{ cv.error }}</span>
+            <span class="dm-stat dm-stat--pct">{{ Math.round(cv.percent) }}%</span>
+          </div>
+        </div>
 
         <!-- Packaging items (GOG per-platform zip) -->
         <div v-for="pk in packagingList" :key="pk.id" class="dm-job" :class="`dm-job--${pkClass(pk.status)}`">
@@ -327,6 +372,22 @@ interface PackagingItem {
   total: number
   progress_pct: number
 }
+interface ChdItem {
+  id: string
+  job_id: number
+  rom_id: number
+  title: string
+  status: string            // queued | converting | completed | failed | cancelled
+  percent: number
+  done_discs: number
+  total_discs: number
+  saved_bytes: number
+  error: string
+}
+const chdItems = reactive<Record<string, ChdItem>>({})
+const chdList = computed(() => Object.values(chdItems))
+const chdTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
 const packagingItems = reactive<Record<string, PackagingItem>>({})
 const packagingList = computed(() => Object.values(packagingItems))
 const pkTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -381,6 +442,7 @@ let unsubSocket: (() => void) | null = null
 let unsubPackaging: (() => void) | null = null
 let unsubUrl: (() => void) | null = null
 let unsubRom: (() => void) | null = null
+let unsubChd: (() => void) | null = null
 
 const POLL_INTERVAL = 30000  // ms - fallback only, WebSocket is primary
 
@@ -444,6 +506,50 @@ function handleJobUpdate(data: Record<string, unknown>) {
     // New job appeared - full refresh
     fetchJobs()
   }
+}
+
+function chdStatusText(cv: ChdItem): string {
+  if (cv.status === 'completed') return t('chd.done')
+  if (cv.status === 'failed') return t('chd.failed')
+  if (cv.status === 'cancelled') return t('chd.cancelled')
+  if (cv.status === 'queued') return t('chd.queued')
+  return t('chd.converting')
+}
+
+async function cancelChd(cv: ChdItem) {
+  try { await romSources.cancelChdJob(cv.job_id) } catch { /* already gone */ }
+}
+
+function handleChd(data: Record<string, unknown>) {
+  const id = String(data.id ?? '')
+  if (!id) return
+  chdItems[id] = {
+    id,
+    job_id:      Number(data.job_id ?? 0),
+    rom_id:      Number(data.rom_id ?? 0),
+    title:       String(data.title ?? ''),
+    status:      String(data.status ?? 'queued'),
+    percent:     Number(data.percent ?? 0),
+    done_discs:  Number(data.done_discs ?? 0),
+    total_discs: Number(data.total_discs ?? 1),
+    saved_bytes: Number(data.saved_bytes ?? 0),
+    error:       String(data.error ?? ''),
+  }
+  // Open the tray so a conversion that takes minutes is not invisible.
+  if (['queued', 'converting'].includes(chdItems[id].status)) expanded.value = true
+  const existing = chdTimers.get(id)
+  if (existing) { clearTimeout(existing); chdTimers.delete(id) }
+  if (['completed', 'failed', 'cancelled'].includes(chdItems[id].status)) {
+    const ms = chdItems[id].status === 'failed' ? 12000 : 6000
+    const timer = setTimeout(() => { delete chdItems[id]; chdTimers.delete(id) }, ms)
+    chdTimers.set(id, timer)
+  }
+}
+
+async function fetchChdJobs() {
+  try {
+    for (const row of await romSources.listChdJobs()) handleChd(row)
+  } catch { /* not an admin, or the server is not up yet */ }
 }
 
 function handlePackaging(data: Record<string, unknown>) {
@@ -653,6 +759,7 @@ onMounted(() => {
   fetchJobs()
   fetchActivePackaging()   // restore packaging progress after a refresh
   fetchRomJobs()           // and the ROM downloads, paused ones included
+  fetchChdJobs()           // and any disc conversion still running
   // WebSocket: real-time updates per job
   try {
     const socketStore = useSocketStore()
@@ -660,6 +767,7 @@ onMounted(() => {
     unsubPackaging = socketStore.onPackaging(handlePackaging)
     unsubUrl = socketStore.onUrlUpload(handleUrlUpload)
     unsubRom = socketStore.onRomSource(handleRomSource)
+    unsubChd = socketStore.onChdConvert(handleChd)
   } catch { /* socket not available */ }
   // Fallback: slow poll every 30s for full sync
   startPolling()
@@ -671,6 +779,8 @@ onUnmounted(() => {
   if (unsubPackaging) { unsubPackaging(); unsubPackaging = null }
   if (unsubUrl) { unsubUrl(); unsubUrl = null }
   if (unsubRom) { unsubRom(); unsubRom = null }
+  if (unsubChd) { unsubChd(); unsubChd = null }
+  chdTimers.forEach(timer => clearTimeout(timer)); chdTimers.clear()
   pkTimers.forEach(t => clearTimeout(t)); pkTimers.clear()
   urlTimers.forEach(t => clearTimeout(t)); urlTimers.clear()
   romTimers.forEach(t => clearTimeout(t)); romTimers.clear()

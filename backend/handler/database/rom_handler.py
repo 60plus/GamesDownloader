@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Sequence
 
-from sqlalchemy import func, or_, select, update
+from fastapi import HTTPException
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
 
@@ -483,6 +485,56 @@ class RomHandler(DBBaseHandler):
                 crc_hash=crc or None, md5_hash=md5 or None, sha1_hash=sha1 or None
             )
         )
+
+    @begin_session
+    async def adopt_converted_file(
+        self, rom_id: int, fs_name: str, size_bytes: int, sha1: str, *,
+        session: AsyncSession = None,
+    ) -> None:
+        """Point an existing row at the file a conversion produced.
+
+        The file changes and the game does not. Savestates, battery saves and
+        play history all key on this row's id, so writing a new row for the
+        new filename would leave a shelf that looks identical and has lost
+        every hour anybody put into the game. Everything scraped stays, and so
+        does the disc's place in its set: losing disk_group would break a four
+        disc title into four separate games.
+
+        Only the SHA-1 is kept. A CHD is identified by the digest written into
+        its own header and by nothing else, and the CRC and MD5 that are there
+        now describe a file that is about to stop existing - left in place they
+        would also tell the scan this row had already been hashed correctly.
+
+        A sheet's tracks stop being rows, because after this there is no sheet
+        and no track, only one file. Matched on this row's own former name, so
+        the identically shaped rows belonging to the game next door in the same
+        folder are not touched.
+        """
+        rom = await session.get(Rom, rom_id)
+        if rom is None:
+            raise HTTPException(status_code=404, detail="ROM not found")
+
+        old_name = rom.fs_name
+        name = Path(fs_name).name
+        await session.execute(
+            update(Rom).where(Rom.id == rom_id).values(
+                fs_name=name,
+                fs_name_no_ext=Path(name).stem,
+                fs_extension=Path(name).suffix.lstrip(".").lower(),
+                fs_size_bytes=int(size_bytes or 0),
+                crc_hash=None,
+                md5_hash=None,
+                sha1_hash=sha1 or None,
+                missing_from_fs=False,
+            )
+        )
+        if old_name:
+            await session.execute(
+                delete(Rom).where(
+                    Rom.platform_id == rom.platform_id,
+                    Rom.track_of == old_name,
+                )
+            )
 
     @begin_session
     async def mark_present(self, rom_id: int, *, session: AsyncSession = None) -> None:

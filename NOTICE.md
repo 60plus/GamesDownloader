@@ -129,6 +129,16 @@ Fetched at build time, not in the git repository:
 - **Valkey** 8 (Redis-compatible) - BSD-3-Clause
 - **ClamAV** - GPL-2.0
 - **Transmission** - GPL-2.0
+- **chdman**, from the Debian package **mame-tools**, part of the **MAME**
+  project (https://github.com/mamedev/mame).  Used to convert disc images to
+  CHD, and run as a separate program with its arguments on the command line;
+  it is not linked into GamesDownloader.  MAME is distributed under the GPL,
+  and `src/tools/chdman.cpp` itself carries a BSD-3-Clause header; the
+  package's own copyright file is installed at
+  `/usr/share/doc/mame-tools/copyright` inside the image.  The complete
+  corresponding source is obtainable with `apt-get source mame` and from the
+  URL above.  The image keeps `chdman` and removes the other eight programs
+  the package installs, which GamesDownloader does not use.
 
 Each Docker image pulls upstream releases under their respective licences.
 
