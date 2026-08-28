@@ -534,7 +534,7 @@
          inside Emulator Settings: swapping a disk is something the game asked
          for, not a setting, and it is wanted mid-play. -->
     <div class="gd-mi" data-gd="disks" style="display:none">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><rect x="8" y="13" width="8" height="8"/><rect x="8" y="3" width="6" height="5"/></svg>Disks
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><rect x="8" y="13" width="8" height="8"/><rect x="8" y="3" width="6" height="5"/></svg><span class="gd-mi-label">Disks</span>
     </div>
     <div class="gd-mi" data-gd="settings">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Emulator Settings
@@ -3091,6 +3091,17 @@ function installFsHook(files) {
         for (const d of await fetchDiscSet(disks)) {
           fsFiles.push({ name: d.name, data: d.data, canOwn: true });
         }
+        // What the in-game menu offers under Disks. EmulatorJS has a disc list
+        // of its own, but it lives in the toolbar under the canvas and is a
+        // mouse target: a player on a sofa with a gamepad cannot reach it.
+        //
+        // The index is a position in the playlist the emulator was handed, and
+        // these labels come from the library. Both are ordered by disc number,
+        // so they line up, and the menu checks the count the emulator reports
+        // before trusting them anyway.
+        window._gdDiscSet = disks.map(function (d, i) {
+          return { label: 'Disc ' + (d.number || (i + 1)), name: d.name };
+        });
         setIndeterminate('Preparing playlist…', '');
         const pl = await fetch(`${API_BASE}/api/roms/${ROM_ID}/playlist.zip`,
                                { headers: authHeaders() });
@@ -3542,9 +3553,17 @@ function installFsHook(files) {
   // Which entries the menu actually has this time. Worked out when it opens,
   // because how many disks the game came on is not known when the page loads.
   function _refreshItems() {
-    const many = (window._gdAmigaDiskSet || []).length > 1;
+    // Amiga floppies come from the WHDLoad plan; discs are counted by the
+    // emulator, which only knows once the game has started. Either is a reason
+    // to show the entry.
+    const many = (window._gdAmigaDiskSet || []).length > 1 || _ejsDiscCount() > 1;
     _allItems.forEach((el) => {
-      if (el.dataset.gd === 'disks') el.style.display = many ? '' : 'none';
+      if (el.dataset.gd === 'disks') {
+        el.style.display = many ? '' : 'none';
+        const label = el.querySelector('.gd-mi-label');
+        // A floppy is a disk and a CD is a disc, and the same page serves both.
+        if (label) label.textContent = IS_AMIGA ? 'Disks' : 'Discs';
+      }
     });
     _items  = _allItems.filter((el) => el.style.display !== 'none');
     ACTIONS = _items.map((el) => el.dataset.gd);
@@ -3988,10 +4007,65 @@ function installFsHook(files) {
     return items;
   }
 
+  // How many discs the emulator itself believes it has. The library's own
+  // count is not asked: this is the number the disc index has to be valid
+  // against, and it is zero until the game has actually started.
+  function _ejsDiscCount() {
+    try {
+      const gm = window.EJS_emulator && window.EJS_emulator.gameManager;
+      return gm && gm.getDiskCount ? (gm.getDiskCount() || 0) : 0;
+    } catch (err) {
+      return 0;
+    }
+  }
+
+  function _ejsCurrentDisc() {
+    const all = (window.EJS_emulator || {}).allSettings || {};
+    const at = all.disk;
+    return at === undefined || at === null || at === '' ? 0 : Number(at);
+  }
+
+  function _ejsDiscItems() {
+    const count = _ejsDiscCount();
+    if (count < 2) return [];
+    let set = window._gdDiscSet || [];
+    // Labels from the library, index from the playlist. Both are ordered by
+    // disc number so they agree, but putting in the wrong disc is worse than
+    // plain labels, so a disagreement is settled by counting instead.
+    if (set.length !== count) {
+      set = Array.from({ length: count }, function (_, i) {
+        return { label: 'Disc ' + (i + 1) };
+      });
+    }
+    return set.map(function (disc, i) {
+      return {
+        key: 'disc-' + i,
+        label: disc.label,
+        type: 'action',
+        text: _ejsCurrentDisc() === i ? 'in drive' : 'insert',
+        fn: function () {
+          // Through the emulator's own setting rather than straight to
+          // gameManager.setCurrentDisk: both change the disc, but only this
+          // one records it where EmulatorJS's own disc list reads it back, so
+          // the two menus keep agreeing about what is in the machine.
+          try {
+            window.EJS_emulator.menuOptionChanged('disk', String(i));
+          } catch (err) {
+            try { window.EJS_emulator.gameManager.setCurrentDisk(i); }
+            catch (err2) { console.warn('Could not change disc', err2); }
+          }
+          gdToast(disc.label + ' inserted');
+          _closeAllSettings();
+        },
+      };
+    });
+  }
+
   function _getSubItems(cat) {
     // The Amiga runs on vAmigaWeb, so it is asked directly and none of the
     // EmulatorJS pages below apply to it.
     if (IS_AMIGA) return _amigaItems(cat);
+    if (cat === 'disks') return _ejsDiscItems();
     switch (cat) {
       case 'audio': return [
         { key: 'volume', label: 'Volume', type: 'range', min: 0, max: 100, step: 5,
@@ -4121,8 +4195,9 @@ function installFsHook(files) {
   // before anyone knows how many disks this game came on - and in this scope
   // rather than out where they are counted, because CATS does not exist there.
   function _ensureDiskCategory() {
-    if ((window._gdAmigaDiskSet || []).length > 1 && !CATS.some(c => c.key === 'disks')) {
-      CATS.unshift({ key: 'disks', label: 'Disks' });
+    const floppies = (window._gdAmigaDiskSet || []).length > 1;
+    if ((floppies || _ejsDiscCount() > 1) && !CATS.some(c => c.key === 'disks')) {
+      CATS.unshift({ key: 'disks', label: floppies ? 'Disks' : 'Discs' });
     }
   }
 
