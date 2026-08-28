@@ -70,6 +70,26 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # This line changes nothing today, which is the point of writing it.
+          # A public GitHub repository gets mode=max attached by the action on
+          # its own, so every image we have ever pushed already carries full
+          # provenance that nobody asked for. That default is conditional, and
+          # the day this repository turns private it silently drops to a form
+          # that pushes no attestation manifest at all, with the build still
+          # green. Spell it out rather than inherit it. Never write
+          # `provenance: true` here: the action reads a boolean as builder-id
+          # with no mode, which BuildKit takes as min, so that spelling would
+          # quietly downgrade what we already publish.
+          provenance: mode=max
+          # The bill of materials is the half that is genuinely missing: both
+          # attestation manifests in the published index carry one in-toto
+          # layer today, the provenance, and nothing anywhere records what is
+          # actually inside the image. This adds a second, SPDX layer to those
+          # same two manifests, so the shape of the index does not change. It
+          # lets a scanner read the package list without pulling 800 MB. The
+          # scanner runs on the build platform rather than the target one, so
+          # the arm64 pass does not go through QEMU and the cost stays small.
+          sbom: true
           # No layer cache on purpose. The Actions cache is scoped per ref and
           # this workflow only ever runs on a tag, so one release could never
           # read what the previous one wrote: every build here has always been
