@@ -2,17 +2,23 @@ name: CI
 
 # Runs on every push to main and on PRs.
 #
-# Five gates: the backend test suite, a vulnerability audit of the declared
-# dependencies, ruff, the frontend type-check, and a syntax check of the
-# translation files. It was three until 1.0.31 - the suite itself, the largest
-# safety net in the project, was not among them.
+# Six gates: the backend test suite, a vulnerability audit of the declared
+# Python dependencies, the same for the JavaScript ones, ruff, the frontend
+# type-check, and a syntax check of the translation files. It was three until
+# 1.0.31 - the suite itself, the largest safety net in the project, was not
+# among them.
 #
-# Failure here does NOT block deployment: the server that matters pulls from
-# Gitea, not from GitHub. What it does is tell a reader of the public repo
-# whether the published commit stands up on its own, which is the only signal
-# someone deploying this from GitHub has.
+# WHAT THIS DOES NOT DO, because the trigger below says so: it runs on pushes
+# to main and on pull requests, and main receives a handful of commits per
+# RELEASE. So the dependency audits answer at release time, not while an
+# advisory is landing. Anything that needs to notice sooner has to watch
+# continuously, which is a different tool.
 #
-# Concurrency below cancels superseded runs, so these five never pile up.
+# What it tells a reader of the public repo is whether the published commit
+# stands up on its own, which is the only signal someone deploying this from
+# GitHub has.
+#
+# Concurrency below cancels superseded runs, so these never pile up.
 
 on:
   push:
@@ -78,6 +84,44 @@ jobs:
         # deleting the job.
         run: pip-audit --progress-spinner off -r backend/requirements.txt
 
+  # ── Frontend dependencies: known vulnerabilities ─────────────────────────
+  #
+  # The counterpart of pip-audit above, and it is here because the two sides
+  # were not treated alike. Python dependencies were audited by a job that
+  # fails; JavaScript ones were audited only inside the Docker build, by
+  # `npm audit --audit-level=high || true`, which reports and carries on. That
+  # is how twelve advisories - nine of them high, and five on packages that
+  # reach the browser - came to sit in the lockfile with nobody stopped.
+  npm-audit:
+    name: npm audit (frontend dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Audit what ships to the browser
+        working-directory: frontend
+        # PRODUCTION dependencies only, and this one fails. These end up in the
+        # bundle a person loads, so an advisory here is about the running
+        # application rather than about the machine that built it.
+        #
+        # Clean when this gate was added, so a failure is news. If an advisory
+        # ever lands with no fix available, narrow this with a comment saying
+        # why rather than deleting the job.
+        run: npm audit --omit=dev --audit-level=high
+      - name: Report the build tooling separately
+        working-directory: frontend
+        # Never fails, on purpose. A path traversal in a dev server matters to
+        # somebody running `npm run dev`, not to the container: the frontend is
+        # built in the first stage of the Dockerfile and the tool is not in the
+        # image at all. Mixing the two is what made the real ones easy to
+        # scroll past.
+        if: always()
+        run: npm audit --audit-level=high || true
+
   # ── Backend: Ruff ────────────────────────────────────────────────────────
   ruff:
     name: ruff (backend)
@@ -140,3 +184,34 @@ jobs:
             fi
           done
           exit "$fail"
+      - name: Every language carries every key
+        # The eight files have been kept exactly in step by hand - 2602 keys
+        # each, nothing missing - and nothing was checking. A key added to
+        # English alone passes the syntax check above and then shows the reader
+        # its own name where a sentence should be, in seven languages, silently.
+        #
+        # English is the reference because it is where a new key is written
+        # first. Extra keys in a translation are reported too: they are almost
+        # always a rename that only landed on one side.
+        run: |
+          python - <<'PY'
+          import glob, io, json, os, sys
+
+          en = json.load(io.open("frontend/src/i18n/en.json", encoding="utf-8"))
+          bad = 0
+          for path in sorted(glob.glob("frontend/public/i18n/*.json")):
+              other = json.load(io.open(path, encoding="utf-8"))
+              missing = sorted(set(en) - set(other))
+              extra = sorted(set(other) - set(en))
+              if missing:
+                  bad = 1
+                  print(f"::error file={path}::{len(missing)} key(s) missing: "
+                        + ", ".join(missing[:12]) + (" ..." if len(missing) > 12 else ""))
+              if extra:
+                  bad = 1
+                  print(f"::error file={path}::{len(extra)} key(s) not in en.json: "
+                        + ", ".join(extra[:12]) + (" ..." if len(extra) > 12 else ""))
+          if not bad:
+              print(f"{len(en)} keys, all languages in step.")
+          sys.exit(bad)
+          PY

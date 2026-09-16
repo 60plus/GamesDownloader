@@ -9,7 +9,19 @@ FROM node:22-alpine AS frontend-build
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci --no-fund 2>/dev/null || npm install --no-fund
-RUN npm audit --audit-level=high || true
+# Two audits, and neither stops the build. What the image needs from this is a
+# readable log, not a gate: an image that builds today and refuses tomorrow
+# because somebody published an advisory is a build nobody can reproduce, and
+# it would break for anyone building an older release from source. The gate
+# lives in CI, next to pip-audit, where a failure is dated and informative.
+#
+# Split, because one mixed list is how nine high advisories became scenery.
+# The first line is about the application people load; the second is about the
+# machine that built it, and that tooling is not in the final image at all.
+RUN echo "== production dependencies (these reach the browser) ==" \
+    && (npm audit --omit=dev --audit-level=high || true) \
+    && echo "== build tooling (not present in the final image) ==" \
+    && (npm audit --audit-level=high || true)
 COPY frontend/ .
 RUN npm run build
 
@@ -136,11 +148,20 @@ RUN set -eu; \
 # the @rolldown/binding-<platform> native .node, which only surfaces at runtime
 # as "Cannot find native binding". Retry until the binding is actually present
 # (arch-agnostic glob), and fail the build loudly if it never installs.
+#
+# THIS VUE HAS TO TRACK THE FRONTEND'S. Two reasons, and the second is the one
+# that is easy to miss. It compiles the themes' .vue files against a runtime
+# they then execute in, and a compiler that disagrees with its runtime is the
+# documented way the Vapor bundle stops parsing and the theme renders as Modern.
+# And this is the ONLY copy of the vue packages that reaches the final image:
+# the application's frontend arrives as a built bundle, without node_modules, so
+# `@vue/server-renderer` in the image is whatever THIS line installs. Bumping
+# the lockfile alone left the vulnerable one shipping.
 COPY scripts/compile-theme-plugins.mjs /app/plugin-compiler/compile-theme-plugins.mjs
 RUN cd /app/plugin-compiler \
     && npm init -y >/dev/null 2>&1 \
     && for i in 1 2 3; do \
-         npm install --no-fund --no-audit vite@8.0.16 @vitejs/plugin-vue@6.0.7 vue@3.5.38 >/dev/null 2>&1; \
+         npm install --no-fund --no-audit vite@8.0.16 @vitejs/plugin-vue@6.0.7 vue@3.5.42 >/dev/null 2>&1; \
          if ls node_modules/@rolldown/binding-*/*.node >/dev/null 2>&1; then break; fi; \
          echo "plugin-compiler: rolldown native binding missing, retry $i/3"; \
          rm -rf node_modules package-lock.json; \
