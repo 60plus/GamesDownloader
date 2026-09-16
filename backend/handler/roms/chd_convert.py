@@ -59,7 +59,25 @@ _KILL_GRACE_S = 5
 
 
 class ChdError(RuntimeError):
-    """chdman refused, or was stopped. Carries what it said."""
+    """chdman refused, or was stopped. Carries what it said.
+
+    And now the NAME of the reason, so the transfer tray can say it in the
+    reader's language. Seventeen places raise this and several are internal
+    invariants nobody meets unless the install is broken, so they are grouped
+    into six reasons somebody can act on: a bad archive, a bad source file, a
+    file already there, the converter refusing, the result not landing, and
+    anything else.
+
+    `detail` is the specific half - the archive's name, or chdman's own
+    diagnosis - which the screen quotes after the translated sentence. That is
+    how the grouping keeps what it looks like it is throwing away, and it is the
+    same shape the Transmission daemon's own wording already travels in.
+    """
+
+    def __init__(self, message: str, *, code: str = "chd_failed", detail: str = ""):
+        super().__init__(message)
+        self.code = code
+        self.detail = detail
 
 
 def can_convert(name: str) -> bool:
@@ -171,7 +189,8 @@ async def _run(args: list[str], on_percent=None, should_stop=None) -> str:
             stderr=asyncio.subprocess.STDOUT,
         )
     except (OSError, FileNotFoundError) as err:
-        raise ChdError(f"chdman could not be started: {err}") from err
+        raise ChdError(f"chdman could not be started: {err}", code="chd_converter",
+                       detail="chdman could not be started") from err
 
     said: list[str] = []
     stopped = False
@@ -206,7 +225,8 @@ async def _run(args: list[str], on_percent=None, should_stop=None) -> str:
     if stopped:
         raise ChdError("cancelled")
     if proc.returncode != 0:
-        raise ChdError(tail or f"chdman exited {proc.returncode}")
+        raise ChdError(tail or f"chdman exited {proc.returncode}", code="chd_converter",
+                       detail=tail or f"chdman exited {proc.returncode}")
     return tail
 
 
@@ -233,7 +253,8 @@ async def convert_to_chd(
         raise
     if not out.is_file() or out.stat().st_size == 0:
         _discard(out)
-        raise ChdError("chdman reported success but wrote nothing")
+        raise ChdError("chdman reported success but wrote nothing", code="chd_converter",
+                       detail="chdman reported success but wrote nothing")
     return out
 
 
@@ -332,24 +353,29 @@ def _unpack_disc(archive: Path, dest: Path) -> Path:
             entries = [i for i in z.infolist()
                        if not i.is_dir() and not i.filename.startswith("__MACOSX/")]
             if not entries:
-                raise ChdError(f"{archive.name} holds nothing")
+                raise ChdError(f"{archive.name} holds nothing", code="chd_archive", detail=archive.name)
             if len(entries) > _MAX_ENTRIES:
-                raise ChdError(f"{archive.name} holds more files than a disc does")
+                raise ChdError(f"{archive.name} holds more files than a disc does",
+                                 code="chd_archive", detail=archive.name)
             if sum(i.file_size for i in entries) > _MAX_UNPACKED_BYTES:
-                raise ChdError(f"{archive.name} unpacks to more than a disc ever is")
+                raise ChdError(f"{archive.name} unpacks to more than a disc ever is",
+                                 code="chd_archive", detail=archive.name)
             for info in entries:
                 target = (dest / info.filename).resolve()
                 if not target.is_relative_to(root):
-                    raise ChdError(f"{info.filename} points outside the archive")
+                    raise ChdError(f"{info.filename} points outside the archive",
+                                     code="chd_archive", detail=archive.name)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with z.open(info) as src, open(target, "wb") as out:
                     shutil.copyfileobj(src, out)
     except zipfile.BadZipFile as err:
-        raise ChdError(f"{archive.name} is not readable: {err}") from err
+        raise ChdError(f"{archive.name} is not readable: {err}", code="chd_archive",
+                       detail=archive.name) from err
 
     inside = sorted(p for p in dest.rglob("*") if p.is_file() and can_convert(p.name))
     if not inside:
-        raise ChdError(f"there is no disc image inside {archive.name}")
+        raise ChdError(f"there is no disc image inside {archive.name}",
+                         code="chd_archive", detail=archive.name)
     # A sheet beats a bare image: an archive holding both has the image as the
     # sheet's track, and handing chdman the track loses the table of contents.
     sheets = [p for p in inside if p.suffix.lower() in {".cue", ".gdi", ".toc"}]
@@ -376,19 +402,23 @@ async def convert_disc_files(
     try:
         here = source.resolve()
     except OSError as err:
-        raise ChdError(f"{source} cannot be read: {err}") from err
+        raise ChdError(f"{source.name} cannot be read: {err}", code="chd_source",
+                       detail=source.name) from err
     if here.parent != directory or not here.is_file():
         # fs_path is a stored string and a row can point elsewhere. This reads
         # a file and hands back a list of things next to it to be deleted.
-        raise ChdError(f"{source.name} is not in {directory}")
+        raise ChdError(f"{source.name} is not in the expected folder",
+                         code="chd_source", detail=source.name)
 
     target = directory / f"{here.stem}.chd"
     if target.exists():
-        raise ChdError(f"{target.name} is already there")
+        raise ChdError(f"{target.name} is already there", code="chd_exists",
+                         detail=target.name)
 
     archived = here.suffix.lower() in _UNPACKABLE
     if not archived and not can_convert(here.name):
-        raise ChdError(f"{here.name} is not a disc image")
+        raise ChdError(f"{here.name} is not a disc image", code="chd_source",
+                         detail=here.name)
 
     with tempfile.TemporaryDirectory(prefix="gd-chd-") as work:
         work = Path(work)
@@ -417,13 +447,17 @@ async def convert_disc_files(
         out = work / f"{here.stem}.chd"
         await convert_to_chd(image, out, on_percent=on_percent, should_stop=should_stop)
         if not await verify_chd(out):
-            raise ChdError(f"chdman would not verify the {here.stem} it produced")
+            raise ChdError(f"chdman would not verify the {here.stem} it produced",
+                             code="chd_converter",
+                             detail="chdman would not verify what it produced")
 
         was = sum(p.stat().st_size for p in replaced if p.is_file())
         now = out.stat().st_size
         sha1 = _header_sha1(out)
         if not sha1:
-            raise ChdError("the converted disc carries no source hash")
+            raise ChdError("the converted disc carries no source hash",
+                             code="chd_converter",
+                             detail="the converted disc carries no source hash")
         # Onto the library volume last, and only once it is whole and checked.
         # Across filesystems, so copy and rename rather than trusting a move.
         staged = directory / f".{here.stem}.chd.part"
@@ -432,7 +466,8 @@ async def convert_disc_files(
             staged.replace(target)
         except OSError as err:
             _discard(staged)
-            raise ChdError(f"could not put the converted disc in place: {err}") from err
+            raise ChdError(f"could not put the converted disc in place: {err}",
+                             code="chd_move") from err
 
     return ConvertedDisc(
         path=target, sha1=sha1, replaced=replaced, was_bytes=was, now_bytes=now,

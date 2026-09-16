@@ -33,11 +33,33 @@
           </div>
 
           <div class="sd-dl-bar"><span :style="{ width: dlPercent(d) + '%' }" /></div>
+          <!-- The full picture, because this screen has room for it: the tray
+               shows the three figures that fit in a narrow row, and whoever
+               comes here has come to look. Every one of these was already being
+               fetched from the daemon and thrown away before it reached the
+               reply. -->
           <div class="sd-dl-meta">
             <span>{{ dlPercent(d) }}%</span>
             <span v-if="d.total_size">{{ fmtSize(d.total_size) }}</span>
-            <span v-if="d.rate_download">{{ fmtSize(d.rate_download) }}/s</span>
+            <span v-if="d.rate_download">↓ {{ fmtSize(d.rate_download) }}/s</span>
+            <span v-if="d.rate_upload">↑ {{ fmtSize(d.rate_upload) }}/s</span>
             <span v-if="d.eta > 0">{{ fmtEta(d.eta) }}</span>
+            <!-- Only while the daemon actually holds this transfer. On a
+                 finished or refused row every figure below is zero because
+                 nobody was asked, and a zero that means "no answer" reads
+                 exactly like a zero that means "nobody is sharing this". -->
+            <template v-if="d.live">
+              <span>{{ d.peers_from }} {{ t('transmission.col_seeds') }}</span>
+              <span>{{ d.peers }} {{ t('transmission.col_peers') }}</span>
+              <span v-if="d.downloaded">{{ t('transmission.stat_downloaded') }} {{ fmtSize(d.downloaded) }}</span>
+              <span v-if="d.uploaded">{{ t('transmission.stat_uploaded') }} {{ fmtSize(d.uploaded) }}</span>
+              <span>{{ t('transmission.col_ratio') }} {{ d.ratio }}</span>
+              <!-- Transmission's own word for a torrent that has stopped making
+                   progress. It is the difference between a slow transfer and
+                   one that is going nowhere, and it is the question this whole
+                   screen was reported for. -->
+              <span v-if="d.stalled" class="sd-dl-stalled">{{ t('transmission.tstalled') }}</span>
+            </template>
           </div>
 
           <div class="sd-dl-actions">
@@ -722,10 +744,25 @@ interface TorrentDownloadRow {
   id:            number
   title:         string
   status:        string
-  percent_done:  number
+  /** Already multiplied out and rounded to a tenth by the route. This said
+   *  `percent_done` and read it, and no reply has ever carried that name - see
+   *  `dlPercent` below. */
+  percent:       number
   total_size:    number
   rate_download: number
   eta:           number
+  /** What the daemon is doing with it right now, merged onto the row by the
+   *  listing. Reported by the owner: "nie widac ilosci peer/seed itd podczas
+   *  pobierania torrent". `live` says whether the daemon knows this transfer at
+   *  all - everything under it is zero when it does not. */
+  live:          boolean
+  peers:         number
+  peers_from:    number
+  rate_upload:   number
+  uploaded:      number
+  downloaded:    number
+  ratio:         number
+  stalled:       boolean
 }
 
 const downloads  = ref<TorrentDownloadRow[]>([])
@@ -737,8 +774,16 @@ const busy       = ref<number | null>(null)
 // this codebase has made in four other places.
 let poll: ReturnType<typeof setInterval> | null = null
 
+/** How far along it is, from the field the route actually sends.
+ *
+ *  This read `d.percent_done`, which no reply has ever contained, so
+ *  `(undefined || 0) * 1000 / 10` was 0: the bar sat empty and the label read
+ *  0% for the whole of every transfer this tab has ever shown. Nothing crashed
+ *  and nothing was logged. Found by comparing what the screen reads against
+ *  what `_fmt_download` sends, while widening that reply for the live figures.
+ */
 function dlPercent(d: TorrentDownloadRow): number {
-  return Math.round((d.percent_done || 0) * 1000) / 10
+  return Math.min(100, Math.max(0, Number(d.percent) || 0))
 }
 
 function dlStatusLabel(s: string): string {
@@ -1058,7 +1103,12 @@ onUnmounted(() => {
 .sd-dl-meta {
   display: flex; gap: 14px; font-size: 11.5px; color: var(--muted);
   font-variant-numeric: tabular-nums;
+  /* Nine figures on a narrow settings pane wrap rather than push the row wider
+     than the panel that holds it. */
+  flex-wrap: wrap;
 }
+/* The one figure that is a warning rather than a measurement. */
+.sd-dl-stalled { color: #f59e0b; font-weight: 600; }
 .sd-dl-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
 /* ── File picker ──────────────────────────────────────────────────────────── */

@@ -49,6 +49,12 @@ class DownloadJob(Base):
     speed_bps: Mapped[int] = mapped_column(BigInteger, default=0)                   # bytes/sec
     progress_pct: Mapped[float] = mapped_column(Float, default=0.0)                 # 0.0–100.0
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Why it stopped, as a name the screen can say in the reader's own
+    #: language, plus the one value that name is read with. `error_msg`
+    #: above stays: it is the fallback for a reason nobody has written a
+    #: sentence for, and for text that is not ours to translate.
+    error_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Checksum verification (MD5 provided by GOG API)
     verify_checksum: Mapped[bool] = mapped_column(Boolean, default=False)

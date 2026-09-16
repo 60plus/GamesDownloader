@@ -39,6 +39,7 @@ from handler.database.base_handler import DBBaseHandler
 from handler.gog.gog_auth_handler import gog_auth_handler
 from handler.gog_web import GOG_GALAXY_HEADERS
 from models.download_job import PENDING_STATES, DownloadJob
+from utils.errors import safe_note_ref
 from utils.http import loggable_error
 from utils.async_utils import fire_task
 
@@ -1010,6 +1011,11 @@ class GogDownloadHandler(DBBaseHandler):
                                         f"one GOG describes (expected {expected_md5}, "
                                         f"got {actual_md5}). Download it again."
                                     )[:1024],
+                                    # The two hashes stay in the sentence above,
+                                    # which is the fallback, and in the log. The
+                                    # translated line says what to do instead:
+                                    # nobody acts on an MD5.
+                                    error_code="gog_checksum",
                                 )
                 else:
                     # No MD5 from GOG - fallback: compare file size on disk vs CDN size
@@ -1041,6 +1047,11 @@ class GogDownloadHandler(DBBaseHandler):
                                                 f"Incomplete download: expected {total_size} bytes, "
                                                 f"got {actual_size}. Download it again."
                                             )[:1024],
+                                            # The row already carries total_size
+                                            # and downloaded_size, so the screen
+                                            # can show both without them being
+                                            # baked into a sentence.
+                                            error_code="gog_incomplete",
                                         )
                         except Exception as exc:
                             logger.warning("Job %s: size check error: %s", job_id, exc)
@@ -1086,6 +1097,11 @@ class GogDownloadHandler(DBBaseHandler):
                                     session,
                                     status="failed",
                                     error_msg=f"Blocked by ClamAV: {threat}"[:1024],
+                                    # The signature name is not ours to
+                                    # translate - it is a name, and
+                                    # rewriting it makes it unsearchable.
+                                    error_code="gog_virus",
+                                    error_detail=str(threat)[:255],
                                     checksum_status="infected",
                                 )
             except Exception:
@@ -1119,6 +1135,9 @@ class GogDownloadHandler(DBBaseHandler):
             # path has the GOG access token in it. error_msg is served by the
             # download API, so the leak reached anybody who could read a job.
             safe = loggable_error(exc)
+            # `loggable_error` keeps the URL and the token out; the reference
+            # ties this row to the traceback for whoever has to look into it.
+            _said, ref = safe_note_ref(exc, what="Download failed")
             logger.warning("Download job %s failed: %s", job_id, safe)
             async with async_session_factory() as session:
                 async with session.begin():
@@ -1126,6 +1145,8 @@ class GogDownloadHandler(DBBaseHandler):
                         session,
                         status="failed",
                         error_msg=safe[:1024],
+                        error_code="gog_failed",
+                        error_detail=ref,
                         speed_bps=0,
                         finished_at=datetime.now(timezone.utc),
                     )

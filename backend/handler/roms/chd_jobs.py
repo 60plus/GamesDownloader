@@ -31,6 +31,7 @@ from handler.roms.chd_convert import (
     rewrite_playlists,
 )
 from handler.socket_handler import emit_event
+from utils.errors import safe_note_ref
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,12 @@ class _ChdJob:
     percent: float = 0.0
     status: str = "queued"          # queued|converting|completed|failed|cancelled
     error: str | None = None
+    #: The reason as a NAME plus its specific half - the archive's name,
+    #: or chdman's own diagnosis - which the tray quotes after the
+    #: translated sentence. The English sentence above stays as the
+    #: fallback for a reason nobody has written a translation for.
+    error_code: str = ""
+    error_detail: str = ""
     delete_source: bool = False
     saved_bytes: int = 0
     want: str | None = None         # "cancel"
@@ -77,6 +84,8 @@ class _ChdJob:
             "saved_bytes": self.saved_bytes,
             "delete_source": self.delete_source,
             "error": self.error,
+            "error_code": self.error_code,
+            "error_detail": self.error_detail,
         }
 
 
@@ -255,10 +264,22 @@ async def _run(job: _ChdJob) -> None:
         except ChdError as err:
             job.status = "cancelled" if job.want == "cancel" else "failed"
             job.error = None if job.want == "cancel" else str(err)
+            if job.want != "cancel":
+                job.error_code = err.code
+                job.error_detail = err.detail
             logger.info("CHD conversion of %s ended: %s", job.title, err)
         except Exception as err:                      # noqa: BLE001
             job.status = "failed"
-            job.error = str(err)
+            # Anything at all can arrive here - a full path out of the file
+            # system, the converter's own diagnostics - and this field is drawn
+            # in the transfer tray. `ChdError` above is ours and keeps its
+            # wording. The traceback still goes to the log, under the reference
+            # this hands the reader.
+            job.error, ref = safe_note_ref(err, what="CHD conversion failed")
+            # Nothing here can be classified - it is whatever went wrong -
+            # so the reader gets the reference that finds the traceback.
+            job.error_code = "chd_failed"
+            job.error_detail = ref
             logger.exception("CHD conversion of %s failed", job.title)
         else:
             job.status = "completed"

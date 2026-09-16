@@ -13,8 +13,10 @@ export const useSocketStore = defineStore("socket", () => {
   const downloadJobCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const packagingCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const chdCallbacks: Array<(data: Record<string, unknown>) => void> = [];
+  const romScanCallbacks: Array<(kind: string, data: Record<string, unknown>) => void> = [];
   const urlUploadCallbacks: Array<(kind: string, data: Record<string, unknown>) => void> = [];
   const romSourceCallbacks: Array<(kind: string, data: Record<string, unknown>) => void> = [];
+  const torrentCallbacks: Array<(kind: string, data: Record<string, unknown>) => void> = [];
   const dashboardQueueCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const dashboardHealthCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   let liveSubs = 0; // dashboard-live consumers sharing this per-tab socket
@@ -31,6 +33,16 @@ export const useSocketStore = defineStore("socket", () => {
   function onChdConvert(cb: (data: Record<string, unknown>) => void) {
     chdCallbacks.push(cb);
     return () => { const i = chdCallbacks.indexOf(cb); if (i >= 0) chdCallbacks.splice(i, 1) }
+  }
+
+  // A ROM scan reports over roms:scan_progress while it walks and
+  // roms:scan_complete when it is done. The callback gets the kind plus the
+  // payload, so one subscription follows a scan from start to finish - three
+  // different views watch the same scan, and before this they each polled a
+  // boolean every two seconds instead.
+  function onRomScan(cb: (kind: string, data: Record<string, unknown>) => void) {
+    romScanCallbacks.push(cb);
+    return () => { const i = romScanCallbacks.indexOf(cb); if (i >= 0) romScanCallbacks.splice(i, 1) }
   }
 
   function onPackaging(cb: (data: Record<string, unknown>) => void) {
@@ -55,6 +67,19 @@ export const useSocketStore = defineStore("socket", () => {
   function onRomSource(cb: (kind: string, data: Record<string, unknown>) => void) {
     romSourceCallbacks.push(cb);
     return () => { const i = romSourceCallbacks.indexOf(cb); if (i >= 0) romSourceCallbacks.splice(i, 1) }
+  }
+
+  // A torrent reports over torrent:download_progress|complete|error|refused.
+  // Same shape as onRomSource: the callback gets the kind plus the payload,
+  // which is keyed on the torrent_downloads row id.
+  //
+  // The server has been emitting these into a room nobody joined. There was no
+  // subscription here and no listener anywhere in the core or in either theme,
+  // so a torrent could be refused for want of quota and the account that
+  // queued it was told nothing at all.
+  function onTorrent(cb: (kind: string, data: Record<string, unknown>) => void) {
+    torrentCallbacks.push(cb);
+    return () => { const i = torrentCallbacks.indexOf(cb); if (i >= 0) torrentCallbacks.splice(i, 1) }
   }
 
   // One "dashboard live" subscription feeds both the transfer queue and the
@@ -106,6 +131,28 @@ export const useSocketStore = defineStore("socket", () => {
       if (liveSubs > 0) socket.value?.emit("dashboard:subscribe");
     });
 
+    socket.value.on("disconnect", (reason) => {
+      // Only the drop the SERVER initiated. Every other reason - a transport
+      // hiccup, a sleeping laptop - is socket.io's own business and it
+      // reattaches this same instance, which is what the guard at the top of
+      // connect() protects.
+      //
+      // "io server disconnect" is different: the library does not come back
+      // from it, and the instance stayed in the store, so the early return in
+      // connect() made every later call a no-op. The client went deaf until a
+      // 401 happened to rebuild the socket or somebody reloaded the page - and
+      // connect() is called once, when the layout mounts.
+      //
+      // The server now drops an account whenever its permissions change, it is
+      // switched off, its password is reset or its sessions are revoked. The
+      // whole point of that is to have the client shake hands again and be put
+      // in the rooms it belongs in NOW, so this rebuilds rather than only
+      // letting go. An account that was cut off for good is refused by the
+      // handshake and socket.io backs off on its own.
+      if (reason !== "io server disconnect") return;
+      reconnectWithFreshToken();
+    });
+
     socket.value.on("sync_progress", (data) => {
       syncProgress.value = data;
     });
@@ -124,6 +171,12 @@ export const useSocketStore = defineStore("socket", () => {
     });
     socket.value.on("chd:convert", (data) => {
       chdCallbacks.forEach(cb => cb(data));
+    });
+    socket.value.on("roms:scan_progress", (data) => {
+      romScanCallbacks.forEach(cb => cb("progress", data));
+    });
+    socket.value.on("roms:scan_complete", (data) => {
+      romScanCallbacks.forEach(cb => cb("complete", data));
     });
     socket.value.on("upload:url_progress", (data) => {
       urlUploadCallbacks.forEach(cb => cb("progress", data));
@@ -146,6 +199,20 @@ export const useSocketStore = defineStore("socket", () => {
     // Paused, resumed, cancelled: a state change with no bytes attached.
     socket.value.on("romsource:download_state", (data) => {
       romSourceCallbacks.forEach(cb => cb("state", data));
+    });
+    socket.value.on("torrent:download_progress", (data) => {
+      torrentCallbacks.forEach(cb => cb("progress", data));
+    });
+    socket.value.on("torrent:download_complete", (data) => {
+      torrentCallbacks.forEach(cb => cb("complete", data));
+    });
+    socket.value.on("torrent:download_error", (data) => {
+      torrentCallbacks.forEach(cb => cb("error", data));
+    });
+    // Turned away for want of quota. Carries `removed`, which says whether the
+    // transfer was taken off the daemon or only stopped.
+    socket.value.on("torrent:download_refused", (data) => {
+      torrentCallbacks.forEach(cb => cb("refused", data));
     });
     socket.value.on("dashboard:queue", (data) => {
       dashboardQueueCallbacks.forEach(cb => cb(data));
@@ -172,5 +239,5 @@ export const useSocketStore = defineStore("socket", () => {
     liveSubs = 0;
   }
 
-  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onChdConvert, onUrlUpload, onRomSource, onDashboardQueue, onDashboardHealth, connect, disconnect, reconnectWithFreshToken };
+  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onChdConvert, onRomScan, onUrlUpload, onRomSource, onTorrent, onDashboardQueue, onDashboardHealth, connect, disconnect, reconnectWithFreshToken };
 });

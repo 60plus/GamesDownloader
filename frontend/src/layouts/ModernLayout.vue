@@ -117,7 +117,7 @@
   </div>
 
   <!-- ── Download Manager tray (fixed bottom-right, admin only) ──────── -->
-  <DownloadManager v-if="isAdmin" />
+  <DownloadManager v-if="canSeeTransfers" />
 </template>
 
 <script setup lang="ts">
@@ -166,6 +166,9 @@ const userRole = computed(() => {
 });
 
 const isAdmin = computed(() => auth.user?.role === 'admin');
+// Not the role - see the rule in the auth store: the tray belongs to
+// whoever the download routes already admit.
+const canSeeTransfers = computed(() => auth.canSeeTransfers);
 
 // ── Sync navbar searchQuery ↔ route.query.q ─────────────────────────────────
 // The Home view also consumes the navbar query (global search across all

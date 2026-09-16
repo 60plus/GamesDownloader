@@ -65,8 +65,20 @@ class TransmissionHandler:
         self._auth_loaded = True
         return self._auth
 
-    async def _rpc(self, method: str, args: dict | None = None) -> dict | None:
-        """Send a Transmission RPC request, handling 409 session renewal."""
+    async def _rpc(self, method: str, args: dict | None = None,
+                   *, with_reason: bool = False):
+        """Send a Transmission RPC request, handling 409 session renewal.
+
+        `with_reason` also hands back what the daemon said when it refused.
+        That text was written to the log and dropped on the floor, so a route
+        could only answer "Transmission rejected the torrent" while the daemon
+        had said "invalid or corrupt torrent file" - and the owner, reading the
+        vaguer one, took it for a size problem. Optional, so the dozen other
+        callers keep the shape they have.
+        """
+        def _out(value, reason=None):
+            return (value, reason) if with_reason else value
+
         payload = {"method": method, "arguments": args or {}}
         headers = {"X-Transmission-Session-Id": self._session_id}
         auth = await self._get_auth()
@@ -79,15 +91,18 @@ class TransmissionHandler:
                     resp = await client.post(_RPC_URL, json=payload, headers=headers)
                 if resp.status_code != 200:
                     logger.warning("Transmission RPC %s → HTTP %s", method, resp.status_code)
-                    return None
+                    return _out(None, f"HTTP {resp.status_code}")
                 data = resp.json()
                 if data.get("result") != "success":
                     logger.warning("Transmission RPC %s failed: %s", method, data.get("result"))
-                    return None
-                return data.get("arguments")
+                    return _out(None, str(data.get("result") or ""))
+                return _out(data.get("arguments"))
         except Exception as exc:
             logger.debug("Transmission RPC error (%s): %s", method, exc)
-            return None
+            # Not the exception's own words: they name the RPC address and, on
+            # some paths, files inside the container, and this reason is shown
+            # in the dialog of whoever added the torrent.
+            return _out(None, "Transmission could not be reached.")
 
     # ── Status ────────────────────────────────────────────────────────────────
 
@@ -117,43 +132,79 @@ class TransmissionHandler:
         torrent_path: str,
         download_dir: str,
         labels: list[str] | None = None,
-    ) -> dict | None:
-        """Add a .torrent file by path. Returns torrent info dict or None."""
-        import base64
+    ) -> tuple[dict | None, str | None]:
+        """Add a .torrent file by path. Returns (info, reason), as
+        `add_torrent_metainfo` does."""
         try:
             with open(torrent_path, "rb") as f:
-                metainfo = base64.b64encode(f.read()).decode()
+                content = f.read()
         except OSError as exc:
             logger.error("Cannot read torrent file %s: %s", torrent_path, exc)
-            return None
+            return None, "The torrent file could not be read."
+        return await self.add_torrent_metainfo(content, download_dir, labels)
+
+    async def add_torrent_metainfo(
+        self,
+        content: bytes,
+        download_dir: str,
+        labels: list[str] | None = None,
+    ) -> tuple[dict | None, str | None]:
+        """Add a torrent from the bytes of its .torrent file.
+
+        Returns (info, reason). The reason is what the daemon said when it
+        refused, so the dialog can show that instead of a shrug.
+        """
+        import base64
         args: dict[str, Any] = {
-            "metainfo":     metainfo,
+            "metainfo":     base64.b64encode(content).decode(),
             "download-dir": download_dir,
             "labels":       labels or [_LABEL],
         }
-        result = await self._rpc("torrent-add", args)
+        result, reason = await self._rpc("torrent-add", args, with_reason=True)
         if not result:
-            return None
-        return result.get("torrent-added") or result.get("torrent-duplicate")
+            return None, reason
+        added = result.get("torrent-added")
+        if added:
+            return added, None
+        # An add for a torrent the daemon already holds is answered with that
+        # torrent - somebody else's download, or a library file being seeded.
+        # Marked, so a route that writes a row for the caller can refuse it
+        # rather than hand them a transfer that is not theirs.
+        held = result.get("torrent-duplicate")
+        return ({**held, "duplicate": True} if held else None), None
 
     async def add_torrent_url(
         self,
         url: str,
         download_dir: str,
         labels: list[str] | None = None,
-    ) -> dict | None:
-        """Add a torrent by URL (magnet or http(s) .torrent URL)."""
+    ) -> tuple[dict | None, str | None]:
+        """Add a torrent by magnet link.
+
+        An http(s) address is NOT for this: the daemon would fetch it itself,
+        past every guard. The router fetches those and adds their bytes.
+
+        Returns (info, reason) - see `add_torrent_file` above.
+        """
         args: dict[str, Any] = {
             "filename":     url,
             "download-dir": download_dir,
             "labels":       labels or [_LABEL],
         }
-        result = await self._rpc("torrent-add", args)
+        result, reason = await self._rpc("torrent-add", args, with_reason=True)
         if not result:
-            return None
-        return result.get("torrent-added") or result.get("torrent-duplicate")
+            return None, reason
+        added = result.get("torrent-added")
+        if added:
+            return added, None
+        # An add for a torrent the daemon already holds is answered with that
+        # torrent - somebody else's download, or a library file being seeded.
+        # Marked, so a route that writes a row for the caller can refuse it
+        # rather than hand them a transfer that is not theirs.
+        held = result.get("torrent-duplicate")
+        return ({**held, "duplicate": True} if held else None), None
 
-    async def get_torrent(self, torrent_id: int) -> dict | None:
+    async def get_torrent(self, torrent_id: int | str) -> dict | None:
         result = await self._rpc("torrent-get", {
             "ids":    [torrent_id],
             "fields": self._TORRENT_FIELDS,
@@ -172,20 +223,20 @@ class TransmissionHandler:
             torrents = [t for t in torrents if label in (t.get("labels") or [])]
         return torrents
 
-    async def remove_torrent(self, torrent_id: int, *, delete_data: bool = False) -> bool:
+    async def remove_torrent(self, torrent_id: int | str, *, delete_data: bool = False) -> bool:
         result = await self._rpc("torrent-remove", {
             "ids":             [torrent_id],
             "delete-local-data": delete_data,
         })
         return result is not None
 
-    async def pause_torrent(self, torrent_id: int) -> bool:
+    async def pause_torrent(self, torrent_id: int | str) -> bool:
         return await self._rpc("torrent-stop", {"ids": [torrent_id]}) is not None
 
-    async def resume_torrent(self, torrent_id: int) -> bool:
+    async def resume_torrent(self, torrent_id: int | str) -> bool:
         return await self._rpc("torrent-start", {"ids": [torrent_id]}) is not None
 
-    async def verify_torrent(self, torrent_id: int) -> bool:
+    async def verify_torrent(self, torrent_id: int | str) -> bool:
         return await self._rpc("torrent-verify", {"ids": [torrent_id]}) is not None
 
     async def get_stats(self) -> dict | None:
@@ -195,7 +246,7 @@ class TransmissionHandler:
     # A torrent is often a shelf rather than a game: a hundred titles in one
     # bundle, and no reason to pull the other ninety-nine.
 
-    async def get_files(self, torrent_id: int) -> list[dict]:
+    async def get_files(self, torrent_id: int | str) -> list[dict]:
         """Every file in the torrent, with what has arrived and whether we want it.
 
         `wanted` and `priority` come back as parallel arrays in `fileStats`,
@@ -229,7 +280,7 @@ class TransmissionHandler:
             })
         return out
 
-    async def set_files_wanted(self, torrent_id: int, wanted: list[int],
+    async def set_files_wanted(self, torrent_id: int | str, wanted: list[int],
                                unwanted: list[int]) -> bool:
         """Choose which files to fetch. Empty lists are left out entirely.
 

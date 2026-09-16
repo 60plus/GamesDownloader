@@ -30,6 +30,7 @@ from handler.gog.gog_download_handler import (
     set_max_parallel,
 )
 from utils.async_utils import fire_task
+from utils.errors import safe_detail
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,8 @@ def _job_dict(job) -> dict:
         "speed_bps":      job.speed_bps,
         "progress_pct":   job.progress_pct,
         "error_msg":       job.error_msg,
+        "error_code":      job.error_code,
+        "error_detail":    job.error_detail,
         "verify_checksum": job.verify_checksum,
         "checksum":        job.checksum,
         "checksum_status": job.checksum_status,
@@ -73,7 +76,7 @@ async def get_download_options(request: Request, gog_id: int):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("Failed to fetch download options for gog_id=%s", gog_id)
-        raise HTTPException(status_code=500, detail=f"GOG API error: {e}")
+        raise HTTPException(status_code=500, detail=safe_detail(e, request, what="GOG API error"))
     return options
 
 
@@ -174,7 +177,7 @@ async def start_download(request: Request, body: StartDownloadRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("Failed to create download job")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_detail(e, request, what="Could not start the download"))
 
 
 # ── 3. List all jobs ──────────────────────────────────────────────────────────
