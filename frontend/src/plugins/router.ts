@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw, type Router } from "vue-router";
 import client from "@/services/api/client";
+import { useAuthStore } from "@/stores/auth";
 import { useLibrariesStore } from "@/stores/libraries";
 
 const routes: RouteRecordRaw[] = [
@@ -97,13 +98,13 @@ const routes: RouteRecordRaw[] = [
         path: "rom-sources/:sourceId",
         name: "rom-source-platforms",
         component: () => import("@/views/emulation/RomSourcePlatforms.vue"),
-        meta: { title: "ROM Downloader", fullBleed: true, requiresAdmin: true },
+        meta: { title: "ROM Downloader", fullBleed: true, requiresStoreAccess: true },
       },
       {
         path: "rom-sources/:sourceId/:fsSlug",
         name: "rom-source-list",
         component: () => import("@/views/emulation/RomSourceList.vue"),
-        meta: { title: "ROM Downloader", fullBleed: true, requiresAdmin: true },
+        meta: { title: "ROM Downloader", fullBleed: true, requiresStoreAccess: true },
       },
       {
         path: "requests",
@@ -250,6 +251,20 @@ export function createAppRouter() {
     if (!token && !isPublic) {
       next({ name: "login" });
       return;
+    }
+
+    // Store pages: the same question the tile that leads here asks. Not from
+    // the token, which carries the scopes of the ROLE and knows nothing about
+    // a per-account grant, so a granted uploader's token looks like every
+    // other uploader's. The account is fetched first when a reload landed
+    // straight on one of these URLs and nothing has loaded it yet.
+    if (to.meta.requiresStoreAccess) {
+      const auth = useAuthStore();
+      if (!auth.user) await auth.fetchUser();
+      if (!auth.canUseStores) {
+        next({ name: "games-library" });
+        return;
+      }
     }
 
     // Admin-only routes: check role stored in token payload

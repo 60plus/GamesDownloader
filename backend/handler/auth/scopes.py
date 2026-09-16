@@ -51,6 +51,14 @@ class Scope(str, enum.Enum):
     PLUGINS_READ  = "plugins.read"
     PLUGINS_WRITE = "plugins.write"
 
+    # ── Store plugins ─────────────────────────────────────────────────────────
+    # May fetch new content onto the server from a storefront plugin. Separate
+    # from library access, which decides what somebody sees: this decides
+    # whether they may bring something in. Never held on its own - every store
+    # route asks for the upload permission beside it, so an ordinary account
+    # cannot be handed one by ticking a box.
+    STORE_ACCESS = "store.access"
+
 
 # ── Base role → scope mapping ─────────────────────────────────────────────────
 
@@ -65,7 +73,9 @@ USER_SCOPES: frozenset[Scope] = frozenset({
 
 EDITOR_SCOPES: frozenset[Scope] = USER_SCOPES | frozenset({
     Scope.LIBRARY_WRITE,
-    Scope.REQUESTS_WRITE,
+    # REQUESTS_WRITE is deliberately not here. It guards accepting and refusing
+    # a wishlist entry, which the owner reserved for the admin. Wishing itself
+    # is REQUESTS_READ and stays with every account.
 })
 
 UPLOADER_SCOPES: frozenset[Scope] = EDITOR_SCOPES | frozenset({
@@ -86,6 +96,13 @@ ADMIN_SCOPES: frozenset[Scope] = UPLOADER_SCOPES | frozenset({
     Scope.SETTINGS_READ,
     Scope.SETTINGS_WRITE,
     Scope.PLUGINS_WRITE,
+    # Named here because the sets build on each other: taken out of the editor
+    # above, it would otherwise vanish from the admin too and leave nobody able
+    # to moderate at all.
+    Scope.REQUESTS_WRITE,
+    # Held by default only here. Everybody below is granted it one account at a
+    # time, which is what "an admin hands out store access" means.
+    Scope.STORE_ACCESS,
 })
 
 _ROLE_SCOPES: dict[Role, frozenset[Scope]] = {
@@ -119,6 +136,7 @@ _PERM_REVOKE: dict[str, frozenset[Scope]] = {
     }),
     "edit_metadata": frozenset({Scope.LIBRARY_WRITE, Scope.GOG_WRITE}),
     "upload":        frozenset({Scope.LIBRARY_UPLOAD}),
+    "store_access":  frozenset({Scope.STORE_ACCESS}),
 }
 
 _PERM_GRANT: dict[str, frozenset[Scope]] = {
@@ -126,6 +144,10 @@ _PERM_GRANT: dict[str, frozenset[Scope]] = {
     "access_emulation":       frozenset({Scope.ROMS_READ, Scope.PLATFORMS_READ}),
     "edit_metadata":          frozenset({Scope.LIBRARY_WRITE}),
     "upload":                 frozenset({Scope.LIBRARY_UPLOAD}),
+    # Granting this alone never reaches a store, and that is the point: the
+    # routes ask for the upload permission beside it, so on an account that is
+    # not an uploader the grant lands and changes nothing.
+    "store_access":           frozenset({Scope.STORE_ACCESS}),
 }
 
 

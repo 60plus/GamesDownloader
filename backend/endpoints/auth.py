@@ -545,6 +545,13 @@ async def reset_password(req: ResetPasswordRequest, request: Request) -> dict:
 
     await _users_db.update(user, {"hashed_password": hash_password(req.password)})
     await session_handler.revoke_all_for_user(user.username)
+    # Somebody resetting their own password from a mailed link is doing it
+    # because they think somebody else is in the account. Revoking the sessions
+    # answers every HTTP request with 401 and leaves the socket carrying their
+    # activity, because it was authenticated once at the handshake.
+    from handler.socket_handler import drop_sockets_for_user
+
+    await drop_sockets_for_user(user.id)
 
     # Burn the reset jti so the same link cannot be used twice. TTL matches the
     # token's remaining validity so Redis cleans up automatically.

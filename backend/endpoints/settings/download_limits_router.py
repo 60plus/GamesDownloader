@@ -31,6 +31,13 @@ async def _int(key: str, default: int) -> int:
 class LimitsConfig(BaseModel):
     max_upload_bytes:            int  = _DEFAULT_UPLOAD   # 0/unset falls back to the default (not unlimited)
     saves_quota_bytes:          int  = _DEFAULT_QUOTA
+    # Total room an uploader has for the games they own, which is a different
+    # question from either of the two above: one is a ceiling on a single file
+    # and the other counts save states. Zero here means no limit rather than a
+    # default, because there is no sane figure to invent for somebody else's
+    # disk and a release that began enforcing one nobody chose would refuse
+    # uploaders already past it.
+    upload_quota_bytes:          int  = 0
     gog_auto_publish_downloaded: bool = True
 
 
@@ -39,6 +46,7 @@ async def get_limits(request: Request) -> LimitsConfig:
     return LimitsConfig(
         max_upload_bytes            = await _int("max_upload_bytes", _DEFAULT_UPLOAD),
         saves_quota_bytes           = await _int("saves_quota_bytes", _DEFAULT_QUOTA),
+        upload_quota_bytes          = await _int("upload_quota_bytes", 0),
         gog_auto_publish_downloaded = await config_handler.get_bool("gog_auto_publish_downloaded", default=True),
     )
 
@@ -48,6 +56,7 @@ async def set_limits(request: Request, data: LimitsConfig) -> dict:
     await config_handler.set_many({
         "max_upload_bytes":            (str(max(0, data.max_upload_bytes)),  False),
         "saves_quota_bytes":           (str(max(0, data.saves_quota_bytes)), False),
+        "upload_quota_bytes":          (str(max(0, data.upload_quota_bytes)), False),
         "gog_auto_publish_downloaded": (str(bool(data.gog_auto_publish_downloaded)).lower(), False),
     })
     return {"ok": True}

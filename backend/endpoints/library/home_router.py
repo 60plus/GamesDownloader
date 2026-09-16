@@ -98,6 +98,29 @@ async def storefront(
     meta_rows = await _lib.get_home_meta()
     if denied:
         meta_rows = [r for r in meta_rows if r.id not in denied]
+
+    # And the question above the deny list: whether the LIBRARY a game sits in
+    # is hidden from this account, or switched off altogether. The deny list is
+    # per game and was applied correctly; nothing here asked about the shelf, so
+    # this page handed out the contents of a disabled library - to everybody,
+    # including the administrator the rule is meant to bind too.
+    from handler.library.visibility import membership_map, visibility_for
+
+    _vis = await visibility_for(user)
+
+    async def _seen(games):
+        rows = list(games)
+        if not rows:
+            return rows
+        return _vis.filter(rows, await membership_map([g.id for g in rows]))
+
+    recent = await _seen(recent)
+    meta_rows = await _seen(meta_rows)
+    # `pop` is (game, download count) pairs, so it is filtered by which games
+    # survive rather than by replacing the list.
+    if pop:
+        _allowed = {g.id for g in await _seen([g for g, _c in pop])}
+        pop = [(g, c) for g, c in pop if g.id in _allowed]
     # Whole-library fallback, so it takes the nine columns the rails read
     # rather than full GogGame rows. The one below is bounded to a rail's worth
     # and feeds _game_to_tile, which reads far more, so it stays as it was.

@@ -16,6 +16,32 @@
     <div class="gsp-h">
       <i class="mdi mdi-content-save-outline gsp-h-ico"></i>
       <span>{{ t("profile.game_saves", "Game saves") }}</span>
+      <!-- Both of these are personal: the switch is stored on the account and
+           the interval in this browser. They used to live in the ROM settings
+           tab, which only an admin can open, so an admin was quietly setting
+           their own preference in a screen that reads as a server setting and
+           nobody else could reach it at all. This is where somebody's saves
+           are, so this is where the choice about them belongs. -->
+      <button
+        class="gsp-sync"
+        :class="{ 'gsp-sync--on': autoSyncSaves }"
+        :aria-pressed="autoSyncSaves"
+        :title="t('roms.auto_sync_saves_hint', 'Periodically upload battery saves while you play, so a tab crash never loses progress')"
+        @click="toggleAutoSync"
+      >
+        <i class="mdi" :class="autoSyncSaves ? 'mdi-cloud-check-outline' : 'mdi-cloud-off-outline'"></i>
+        <span>{{ t('roms.auto_sync_saves', 'Cloud auto-sync saves') }}</span>
+      </button>
+      <select
+        v-if="autoSyncSaves"
+        v-model.number="autoSyncInterval"
+        class="gsp-sync-int"
+        :aria-label="t('roms.auto_sync_interval', 'Sync interval')"
+        :title="t('rhint.auto_sync_interval', 'Lower values protect against crashes more aggressively but make more network requests. Most games are fine with 60s.')"
+        @change="saveInterval"
+      >
+        <option v-for="n in [30, 60, 120, 300]" :key="n" :value="n">{{ n }}s</option>
+      </select>
       <div class="gsp-sorts">
         <button
           v-for="s in SORTS"
@@ -334,9 +360,29 @@ import { useI18n } from "@/i18n";
 import { useDialog } from "@/composables/useDialog";
 import dashboardActions, { type SavesData, type GameSaveItem } from "@/lib/dashboardActions";
 import { formatBytes as fmtBytes, formatDateTime } from '@/utils/format'
+import client from "@/services/api/client";
 const fmtDate = (iso: string | null | undefined) => formatDateTime(iso, "")
 
 const { t } = useI18n();
+
+// Kept where the saves are, rather than in a settings tab only an admin opens.
+const autoSyncSaves = ref(true);
+const autoSyncInterval = ref(Number(localStorage.getItem("gd_auto_sync_interval")) || 60);
+
+async function toggleAutoSync() {
+  autoSyncSaves.value = !autoSyncSaves.value;
+  try {
+    // Only this key is sent; the server merges it over what is already stored.
+    await client.put("/users/me/preferences", { autoSyncSaves: autoSyncSaves.value });
+  } catch {
+    autoSyncSaves.value = !autoSyncSaves.value;   // put the switch back
+  }
+}
+
+function saveInterval() {
+  if (![30, 60, 120, 300].includes(autoSyncInterval.value)) autoSyncInterval.value = 60;
+  localStorage.setItem("gd_auto_sync_interval", String(autoSyncInterval.value));
+}
 const { gdConfirm } = useDialog();
 const router = useRouter();
 const zoom = ref<{ url: string; caption: string } | null>(null);
@@ -578,6 +624,10 @@ function play(g: GameSaves, save: string): void {
 function onKey(e: KeyboardEvent): void {
   if (e.key === "Escape" && zoom.value) zoom.value = null;
 }
+client.get("/users/me/preferences")
+  .then(({ data }) => { autoSyncSaves.value = data?.autoSyncSaves !== false })
+  .catch(() => { /* offline: leave the default on */ });
+
 onMounted(() => window.addEventListener("keydown", onKey));
 onUnmounted(() => window.removeEventListener("keydown", onKey));
 
@@ -942,5 +992,24 @@ a.gsp-game-name:hover { color: var(--accent, #38d3db); }
   .gsp-plat-meta { margin-left: 0; }
   .gsp-plat-logo { max-width: 120px; max-height: 20px; }
   .gsp-plat-icon { width: 46px; max-height: 34px; }
+}
+
+.gsp-sync {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 10px; padding: 4px 10px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--glass-border);
+  color: var(--muted); font-size: 11px; font-weight: 600;
+  font-family: inherit; cursor: pointer; transition: all .15s;
+}
+.gsp-sync:hover { border-color: color-mix(in srgb, var(--pl) 45%, transparent); }
+.gsp-sync--on {
+  color: var(--pl-light, #a78bfa);
+  border-color: color-mix(in srgb, var(--pl) 45%, transparent);
+  background: color-mix(in srgb, var(--pl) 12%, transparent);
+}
+.gsp-sync-int {
+  margin-left: 6px; padding: 3px 6px; border-radius: 6px;
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  color: var(--muted); font-size: 11px; font-family: inherit;
 }
 </style>

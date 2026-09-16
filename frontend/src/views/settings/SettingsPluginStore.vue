@@ -19,7 +19,7 @@
           </button>
         </div>
         <div class="ps-source-add">
-          <input v-model="newSourceUrl" class="ps-input" placeholder="https://gitea.example.com/.../store.json" @keydown.enter="addSource" />
+          <input v-model="newSourceUrl" class="ps-input" placeholder="https://example.com/.../store.json" @keydown.enter="addSource" />
           <button class="ps-btn ps-btn--primary" :disabled="!newSourceUrl.trim() || addingSource" @click="addSource">
             <span v-if="addingSource" class="ps-spinner" />
             {{ t('pstore.add_source', 'Add Source') }}

@@ -79,7 +79,9 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(rsh, "max_rom_bytes", lambda: 64 * 1024 ** 3)
     monkeypatch.setattr(rsh, "assert_room_for", lambda *a, **kw: None)
 
-    async def _no_database(fs_slug, filename):
+    # Same shape as the real one, owner and all, so this double cannot go on
+    # accepting a call the real function would refuse.
+    async def _no_database(fs_slug, filename, *, owner_id=None):
         return None
 
     monkeypatch.setattr(rsh, "_register_and_scrape", _no_database)

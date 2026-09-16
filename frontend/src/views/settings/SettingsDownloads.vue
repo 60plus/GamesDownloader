@@ -294,6 +294,17 @@
             </div>
           </div>
 
+          <div class="field-group"
+            @mouseenter="setHint(t('dllimits.upload_quota'), t('dllimits.upload_quota_hint'))"
+            @mouseleave="clearHint()">
+            <label class="field-label">{{ t('dllimits.upload_quota') }}</label>
+            <div class="field-hint">{{ t('dllimits.upload_quota_hint') }}</div>
+            <div class="sd-speed-input-row">
+              <input v-model.number="limits.upload_quota_gb" type="number" min="0" step="1" class="field-input sd-speed-input" />
+              <span class="sd-speed-equiv">GB</span>
+            </div>
+          </div>
+
           <div class="sd-tr-row"
             @mouseenter="setHint(t('dllimits.gog_auto'), t('dllimits.gog_auto_hint'))"
             @mouseleave="clearHint()">
@@ -699,7 +710,10 @@ async function saveSpeed() {
 
 const _GB = 1024 ** 3
 const _MB = 1024 * 1024
-const limits = reactive({ upload_gb: 50, quota_mb: 100, gog_auto_publish: true })
+// upload_quota_gb starts at 0, which here means no limit rather than a
+// default: nobody can pick a figure for somebody else's disk, and a
+// release that began enforcing one would refuse uploaders already past it.
+const limits = reactive({ upload_gb: 50, quota_mb: 100, upload_quota_gb: 0, gog_auto_publish: true })
 const limitsLoading = ref(true)
 const limitsSaving  = ref(false)
 const limitsSaved   = ref(false)
@@ -711,6 +725,7 @@ async function loadLimits() {
     const { data } = await client.get('/settings/downloads/limits')
     limits.upload_gb = Math.max(1, Math.round((data.max_upload_bytes ?? 50 * _GB) / _GB))
     limits.quota_mb  = Math.max(1, Math.round((data.saves_quota_bytes ?? 100 * _MB) / _MB))
+    limits.upload_quota_gb = Math.max(0, Math.round((data.upload_quota_bytes ?? 0) / _GB))
     limits.gog_auto_publish = data.gog_auto_publish_downloaded !== false
   } catch { /* ignore */ } finally {
     limitsLoading.value = false
@@ -723,6 +738,7 @@ async function saveLimits() {
     await client.post('/settings/downloads/limits', {
       max_upload_bytes:  Math.max(1, Math.round(limits.upload_gb)) * _GB,
       saves_quota_bytes: Math.max(1, Math.round(limits.quota_mb)) * _MB,
+      upload_quota_bytes: Math.max(0, Math.round(limits.upload_quota_gb)) * _GB,
       gog_auto_publish_downloaded: limits.gog_auto_publish,
     })
     limitsSaved.value = true

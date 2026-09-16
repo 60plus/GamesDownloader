@@ -109,6 +109,21 @@
                 >
                   {{ t('users.upload') }}
                 </button>
+                <!-- Whether this account may pull new content onto the server
+                     from a store plugin. Not the same question as which
+                     libraries it can see, which is curation and stays in
+                     Settings > Libraries. Offered to an uploader only: the
+                     routes ask for the upload permission beside this one, so
+                     on any other role the switch would promise nothing. -->
+                <button
+                  class="perm-chip"
+                  :class="permChipClass(u, 'store_access')"
+                  @click="togglePerm(u, 'store_access')"
+                  :disabled="u.role !== 'uploader'"
+                  :title="t('users.toggle_stores')"
+                >
+                  {{ t('users.stores') }}
+                </button>
               </div>
             </td>
 
@@ -222,6 +237,46 @@
             <input v-model.number="limitUploadGb" class="au-input" type="number" min="0" :placeholder="t('users.limit_global_ph')" />
             <label class="au-label">{{ t('users.limit_quota') }}</label>
             <input v-model.number="limitQuotaMb" class="au-input" type="number" min="0" :placeholder="t('users.limit_global_ph')" />
+            <label class="au-label">{{ t('users.limit_upload_quota') }}</label>
+            <input v-model.number="limitUploadQuotaGb" class="au-input" type="number" min="0" :placeholder="t('users.limit_global_ph')" />
+            <!-- What the account already holds. A figure is hard to choose
+                 without it, and one set below what somebody is already using is
+                 a decision to stop them uploading rather than to give them room. -->
+            <div v-if="usageText" class="field-hint" style="margin-top:6px;font-size:12px;color:var(--muted)">
+              {{ usageText }}
+            </div>
+
+            <!-- Taking games over from this account. It belongs beside the
+                 quota because that is the reason to do it in bulk: the figure
+                 above only comes down when games stop being theirs. -->
+            <template v-if="uploadedGames.length">
+              <div class="au-claim-head">
+                <label class="au-claim-all">
+                  <input type="checkbox" :checked="allPicked" @change="toggleAll" />
+                  {{ t('users.uploaded_games', 'Uploaded games') }} ({{ uploadedGames.length }})
+                </label>
+                <button
+                  class="au-claim-btn"
+                  :disabled="!picked.size || claiming"
+                  :title="t('users.claim_hint', 'The games stop counting against this account and it can no longer remove them. It stays named on them as the uploader.')"
+                  @click="claimPicked"
+                >
+                  {{ t('users.claim_selected', 'Take over selected') }}<span v-if="picked.size"> ({{ picked.size }})</span>
+                </button>
+              </div>
+              <div class="au-claim-list">
+                <!-- Keyed by kind AND id. The list holds games and ROMs, they
+                     are numbered in separate tables, and a shared key made
+                     ticking a game tick a ROM as well. -->
+                <label v-for="g in uploadedGames" :key="rowKey(g)" class="au-claim-row">
+                  <input type="checkbox" :checked="picked.has(rowKey(g))" @change="togglePick(rowKey(g))" />
+                  <span class="au-claim-title">{{ g.title }}</span>
+                  <span class="au-claim-lib">{{ g.library?.name }}</span>
+                  <span class="au-claim-size">{{ fmtUsage(g.size_bytes) }}</span>
+                </label>
+              </div>
+            </template>
+
             <div class="field-hint" style="margin-top:8px;font-size:12px;color:var(--muted)">{{ t('users.limit_hint') }}</div>
           </div>
           <div v-if="limitsError" class="au-dlg-error">{{ limitsError }}</div>
@@ -442,11 +497,17 @@ function avatarUrl(u: UserRecord): string {
 
 
 // Permission chip: undefined = role default (neutral), false = denied, true = explicitly granted
+// Store access is the one key whose role default is "no". For every other chip
+// an absent key means "whatever the role says", which for an uploader is yes,
+// so a neutral chip reads correctly. Here an absent key means off, and a
+// neutral chip would read as "maybe" when the answer is no.
+const DEFAULT_OFF = ['store_access']
+
 function permChipClass(u: UserRecord, key: string): string {
   const v = u.permissions?.[key]
   if (v === false) return 'denied'
   if (v === true) return 'granted'
-  return ''
+  return DEFAULT_OFF.includes(key) ? 'denied' : ''
 }
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
@@ -565,7 +626,14 @@ async function toggleEnabled(u: UserRecord) {
 async function togglePerm(u: UserRecord, key: string) {
   const current = u.permissions?.[key]
   let next: boolean | null
-  if (current === undefined)   next = false   // role-default → deny
+  if (DEFAULT_OFF.includes(key)) {
+    // Two states, because the third would be a duplicate: with a role default
+    // of "no", absent and explicitly-false say the same thing. Off is written
+    // as an absent key so an account carries no line about a store it was
+    // never given.
+    next = current === true ? null : true
+  }
+  else if (current === undefined)   next = false   // role-default → deny
   else if (current === false)  next = true    // deny → explicitly allow
   else                         next = null    // grant → back to role-default (remove key)
 
@@ -629,10 +697,19 @@ async function doCreate() {
 
 const _GBU = 1024 ** 3
 const _MBU = 1024 * 1024
+function fmtUsage(n: number): string {
+  if (!n) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0, v = n
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1 }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`
+}
 const showLimits   = ref(false)
 const limitsUser   = ref<UserRecord | null>(null)
 const limitUploadGb = ref(0)
 const limitQuotaMb  = ref(0)
+const limitUploadQuotaGb = ref(0)
+const usageText = ref('')
 const limitsSaving = ref(false)
 const limitsError  = ref('')
 
@@ -640,9 +717,127 @@ function openLimits(u: UserRecord) {
   limitsUser.value = u
   const p = u.permissions || {}
   limitUploadGb.value = p.max_upload_bytes ? Math.round(Number(p.max_upload_bytes) / _GBU) : 0
+  limitUploadQuotaGb.value = p.upload_quota_bytes ? Math.round(Number(p.upload_quota_bytes) / _GBU) : 0
+  // Asked for when the dialog opens rather than carried on every row of
+  // the table: it is one query per account and nobody reads it until they
+  // are about to change the number.
+  usageText.value = ''
+  uploadedGames.value = []
+  picked.value = new Set()
+  loadUsage(u.id)
   limitQuotaMb.value  = p.saves_quota_bytes ? Math.round(Number(p.saves_quota_bytes) / _MBU) : 0
   limitsError.value = ''
   showLimits.value = true
+}
+
+// ── Taking games over from an account ──────────────────────────────────────────
+// The figure above and the list below come from one request, so they can never
+// disagree about what the account is holding.
+
+// What an account holds is two kinds of thing, and the server says which:
+// quota.owned_games appends the ROMs it owns to the games, each row carrying a
+// `kind`. This screen used to drop that field and post every id to the game
+// claim route, which resolves an id against the LibraryGame table - so a ROM
+// numbered 12 quietly took over game 12, an unrelated game belonging to
+// somebody else, and reported success.
+interface UploadedGame {
+  id: number
+  kind?: 'game' | 'rom'
+  title: string
+  size_bytes: number
+  library?: { name: string } | null
+}
+
+const uploadedGames = ref<UploadedGame[]>([])
+const picked = ref<Set<string>>(new Set())
+const claiming = ref(false)
+
+// The two tables number their rows separately, so an id alone does not identify
+// a row in this list.
+function rowKey(g: UploadedGame) { return `${g.kind === 'rom' ? 'rom' : 'game'}:${g.id}` }
+
+const allPicked = computed(() =>
+  uploadedGames.value.length > 0 && picked.value.size === uploadedGames.value.length)
+
+function togglePick(key: string) {
+  const next = new Set(picked.value)
+  next.has(key) ? next.delete(key) : next.add(key)
+  picked.value = next
+}
+
+function toggleAll() {
+  picked.value = allPicked.value ? new Set() : new Set(uploadedGames.value.map(rowKey))
+}
+
+function loadUsage(userId: number) {
+  client.get(`/library/uploads/${userId}`).then(({ data }) => {
+    const used = fmtUsage(data.used_bytes || 0)
+    usageText.value = data.limit_bytes > 0
+      ? t('users.quota_in_use').replace('{used}', used).replace('{limit}', fmtUsage(data.limit_bytes))
+      : t('users.quota_in_use_nolimit').replace('{used}', used)
+    uploadedGames.value = data.games || []
+  }).catch(() => { usageText.value = ''; uploadedGames.value = [] })
+}
+
+async function claimPicked() {
+  if (!limitsUser.value || !picked.value.size || claiming.value) return
+  claiming.value = true
+  limitsError.value = ''
+  // Split by kind and send each to the route that understands it. A ROM is not
+  // a library game and the two are numbered separately, so one list of ids is
+  // not a thing the server can act on.
+  const gameIds: number[] = []
+  const romIds: number[] = []
+  for (const key of picked.value) {
+    const [kind, id] = key.split(':')
+    ;(kind === 'rom' ? romIds : gameIds).push(Number(id))
+  }
+  try {
+    // A refusal here is a 200, not an exception. Both routes were taught to
+    // skip a row whose owner changed since the list was drawn - the games route
+    // answers `skipped`, the ROM route `skipped: true` - and counting only
+    // thrown errors read every one of those as a success. An administrator
+    // picking thirty rows off a stale list was told all thirty had moved.
+    let refused = 0
+    if (gameIds.length) {
+      // Named alongside the ids: the server refuses anything this account does
+      // not actually hold, so a stale list cannot take somebody else's game.
+      const { data } = await client.post('/library/games/claim', {
+        game_ids: gameIds, from_user_id: limitsUser.value.id,
+      })
+      refused += Number(data?.skipped ?? 0) + Number(data?.missing ?? 0)
+    }
+    // Same guard as the game claim above: the server checks the ROM is
+    // still this account's before moving it.
+    //
+    // One request each, and one refusal does not end the others. Every way a
+    // single one fails here is ordinary - the list is a snapshot and the screen
+    // acts on it a moment later, so a ROM deleted in between answers 404 and
+    // one whose owner changed is refused - and a plain `for ... await` threw
+    // out of the loop on the first of them. An administrator who picked thirty
+    // then saw "Could not take these games over" while four had already moved.
+    for (const id of romIds) {
+      try {
+        const { data } = await client.post(`/roms/${id}/claim`, null,
+          { params: { from_user_id: limitsUser.value.id } })
+        if (data?.skipped) refused += 1
+      } catch { refused += 1 }
+    }
+    picked.value = new Set()
+    limitsError.value = refused
+      ? t('users.claim_partial', 'Some could not be taken over: {n}.').replace('{n}', String(refused))
+      : ''
+    // Re-read rather than remove the rows here: the figure has to come from the
+    // server or it starts drifting from what the list underneath it shows.
+    loadUsage(limitsUser.value.id)
+  } catch (e: any) {
+    limitsError.value = e?.response?.data?.detail || t('users.claim_failed', 'Could not take these games over.')
+    // Whatever did go through has already moved, so the list is re-read even on
+    // a failure. Leaving it as it was would show rows that are no longer theirs.
+    loadUsage(limitsUser.value.id)
+  } finally {
+    claiming.value = false
+  }
 }
 
 async function saveUserLimits() {
@@ -654,6 +849,11 @@ async function saveUserLimits() {
     else delete perms.max_upload_bytes
     if (limitQuotaMb.value && limitQuotaMb.value > 0) perms.saves_quota_bytes = Math.round(limitQuotaMb.value) * _MBU
     else delete perms.saves_quota_bytes
+    // Same convention as the two above: clearing the field removes the key, so
+    // the account falls back to the global figure rather than to a limit of
+    // nothing. Deleting is what "blank means default" is made of.
+    if (limitUploadQuotaGb.value && limitUploadQuotaGb.value > 0) perms.upload_quota_bytes = Math.round(limitUploadQuotaGb.value) * _GBU
+    else delete perms.upload_quota_bytes
     await client.patch(`/users/${limitsUser.value.id}`, { permissions: perms })
     limitsUser.value.permissions = perms
     showLimits.value = false
@@ -1034,4 +1234,43 @@ async function confirmReset2fa(u: UserRecord) {
   border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite;
 }
 
+/* ── Taking games over ─────────────────────────────────────────────────────── */
+.au-claim-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-top: 12px;
+}
+.au-claim-all {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.au-claim-btn {
+  padding: 3px 10px; font: inherit; font-size: 11px; line-height: 18px;
+  color: var(--pl); cursor: pointer;
+  background: color-mix(in srgb, var(--pl) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl) 30%, transparent);
+  border-radius: 999px;
+  transition: border-color .15s, background .15s;
+}
+.au-claim-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pl) 20%, transparent);
+  border-color: color-mix(in srgb, var(--pl) 50%, transparent);
+}
+.au-claim-btn:disabled { opacity: .45; cursor: default; }
+.au-claim-list {
+  margin-top: 6px; max-height: 180px; overflow-y: auto;
+  border: 1px solid color-mix(in srgb, var(--pl) 14%, transparent);
+  border-radius: 8px;
+}
+.au-claim-row {
+  display: grid; grid-template-columns: auto 1fr auto auto;
+  align-items: center; gap: 8px;
+  padding: 5px 9px; font-size: 12px; cursor: pointer;
+}
+.au-claim-row + .au-claim-row {
+  border-top: 1px solid color-mix(in srgb, var(--pl) 8%, transparent);
+}
+.au-claim-row:hover { background: color-mix(in srgb, var(--pl) 7%, transparent); }
+.au-claim-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.au-claim-lib { color: var(--muted); font-size: 11px; }
+.au-claim-size { color: var(--muted); font-variant-numeric: tabular-nums; }
 </style>

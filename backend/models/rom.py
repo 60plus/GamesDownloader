@@ -39,6 +39,19 @@ class Rom(Base):
     fs_path:       Mapped[str] = mapped_column(String(1024))       # full directory path
     fs_size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
 
+    # ── Who brought it in ─────────────────────────────────────────────────────
+    # NULL for everything the disk scanner merely finds, which is most of them
+    # and is the honest answer: nobody uploaded a file that was already there.
+    # Set only where a ROM is fetched through a rom source plugin or uploaded,
+    # so an uploader is charged for what they add and not for the library.
+    # published_by moves when an admin claims it; uploaded_by never does.
+    published_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    uploaded_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+
     # ── Identity ──────────────────────────────────────────────────────────────
     name: Mapped[str | None] = mapped_column(String(512), nullable=True)  # scraped title
     slug: Mapped[str | None] = mapped_column(String(512), nullable=True)  # url-safe
@@ -95,6 +108,11 @@ class Rom(Base):
     support_path:    Mapped[str | None] = mapped_column(String(512), nullable=True)  # cartridge/disc art
     wheel_path:      Mapped[str | None] = mapped_column(String(512), nullable=True)  # wheel/marquee logo
     bezel_path:      Mapped[str | None] = mapped_column(String(512), nullable=True)  # bezel overlay art
+
+    # Closed to everyone but an admin, set from the padlock in the metadata
+    # editor. The same field and the same rule as a library game carries, so
+    # one padlock behaves the same wherever the editor is opened.
+    metadata_locked: Mapped[bool] = mapped_column(Boolean, default=False)
     steamgrid_path:  Mapped[str | None] = mapped_column(String(512), nullable=True)  # Steam Grid banner
     video_path:      Mapped[str | None] = mapped_column(String(512), nullable=True)  # video file
     picto_path:      Mapped[str | None] = mapped_column(String(512), nullable=True)  # SS pictoliste icon

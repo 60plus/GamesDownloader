@@ -137,8 +137,11 @@ def test_kazde_ograniczenie_znosi_skrot_unrestricted(pole, wartosc):
 # querying anything. These pin both halves: the rule is unchanged, and the
 # allowlist is fetched once.
 
-def biblioteka(id: int, slug: str, widocznosc: str = "public"):
-    return SimpleNamespace(id=id, slug=slug, visibility=widocznosc)
+def biblioteka(id: int, slug: str, widocznosc: str = "public", wlaczona: bool = True):
+    # `enabled` bo prawdziwa Library je ma, a regula teraz o nie pyta: wylaczona
+    # polka jest zamknieta tak samo jak ograniczona bez wiersza dostepu.
+    # Pelna macierz wlaczona/widocznosc: test_a_disabled_library_is_really_closed.py
+    return SimpleNamespace(id=id, slug=slug, visibility=widocznosc, enabled=wlaczona)
 
 
 class RejestrAtrapa:
@@ -223,10 +226,68 @@ async def test_koszt_nie_rosnie_z_liczba_bibliotek(monkeypatch):
     assert vis.hidden_library_ids == frozenset({5, 7, 9, 11, 13, 15, 17, 19, 1})
 
 
-async def test_admin_nie_pyta_rejestru_w_ogole(monkeypatch):
+async def test_admin_pyta_rejestr_raz(monkeypatch):
+    """Jedno zapytanie, nie zero i nie dwa.
+
+    Admin omija liste zakazow i liste dostepow, ale NIE omija wylacznika:
+    wylaczona biblioteka jest zamknieta rowniez dla niego (decyzja wlasciciela,
+    2026-09-02), a nie da sie wiedziec, ktore sa wylaczone, nie pytajac.
+    Pelna macierz: test_a_disabled_library_is_really_closed.py.
+    """
     vis, rejestr = await rozwiaz(
         monkeypatch, [biblioteka(4, "prywatna", "restricted")], set(), rola="admin"
     )
     assert vis.is_admin
-    assert vis.unrestricted
-    assert rejestr.zapytania == 0
+    assert vis.unrestricted, "nic nie jest wylaczone, wiec admin widzi wszystko"
+    assert rejestr.zapytania == 1
+
+
+async def test_admin_nie_widzi_wylaczonej(monkeypatch):
+    """Ta sama regula od drugiej strony: gdy cos JEST wylaczone, admin przestaje
+    byc nieograniczony."""
+    vis, _rejestr = await rozwiaz(
+        monkeypatch, [biblioteka(4, "wylaczona", wlaczona=False)], set(), rola="admin"
+    )
+    assert vis.is_admin
+    assert not vis.unrestricted
+    assert vis.closed_library_ids == frozenset({4})
+
+
+# ── Filtrowanie nie omija tego, co sprawdza sie zawsze ───────────────────────
+#
+# `unrestricted` znaczy "brak listy zakazow i brak ukrytych bibliotek". NIE
+# znaczy "wszystko wolno": `allows` odrzuca tez gre nieaktywna. Skrot po
+# `unrestricted` oddawal wiec zwyklemu kontu kazda niepublikowana gre z listy,
+# ktora dostal. Dzis zaden wolajacy tego nie robi, bo kazdy zabezpiecza sie sam
+# - ale naglowek tego modulu mowi "podaj liste i pozwol mi ja przefiltrowac",
+# a to znaczy, ze pierwszy nowy wolajacy uwierzy modulowi.
+
+def test_filtrowanie_odrzuca_gre_nieaktywna_zwyklemu_kontu():
+    from handler.library.visibility import Visibility
+
+    vis = Visibility(is_admin=False)
+    assert vis.unrestricted, "test nie odtwarza przypadku, o ktory chodzi"
+    # Obie w domyslnej bibliotece, wiec jedyne, co je rozroznia, to is_active.
+    ukryta = gra(1, aktywna=False, domyslna=True)
+    widoczna = gra(2, domyslna=True)
+    assert [g.id for g in vis.filter([ukryta, widoczna])] == [2], (
+        "zwykle konto dostaje niepublikowana gre przez skrot w filter()"
+    )
+
+
+def test_admin_nadal_widzi_nieaktywne():
+    """Admin nimi zarzadza - to sie nie zmienia."""
+    from handler.library.visibility import Visibility
+
+    vis = Visibility(is_admin=True)
+    assert len(vis.filter([gra(1, aktywna=False, domyslna=True),
+                           gra(2, domyslna=True)])) == 2
+
+
+def test_admin_nie_omija_wylaczonej_biblioteki_takze_w_filter():
+    from handler.library.visibility import Visibility
+
+    vis = Visibility(is_admin=True, closed_library_ids=frozenset({9}))
+    w_wylaczonej = gra(1)
+    out = vis.filter([w_wylaczonej], {1: {9}})
+    assert out == [], "wylaczona biblioteka przeciekla adminowi przez filter()"

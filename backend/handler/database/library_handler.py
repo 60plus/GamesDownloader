@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from decorators.database import begin_session
@@ -174,6 +174,14 @@ class LibraryHandler(DBBaseHandler):
             LibraryGame.hltb_main_s,
             LibraryGame.video_path,
             LibraryGame.videos,
+            # Not for the caller, for the visibility rule this list is put
+            # through. A projection returns `Row`, which answers `getattr` with
+            # the default for anything not named here - so every one of these
+            # read as "not in the default library, and no membership either" and
+            # the whole list was dropped. The WHERE below already guarantees
+            # both, but the rule has to be able to SEE them.
+            LibraryGame.in_default_library,
+            LibraryGame.is_active,
         ).where(
             LibraryGame.is_active == True,  # noqa: E712
             LibraryGame.in_default_library == True,  # noqa: E712
@@ -194,6 +202,38 @@ class LibraryHandler(DBBaseHandler):
         stmt = select(LibraryFile).where(LibraryFile.library_game_id == game_id)
         result = await session.execute(stmt)
         return result.scalars().all()
+
+    @begin_session
+    async def release_files_of(
+        self, game_id: int, previous_owner: int | None, *, session: AsyncSession = None,
+    ) -> int:
+        """Let this game's own files follow it to a new owner.
+
+        The quota counts a file by `coalesce(file.published_by, game.published_by)`,
+        so a file with no name of its own follows the game - which is how the
+        whole total behaved before files could carry an owner at all, and it is
+        what makes an administrator claiming a game give the uploader their
+        space back.
+
+        A file stamped with the OLD owner stopped following, so after a claim the
+        uploader was still charged for it while the list of things they could
+        remove was empty: they could not upload and had nothing to delete. This
+        puts those files back to following the game.
+
+        Only the files that were the previous owner's. One somebody else brought
+        in - a second account downloading the same catalogue entry lands its
+        build on this same game on purpose - stays theirs, because it is.
+        """
+        if not previous_owner:
+            return 0
+        result = await session.execute(
+            sql_update(LibraryFile)
+            .where(LibraryFile.library_game_id == game_id,
+                   LibraryFile.published_by == previous_owner)
+            .values(published_by=None)
+        )
+        await session.flush()
+        return int(result.rowcount or 0)
 
     @begin_session
     async def create_file(self, file: LibraryFile, *, session: AsyncSession = None) -> LibraryFile:

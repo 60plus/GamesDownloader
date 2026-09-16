@@ -137,6 +137,12 @@ async def revoke_all_my_sessions(request: Request) -> None:
     """Revoke all sessions for the current user (logout everywhere)."""
     user = request.state.user
     await session_handler.revoke_all_for_user(user.username)
+    # "Everywhere" includes the socket. Revoking the sessions leaves it open,
+    # and it was authenticated once at the handshake - so the other browser
+    # this was pressed to shut out goes on receiving live activity.
+    from handler.socket_handler import drop_sockets_for_user
+
+    await drop_sockets_for_user(user.id)
 
 
 @protected_route(router.delete, "/user/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -148,3 +154,6 @@ async def revoke_all_sessions_for_user(request: Request, user_id: int) -> None:
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
     await session_handler.revoke_all_for_user(target.username)
+    from handler.socket_handler import drop_sockets_for_user
+
+    await drop_sockets_for_user(user_id)

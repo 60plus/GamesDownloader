@@ -108,7 +108,20 @@ class LibraryGame(Base):
     # Whether the game appears in the built-in "games" library. Unchecked in
     # Edit Metadata > Details when an admin wants it only in custom collections.
     in_default_library: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Closed to everyone but an admin, set from the padlock in the metadata
+    # editor. Enforced as a permission rather than as a guard on writes, so
+    # the passes that run without a person behind them are unaffected.
+    metadata_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Who owns the game now. Moves when an admin claims it, which is also what
+    # the upload quota is summed over, so a claim gives the space back.
     published_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    # Who brought it in, written once and never again. Owner and uploader are
+    # the same account until an admin claims the game, and after that the detail
+    # page can still say where it came from.
+    uploaded_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
     )
 

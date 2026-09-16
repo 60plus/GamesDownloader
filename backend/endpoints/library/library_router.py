@@ -45,6 +45,10 @@ from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.database.library_handler import LibraryHandler
 from handler.database.users_handler import UsersHandler
+from handler.filesystem.exclusions import is_excluded_dir, parse_patterns
+from handler.library import quota
+from handler.library.metadata_lock import assert_unlocked
+from handler.library.ownership import assert_can_delete, claim_writes
 from models.library_file import LibraryFile
 from models.library_game import LibraryGame
 
@@ -193,17 +197,22 @@ async def _check_user_can_access(request: Request, game: LibraryGame) -> None:
     user = request.state.user
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    # Admin always can
-    from models.user import Role
-    if user.role == Role.ADMIN:
-        return
-    if not game.is_active:
-        raise HTTPException(status_code=404, detail="Game not found")
-    # A hidden game is answered as if it did not exist, so neither the title nor
-    # the fact that the id is taken leaks to somebody who may not see it.
+    # No early exit for an administrator any more. `allows` gives them one
+    # anyway - it is the second thing it checks - but not before the switched-off
+    # rule, which is the one place they do not bypass. Returning here skipped
+    # that, and only here: `_assert_file_visible` further down builds the same
+    # Visibility and obeys it. So a disabled library answered a game and its
+    # whole file list to an administrator, and then refused every download with
+    # a bare 404 - the screen offering files nothing would hand over.
+    #
+    # `is_active` is not checked here either, for the same reason: `allows`
+    # settles it, and it lets an administrator through to an unpublished game
+    # exactly as this did.
     from handler.library.visibility import membership_map, visibility_for
     vis = await visibility_for(user)
     if not vis.allows(game, (await membership_map([game.id])).get(game.id)):
+        # Answered as if it did not exist, so neither the title nor the fact
+        # that the id is taken leaks to somebody who may not see it.
         raise HTTPException(status_code=404, detail="Game not found")
 
 
@@ -455,7 +464,8 @@ async def _catalog_origin_map(games) -> dict[int, str]:
 
 
 def _game_to_dict(game: LibraryGame, owner_username: str | None = None, gog_game=None,
-                  catalog_origin: str | None = None) -> dict:
+                  catalog_origin: str | None = None,
+                  uploader_username: str | None = None) -> dict:
     """Convert LibraryGame to API dict.
     For source='gog' games, fallback to GogGame data for any NULL fields
     so we don't duplicate metadata - GOG is the single source of truth.
@@ -509,8 +519,15 @@ def _game_to_dict(game: LibraryGame, owner_username: str | None = None, gog_game
         "hltb_main_s":       game.hltb_main_s,
         "hltb_complete_s":   game.hltb_complete_s,
         "is_active":         game.is_active,
+        # The padlock has to know which way round to draw itself.
+        "metadata_locked": bool(getattr(game, "metadata_locked", False)),
         "published_by":      game.published_by,
         "owner_username":    owner_username,
+        # Who brought it in, which an admin claiming the game does not change.
+        # Equal to the owner until that happens, so the page can simply hide
+        # the second name when the two agree.
+        "uploaded_by":       getattr(game, "uploaded_by", None),
+        "uploader_username": uploader_username,
         "files":             [_file_to_dict(f) for f in game.files],
         "created_at":        game.created_at.isoformat() if game.created_at else None,
         "updated_at":        game.updated_at.isoformat() if game.updated_at else None,
@@ -673,9 +690,22 @@ async def get_library_game(request: Request, game_id: int) -> dict:
         from models.gog_game import GogGame as _GG
         async with _asf3() as _s:
             gog_game = await _s.get(_GG, game.gog_game_id)
+    # Only looked up when it differs from the owner, which is to say only after
+    # an admin has claimed the game. Until then the two names are the same and
+    # the page would be printing one person twice.
+    uploader_name = None
+    if game.uploaded_by and game.uploaded_by != game.published_by:
+        from handler.database.session import async_session_factory as _asf4
+        from models.user import User as _U4
+        from sqlalchemy import select as _sel4
+        async with _asf4() as _s4:
+            uploader_name = (await _s4.execute(
+                _sel4(_U4.username).where(_U4.id == game.uploaded_by)
+            )).scalar_one_or_none()
+
     cat_origin = (await _catalog_origin_map([game])).get(game.id)
     return _game_to_dict(game, owner_username=owner_name, gog_game=gog_game,
-                         catalog_origin=cat_origin)
+                         catalog_origin=cat_origin, uploader_username=uploader_name)
 
 
 # ── Games - lookup by GOG game ID ─────────────────────────────────────────────
@@ -705,6 +735,20 @@ async def popular_library_games(request: Request, limit: int = 12) -> list[dict]
         denied = await _lib.get_denied_game_ids_for_user(user.id)
         if denied:
             pairs = [(g, c) for g, c in pairs if g.id not in denied]
+    # And the library the game sits in, which the deny list above says nothing
+    # about. A rail is a list of games like any other, so it goes through the
+    # same gate as the listing does.
+    if pairs:
+        from handler.library.visibility import membership_map, visibility_for
+
+        vis = await visibility_for(user)
+        allowed = {
+            g.id for g in vis.filter(
+                [g for g, _c in pairs],
+                await membership_map([g.id for g, _c in pairs]),
+            )
+        }
+        pairs = [(g, c) for g, c in pairs if g.id in allowed]
     pairs = pairs[:limit]
     gog_map = await _gog_fallback_map([g for g, _ in pairs])
     return [
@@ -717,6 +761,28 @@ async def popular_library_games(request: Request, limit: int = 12) -> list[dict]
 
 @protected_route(library_router.post, "/games", scopes=[Scope.LIBRARY_UPLOAD])
 async def create_library_game(request: Request, body: GameCreateBody) -> dict:
+    # The shelf is settled BEFORE anything is written.
+    #
+    # This used to run after the row was created and the plugin event fired, so
+    # a refusal answered 404 about a game that existed: the caller could not see
+    # it, so could not correct it or remove it; the slug was taken for good, and
+    # retrying made `title-1`, then `title-2`, each attempt leaving another one
+    # behind; and a plugin had been told about a game the answer said was never
+    # made. Nothing here needs the row - `body.library` is known on the first
+    # line - so there was never a reason for the order.
+    target = None
+    target_slug = (body.library or "").strip()
+    if target_slug and target_slug != "games":
+        from handler.database.library_registry_handler import library_registry_handler
+        target = await library_registry_handler.get_by_slug(target_slug)
+        # A shelf the caller could not be shown is not a shelf they may put a
+        # game on. Naming a disabled library made a game whose only membership
+        # is one nobody can see - an orphan - and turned the library switch into
+        # a way of hiding your own uploads from everybody including yourself.
+        if target is not None and not await library_registry_handler.user_can_access(
+                request.state.user, target):
+            raise HTTPException(status_code=404, detail="Library not found")
+
     base = body.slug or _slugify(body.title)
     slug = base
     n = 1
@@ -734,22 +800,22 @@ async def create_library_game(request: Request, body: GameCreateBody) -> dict:
         tags=body.tags,
         source="custom",
         published_by=request.state.user.id,
+        # Owner and uploader start out the same. Only a claim ever parts them.
+        uploaded_by=request.state.user.id,
         is_active=True,
     )
     game = await _lib.create(game)
     from plugins import events as _plugin_events
     _plugin_events.game_added(game)
 
-    # Target a user-created custom library: add membership and keep it out of the
-    # default Games library so it appears only in that library. The admin can still
-    # add it to other libraries afterwards via the metadata editor's membership list.
-    target_slug = (body.library or "").strip()
-    if target_slug and target_slug != "games":
+    # A user-created custom library: add membership and keep the game out of the
+    # default Games library so it appears only there. The admin can still add it
+    # to other libraries afterwards through the metadata editor's membership
+    # list. Decided above; this only carries it out.
+    if target is not None and target.kind == "custom_lib":
         from handler.database.library_registry_handler import library_registry_handler
-        target = await library_registry_handler.get_by_slug(target_slug)
-        if target is not None and target.kind == "custom_lib":
-            await library_registry_handler.set_memberships(game.id, [target.id])
-            await _lib.update(game, {"in_default_library": False})
+        await library_registry_handler.set_memberships(game.id, [target.id])
+        await _lib.update(game, {"in_default_library": False})
 
     return _game_to_dict(game)
 
@@ -772,6 +838,12 @@ async def update_library_game(request: Request, game_id: int, body: GameUpdateBo
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    # Reads the game back, files and all, and an empty body makes this a pure
+    # read for anybody holding LIBRARY_WRITE. The metadata lock answers who may
+    # EDIT and says nothing about who may SEE, so a game in a hidden or disabled
+    # library came back through here in full.
+    await _check_user_can_access(request, game)
+    assert_unlocked(request, game)
     data = body.model_dump(exclude_unset=True)
     # Guard: MySQL DATE column rejects empty string - convert to None
     if "release_date" in data and not data["release_date"]:
@@ -872,13 +944,168 @@ async def _refresh_gog_owned(gog_game_id: int) -> None:
     await refresh_downloaded_state(gog_game_id=gog_game_id)
 
 
-@protected_route(library_router.delete, "/games/{game_id}", scopes=[Scope.LIBRARY_ADMIN])
+@protected_route(library_router.get, "/uploads-usage/{user_id}", scopes=[Scope.USERS_WRITE])
+async def uploads_usage(request: Request, user_id: int) -> dict:
+    """What one account is holding, for whoever is setting its quota.
+
+    A figure is hard to choose without knowing what it has to accommodate, and
+    an admin setting one below what somebody already holds is choosing to stop
+    them uploading rather than to give them room. Same permission as the dialog
+    that reads it, which is where accounts are edited.
+    """
+    from handler.database.users_handler import UsersHandler
+
+    user = await UsersHandler().get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "used_bytes": await quota.used_bytes(user_id),
+        "limit_bytes": await quota.limit_for(user),
+    }
+
+
+class LockBody(BaseModel):
+    locked: bool
+
+
+@protected_route(library_router.post, "/games/{game_id}/lock", scopes=[Scope.LIBRARY_ADMIN])
+async def set_game_lock(request: Request, game_id: int, body: LockBody) -> dict:
+    """Close a game's metadata to everyone but an administrator, or open it.
+
+    Only an admin can turn the key, which is also why the lock can never lock
+    out the person able to undo it.
+    """
+    game = await _lib.get_by_id(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    await _lib.update(game, {"metadata_locked": bool(body.locked)})
+    return {"ok": True, "metadata_locked": bool(body.locked)}
+
+
+@protected_route(library_router.get, "/uploads/{user_id}", scopes=[Scope.USERS_WRITE])
+async def uploads_of(request: Request, user_id: int) -> dict:
+    """What one account holds, listed, for the admin looking at that account.
+
+    `/my-uploads` answers the same question but only ever about the caller, and
+    an admin deciding what to take over needs it about somebody else. Same
+    permission as the dialog this appears in, which is where accounts are
+    edited, and the same three figures so the list and the bar agree.
+    """
+    from handler.database.users_handler import UsersHandler
+
+    user = await UsersHandler().get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "used_bytes": await quota.used_bytes(user_id),
+        "limit_bytes": await quota.limit_for(user),
+        "games": await quota.owned_games(user_id),
+    }
+
+
+class ClaimBody(BaseModel):
+    game_ids: list[int]
+    #: The account the list was drawn from. Optional so an older client is not
+    #: broken by it, enforced whenever it is given: an id is just a number, and
+    #: the screen that sends these draws games and ROMs into one list from two
+    #: separately numbered tables. A ROM id arriving here used to resolve
+    #: against LibraryGame and take over a stranger's game, reporting success.
+    from_user_id: int | None = None
+
+
+@protected_route(library_router.post, "/games/{game_id}/claim", scopes=[Scope.LIBRARY_ADMIN])
+async def claim_library_game(request: Request, game_id: int) -> dict:
+    """Take a game over from the account that uploaded it.
+
+    Three things follow and only one is written here. The uploader loses the
+    ability to remove the game, because that rule reads the owner. The game
+    leaves their quota, because the quota is a sum over owned games rather than
+    a counter somebody has to remember to adjust. And the owner changes, which
+    is the line below.
+
+    What does not change is who brought it in. That is a separate column, and
+    `claim_writes` returns only the field a claim may touch so that stays true.
+    """
+    game = await _lib.get_by_id(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    admin = getattr(request.state, "user", None)
+    # Read before the write: the files that were this owner's follow the game,
+    # or the uploader keeps paying for bytes they can no longer reach.
+    previous_owner = getattr(game, "published_by", None)
+    await _lib.update(game, claim_writes(admin_id=getattr(admin, "id", None)))
+    await _lib.release_files_of(game.id, previous_owner)
+    return {
+        "ok": True,
+        "id": game_id,
+        "owner_username": getattr(admin, "username", None),
+    }
+
+
+@protected_route(library_router.post, "/games/claim", scopes=[Scope.LIBRARY_ADMIN])
+async def claim_library_games(request: Request, body: ClaimBody) -> dict:
+    """The same, for a list of them.
+
+    An admin clearing out an uploader's shelf is doing one thing to twenty
+    games, and twenty confirmations is a way of getting somebody to stop
+    reading them. Missing ids are counted rather than raised: this runs against
+    a list drawn a moment earlier, and one game deleted in between should not
+    lose the other nineteen.
+    """
+    admin = getattr(request.state, "user", None)
+    writes = claim_writes(admin_id=getattr(admin, "id", None))
+    claimed, missing, skipped = 0, 0, 0
+    for game_id in body.game_ids:
+        game = await _lib.get_by_id(game_id)
+        if not game:
+            missing += 1
+            continue
+        # Not the account this list was drawn from, so not what was confirmed.
+        # Counted rather than raised, on the same grounds as a missing id: the
+        # other nineteen games are still the right thing to do.
+        if body.from_user_id is not None and game.published_by != body.from_user_id:
+            skipped += 1
+            continue
+        previous_owner = getattr(game, "published_by", None)
+        await _lib.update(game, writes)
+        # The same as the single claim above: this game's own files follow it,
+        # so the account it came from gets its quota back.
+        await _lib.release_files_of(game.id, previous_owner)
+        claimed += 1
+    return {"ok": True, "claimed": claimed, "missing": missing, "skipped": skipped,
+            "owner_username": getattr(admin, "username", None)}
+
+
+@protected_route(library_router.get, "/my-uploads", scopes=[Scope.LIBRARY_UPLOAD])
+async def my_uploads(request: Request) -> dict:
+    """What this account has added, and how much of its quota that leaves.
+
+    The bar and the rows come from the same rule about what counts, so the
+    figure can never disagree with the list underneath it. Ordered largest
+    first, because the reason to open this is to find what to remove.
+    """
+    user = getattr(request.state, "user", None)
+    user_id = getattr(user, "id", None)
+    return {
+        "used_bytes": await quota.used_bytes(user_id),
+        "limit_bytes": await quota.limit_for(user),
+        "games": await quota.owned_games(user_id),
+    }
+
+
+# Declared against the weaker permission on purpose. An uploader may remove a
+# game they added, to undo their own bad archive or broken upload, and that is
+# not a rule scopes can carry: protected_route requires every scope it is given,
+# so "an admin, or else the owner" has to be settled in the handler. The line
+# below is the other half of this declaration and the two belong together.
+@protected_route(library_router.delete, "/games/{game_id}", scopes=[Scope.LIBRARY_UPLOAD])
 async def delete_library_game(
     request: Request, game_id: int, delete_files: bool = Query(False)
 ) -> dict:
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    assert_can_delete(request, game)
 
     gog_game_id = game.gog_game_id
 
@@ -903,6 +1130,9 @@ from fastapi import File as _File, UploadFile as _UploadFile
 _VIDEO_UPLOAD_EXTS = {".mp4", ".webm"}
 _MAX_VIDEO_BYTES = 1024 * 1024 * 1024  # 1 GB
 _YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,16}$")
+#: What yt-dlp is allowed to be asked for. Named so the ROM route can hold
+#: itself to the same ladder rather than growing a second one beside it.
+_VIDEO_QUALITIES = {"best", "2160", "1440", "1080", "720", "480", "360"}
 
 
 class VideoDownloadBody(BaseModel):
@@ -952,10 +1182,11 @@ async def download_game_video(
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    assert_unlocked(request, game)
     if not _YT_ID_RE.match(body.video_id or ""):
         raise HTTPException(status_code=400, detail="Invalid video id")
 
-    quality = body.quality if body.quality in {"best", "2160", "1440", "1080", "720", "480", "360"} else "1080"
+    quality = body.quality if body.quality in _VIDEO_QUALITIES else "1080"
 
     _video_jobs.pop(game_id, None)
     _remember_video_job(game_id, state="running", video_id=body.video_id, quality=quality, error=None, url=None)
@@ -1011,13 +1242,19 @@ async def upload_game_video(
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    assert_unlocked(request, game)
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in _VIDEO_UPLOAD_EXTS:
         raise HTTPException(status_code=400, detail="Unsupported format. Allowed: .mp4, .webm")
     from handler.library.media_handler import save_uploaded_video
-    url = await save_uploaded_video(game_id, file, ext, _MAX_VIDEO_BYTES)
-    if not url:
+    url, error = await save_uploaded_video(game_id, file, ext, _MAX_VIDEO_BYTES)
+    if error == "too_large":
         raise HTTPException(status_code=413, detail="Video too large (max 1 GB)")
+    if not url:
+        # A disk that is full, a path that cannot be written, a stream that
+        # stopped. Telling somebody to send a smaller file would be advice that
+        # cannot work.
+        raise HTTPException(status_code=500, detail="Could not save the video.")
     await _set_video_path(game, url)
     updated = await _lib.get_by_id(game_id)
     gog_game = None
@@ -1257,8 +1494,6 @@ async def search_screenshot_options(
         # Plugin screenshots
         try:
             from plugins.manager import plugin_manager
-            from pathlib import Path
-            from config import PLUGINS_PATH
             all_plugin = plugin_manager.hook.metadata_search_game(query=search_term)
             for provider_results in all_plugin:
                 if not isinstance(provider_results, list) or not provider_results:
@@ -1272,13 +1507,9 @@ async def search_screenshot_options(
                 for gd in game_data_list:
                     if not isinstance(gd, dict) or gd.get("provider_id") != pid:
                         continue
+                    from plugins.manager import plugin_dir_for_provider
+                    plugin_id = plugin_dir_for_provider(pid)
                     for ss_url in (gd.get("screenshots") or []):
-                        plugin_id = pid
-                        if not Path(PLUGINS_PATH, pid).is_dir():
-                            for sfx in ["-metadata", "-scraper", "-plugin"]:
-                                if Path(PLUGINS_PATH, pid + sfx).is_dir():
-                                    plugin_id = pid + sfx
-                                    break
                         results.append({
                             "url": ss_url, "thumb": ss_url, "type": "static",
                             "label": gd.get("title", ""), "author": pid.upper(),
@@ -1293,6 +1524,49 @@ async def search_screenshot_options(
 
 
 # ── Video search for library games ────────────────────────────────────────────
+
+async def _igdb_video_options(search_term: str) -> list[dict]:
+    """Trailer candidates for a title, searched on IGDB.
+
+    Lifted out of the route below so a ROM can ask the same question: a ROM has
+    no stored list of candidates and needs none, because this was always a live
+    search by title rather than a read of a column. Answers with an empty list
+    when IGDB is not configured or the call fails - no candidates is a normal
+    state here, and an error would turn a missing API key into a broken editor.
+    """
+    from handler.config.config_handler import config_handler
+
+    out: list[dict] = []
+    try:
+        client_id = await config_handler.get("igdb_client_id")
+        client_secret = await config_handler.get("igdb_client_secret")
+        if not client_id or not client_secret:
+            return []
+        async with httpx.AsyncClient(timeout=15) as c:
+            headers = await igdb_headers(client_id, client_secret)
+            if headers is None:
+                return []
+            gr = await c.post(
+                "https://api.igdb.com/v4/games",
+                headers=headers,
+                content=f'fields id,name,videos.video_id,videos.name; search "{sanitize_search(search_term)}"; limit 3;',
+            )
+            if gr.status_code == 200:
+                for ig_game in gr.json():
+                    for vid in (ig_game.get("videos") or []):
+                        vid_id = vid.get("video_id")
+                        if vid_id:
+                            out.append({
+                                "video_id": vid_id,
+                                "provider": "youtube",
+                                "thumb":    f"https://img.youtube.com/vi/{vid_id}/hqdefault.jpg",
+                                "label":    vid.get("name") or ig_game.get("name") or "Trailer",
+                                "author":   "IGDB",
+                            })
+    except Exception as exc:
+        logger.warning("IGDB video search failed: %s", exc)
+    return out
+
 
 @protected_route(library_router.get, "/games/{game_id}/videos", scopes=[Scope.LIBRARY_WRITE])
 async def library_get_video_options(
@@ -1310,35 +1584,7 @@ async def library_get_video_options(
     results: list = []
 
     if source == "igdb":
-        try:
-            from handler.config.config_handler import config_handler
-            client_id     = await config_handler.get("igdb_client_id")
-            client_secret = await config_handler.get("igdb_client_secret")
-            if not client_id or not client_secret:
-                return []
-            async with httpx.AsyncClient(timeout=15) as c:
-                headers = await igdb_headers(client_id, client_secret)
-                if headers is None:
-                    return []
-                gr = await c.post(
-                    "https://api.igdb.com/v4/games",
-                    headers=headers,
-                    content=f'fields id,name,videos.video_id,videos.name; search "{sanitize_search(search_term)}"; limit 3;',
-                )
-                if gr.status_code == 200:
-                    for ig_game in gr.json():
-                        for vid in (ig_game.get("videos") or []):
-                            vid_id = vid.get("video_id")
-                            if vid_id:
-                                results.append({
-                                    "video_id": vid_id,
-                                    "provider": "youtube",
-                                    "thumb":    f"https://img.youtube.com/vi/{vid_id}/hqdefault.jpg",
-                                    "label":    vid.get("name") or ig_game.get("name") or "Trailer",
-                                    "author":   "IGDB",
-                                })
-        except Exception as exc:
-            logger.warning("IGDB video search failed: %s", exc)
+        results.extend(await _igdb_video_options(search_term))
 
     elif source == "gog":
         try:
@@ -1452,6 +1698,7 @@ async def _publish_gog_core(
             os_linux=gog_game.os_linux,
             is_active=True,
             published_by=published_by,
+            uploaded_by=published_by,
         )
         lib_game = await _lib.create(lib_game)
         from plugins import events as _plugin_events
@@ -1549,30 +1796,20 @@ async def unpublish_gog_game(request: Request, gog_game_id: int) -> dict:
 
 # ── Scan CUSTOM folder ────────────────────────────────────────────────────────
 
-async def _scan_one_folder(root: Path, user_id: int, target_lib) -> tuple[int, int, list[str]]:
-    """Scan a single library folder and create/update LibraryGames.
+def _pending_game_dirs(root: Path) -> dict[str, dict]:
+    """Which directories under a library folder are games, and what they are called.
 
-    `target_lib` is the Library the folder belongs to. Layout is detected per game
-    folder (title-first or OS-first, same rules as the CUSTOM folder). For a
-    folder-backed custom library the scanned games get a membership row and, when
-    newly created, are kept out of the default Games library; for the built-in
-    Games library (kind "custom") they stay in the default library as before.
-    Dedup is by slug, so a game present in several folders is one LibraryGame with
-    several memberships.
+    slug -> {title, dirs: [(path, force_os, force_type)]}, merged by slug so a
+    title present in several places is one game with several directories.
+
+    Both layouts at once, which is what makes this worth naming rather than
+    inlining: a top-level folder whose name is an OS or a container holds
+    titles, and anything else IS a title. The exclusions preview has to work out
+    the same folder from the file paths in the database, so this is also the
+    definition it is measured against.
     """
-    from handler.database.library_registry_handler import library_registry_handler
-    is_custom_lib = target_lib is not None and target_lib.kind == "custom_lib"
-
-    root.mkdir(parents=True, exist_ok=True)
-    created = 0
-    updated = 0
-    errors: list[str] = []
-
-    # Collect (title, game_dir, force_os, force_type) tuples using both layout
-    # strategies so we can merge by slug.
-    pending: dict[str, dict] = {}  # slug → {title, dirs: [(path, force_os, force_type)]}
-
-    for top_dir in sorted(root.iterdir()):
+    pending: dict[str, dict] = {}
+    for top_dir in sorted(Path(root).iterdir()):
         if not top_dir.is_dir():
             continue
 
@@ -1600,11 +1837,57 @@ async def _scan_one_folder(root: Path, user_id: int, target_lib) -> tuple[int, i
             slug  = _slugify(title)
             pending.setdefault(slug, {"title": title, "dirs": []})
             pending[slug]["dirs"].append((str(top_dir), None, None))
+    return pending
+
+
+async def _scan_one_folder(root: Path, user_id: int, target_lib) -> tuple[int, int, list[str]]:
+    """Scan a single library folder and create/update LibraryGames.
+
+    `target_lib` is the Library the folder belongs to. Layout is detected per game
+    folder (title-first or OS-first, same rules as the CUSTOM folder). For a
+    folder-backed custom library the scanned games get a membership row and, when
+    newly created, are kept out of the default Games library; for the built-in
+    Games library (kind "custom") they stay in the default library as before.
+    Dedup is by slug, so a game present in several folders is one LibraryGame with
+    several memberships.
+    """
+    from handler.database.library_registry_handler import library_registry_handler
+    is_custom_lib = target_lib is not None and target_lib.kind == "custom_lib"
+
+    root.mkdir(parents=True, exist_ok=True)
+    created = 0
+    updated = 0
+    errors: list[str] = []
+    # What this library was told never to look at. Only ever used to decline to
+    # ADD something: a game that is already here goes through the normal path,
+    # because skipping it would leave it looking deleted.
+    excludes = parse_patterns(getattr(target_lib, "scan_exclude", None))
+
+    pending = _pending_game_dirs(root)
 
     for slug, info in sorted(pending.items()):
         title = info["title"]
         try:
             existing = await _lib.get_by_slug(slug)
+            # After the lookup, and only for something not here yet - the same
+            # rule the ROM scanner follows, and for the same reason: checking
+            # earlier would quietly remove games rather than decline new ones.
+            if not existing and excludes and info.get("dirs") and all(
+                # A game lives in a DIRECTORY, so ask about it as one. Asking
+                # `is_excluded` here made `mods/` mean one thing to this scan
+                # and the opposite to the preview beside it.
+                #
+                # ALL of them, not any. A game merged by slug can hold two
+                # directories - `<root>/Quake` and `<root>/windows/Quake` - and
+                # under `any` a pattern naming a container folder stopped the
+                # WHOLE game being added, while `_covered_here` next door asked
+                # `all` and reported that the pattern covered nothing. One of
+                # the two had to move, and this is the cautious direction: a
+                # game is skipped only when every place it lives is excluded.
+                is_excluded_dir(str(d[0]), excludes, root=str(root))
+                for d in info.get("dirs", [])
+            ):
+                continue
             if not existing:
                 lib_game = LibraryGame(
                     source="custom",
@@ -1612,6 +1895,7 @@ async def _scan_one_folder(root: Path, user_id: int, target_lib) -> tuple[int, i
                     slug=slug,
                     is_active=True,
                     published_by=user_id,
+                    uploaded_by=user_id,
                     # A custom library keeps its games to itself unless it was
                     # set up to feed the default one. Before that flag existed
                     # this was an unconditional False, which is why a shelf of
@@ -1698,15 +1982,26 @@ async def scan_custom_library(request: Request, library: str | None = None) -> d
 
     targets: list = []
     if library:
+        from handler.database.library_registry_handler import is_folder_scanned
+
         lib = await library_registry_handler.get_by_slug(library)
         if lib is None or not lib.storage_folder:
+            raise HTTPException(status_code=400, detail="Library has no scan folder")
+        # The same question the other branch asks. Naming a shelf by slug used
+        # to skip it, so a storefront whose plugin is switched off - which is
+        # exactly the state `is_folder_scanned` describes - was walked anyway.
+        if not is_folder_scanned(lib):
             raise HTTPException(status_code=400, detail="Library has no scan folder")
         targets.append(lib)
     else:
         # Folder-backed libraries only: built-in Games (CUSTOM) + custom_lib.
-        # GOG has its own sync pipeline and is never file-scanned here.
+        # GOG has its own sync pipeline and is never file-scanned here. The rule
+        # is shared with the settings that only mean something for a scanned
+        # library, so the two cannot drift apart.
+        from handler.database.library_registry_handler import is_folder_scanned
+
         for lib in await library_registry_handler.get_all():
-            if lib.storage_folder and lib.kind in ("custom", "custom_lib"):
+            if is_folder_scanned(lib):
                 targets.append(lib)
 
     created = 0
@@ -1780,6 +2075,10 @@ async def announce_library_game_added(request: Request, game_id: int) -> dict:
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    # The padlock covers the whole window, not only its Save button. Broadcasting
+    # a locked entry to Discord and to everyone's inbox is a change to the world
+    # even though it changes no field.
+    assert_unlocked(request, game)
     # Per-game deny binds here too: an editor denied this game may not broadcast
     # it to Discord/email (admins bypass, matching the read/detail routes).
     await _check_user_can_access(request, game)

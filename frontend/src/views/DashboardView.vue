@@ -82,6 +82,8 @@
 
                 <GameSavesPanel v-else-if="id === 'a_saves'" />
 
+                <MyUploadsPanel v-else-if="id === 'a_uploads'" />
+
                 <div v-else-if="id === 'a_reqs' && me.requests.items.length" class="dash-panel glass">
                   <div class="dash-panel-h"><i class="mdi mdi-playlist-star dash-panel-ico"></i>{{ t("dashboard.your_game_requests", "Your game requests") }}</div>
                   <div v-for="(r, i) in me.requests.items" :key="i" class="dash-req">
@@ -302,6 +304,7 @@ import dashboardActions, { type UserDashboard, type AdminDashboard, type DaySamp
 import DashStat from "@/components/DashStat.vue";
 import DashSparkline from "@/components/DashSparkline.vue";
 import GameSavesPanel from "@/components/GameSavesPanel.vue";
+import MyUploadsPanel from "@/components/MyUploadsPanel.vue";
 import DashRequests from "@/components/DashRequests.vue";
 import DashCoverStrip from "@/components/DashCoverStrip.vue";
 import DashDownloadQueue from "@/components/DashDownloadQueue.vue";
@@ -337,7 +340,10 @@ const collapsed = ref<Record<string, boolean>>((() => {
 // home page, where "jump back into a game" belongs, leaving the dashboard as the
 // stats and operations console. mergeOrder() drops their saved ids for users who
 // had reordered them.
-const ACTIVITY_BLOCKS = ["a_cards", "a_dl", "a_saves", "a_reqs"];
+// a_uploads sits beside a_saves because they answer the same question about
+// two different things, and the panel hides itself for anyone who cannot
+// upload rather than showing an empty box that needs explaining.
+const ACTIVITY_BLOCKS = ["a_cards", "a_dl", "a_saves", "a_uploads", "a_reqs"];
 // Each server panel is now its own block, so any single one can be moved or
 // hidden independently (hiding Security no longer takes Health with it). Wide
 // blocks span both columns; the rest tile two-per-row in the .dash-srv grid.
@@ -375,6 +381,7 @@ function blockLabel(id: string): string {
   const m: Record<string, [string, string]> = {
     a_cards: ["dashboard.blk_overview", "Overview"], a_dl: ["dashboard.download_activity", "Download activity"],
     a_saves: ["profile.game_saves", "Game saves"],
+    a_uploads: ["uploads.my_uploads", "My uploads"],
     a_reqs: ["dashboard.your_requests", "Your requests"], s_stats: ["dashboard.blk_overview", "Overview"],
     s_queue: ["dashboard.blk_transfers", "Live transfers"], s_recent: ["dashboard.recently_added", "Recently added"],
     s_dl_chart: ["dashboard.downloads", "Downloads"], s_email_chart: ["dashboard.email_activity", "Email activity"],

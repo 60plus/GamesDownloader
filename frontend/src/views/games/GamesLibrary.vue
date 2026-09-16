@@ -70,7 +70,7 @@
         </div>
 
         <!-- Scan (admin/uploader only) -->
-        <div v-if="isUploader" class="sync-wrap">
+        <div v-if="isAdmin" class="sync-wrap">
           <button class="sync-btn" :class="{ 'sync-btn--running': scanning }" @click="scanLibrary" :disabled="scanning" :title="t('library.scan_custom')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" :class="{ 'spin': scanning }">
               <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
@@ -136,7 +136,7 @@
         <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
       </svg>
       <p>{{ t('library.no_games') }}</p>
-      <p v-if="isUploader && !games.length" style="font-size: var(--fs-sm, 12px);color:var(--muted);margin-top:4px">
+      <p v-if="isAdmin && !games.length" style="font-size: var(--fs-sm, 12px);color:var(--muted);margin-top:4px">
         {{ t('library.empty_hint') }}
       </p>
     </div>
@@ -428,6 +428,7 @@ import { formatBytes as fmtBytes } from '@/utils/format'
 import { useSocketStore } from '@/stores/socket'
 
 const { t } = useI18n()
+const { gdConfirm } = useDialog()
 
 function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -443,11 +444,13 @@ import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
 import * as libActions from '@/lib/libraryActions'
+import { describeAddRefusal } from '@/lib/transferError'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import GameRequestDialog from '@/components/GameRequestDialog.vue'
 import GameListRow from '@/components/games/GameListRow.vue'
 import { useRequestNotify } from '@/composables/useRequestNotify'
 import { useIncrementalList } from '@/composables/useIncrementalList'
+import { useDialog } from '@/composables/useDialog'
 
 interface LibGame {
   id: number
@@ -502,6 +505,9 @@ const listHeroAnimClass = computed(() => {
   return `list-hero-img--${themeStore.heroAnimStyle}`
 })
 const isUploader = computed(() => ['admin', 'uploader'].includes(auth.user?.role as string))
+// Scanning the library and queueing a torrent are admin only on the server,
+// so offering them to an uploader was offering a refusal.
+const isAdmin = computed(() => auth.user?.role === 'admin')
 
 const requestDialogOpen = ref(false)
 const { totalBadge: reqBadge, refresh: refreshReqBadge } = useRequestNotify()
@@ -833,7 +839,9 @@ async function submitTorrent() {
     socketStore.socket?.on('torrent:download_complete', _onTorrentComplete)
     socketStore.socket?.on('torrent:download_error',    _onTorrentError)
   } catch (e: any) {
-    tError.value = e?.response?.data?.detail || t('detail.torrent_failed')
+    // `detail` is an object now: a reason name, its figures, and a sentence.
+    // Printing it directly would render "[object Object]".
+    tError.value = describeAddRefusal(e, t) || t('detail.torrent_failed')
   } finally {
     tAdding.value = false
   }
@@ -922,12 +930,29 @@ async function submitUpload() {
   uProgress.value = 0
   uUploading.value = true
   try {
-    // Step 1: create game entry. In a custom library view, target that library so
-    // the game (and its uploaded files) land there instead of the Games library.
-    const game = await libActions.createGame({
-      title:   uForm.value.title.trim(),
-      library: librarySlug.value,
-    })
+    // Step 1: find or create the game entry. A second file for a game already
+    // on this shelf joins it rather than making a second entry - the owner hit
+    // that uploading Ion Fury and then its DLC under the same title, and got
+    // `ion-fury` and `ion-fury-1`. Asked rather than assumed: two different
+    // games can share a title.
+    //
+    // In a custom library view, a new game targets that library so it (and its
+    // uploaded files) land there instead of the Games library.
+    const existing = await libActions.findGameByTitle(
+      uForm.value.title.trim(), librarySlug.value)
+    let game = existing
+    if (existing) {
+      const ok = await gdConfirm(
+        t('upload.game_exists', { title: existing.title }),
+        { title: t('upload.add_to_existing'), confirmText: t('upload.add_to_existing') },
+      )
+      if (!ok) { uUploading.value = false; return }
+    } else {
+      game = await libActions.createGame({
+        title:   uForm.value.title.trim(),
+        library: librarySlug.value,
+      })
+    }
     const gameId = game.id
 
     if (uTab.value === 'url') {

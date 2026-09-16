@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import httpx
+from fastapi import HTTPException
 
 from config import PLUGINS_PATH, ROMS_PATH, config_manager
 from utils.rom_names import (
@@ -97,11 +98,22 @@ class _RomJob:
     actor: str | None
     entry_key: tuple[str, str] | None
     dest_key: tuple[str, str]
+    # The account behind `actor`, which is a display name and cannot be summed
+    # against anything. Optional and last among the required fields on purpose:
+    # a job with no account is a real case (an internal fetch with nobody behind
+    # it) and every existing caller predates this field.
+    actor_id: int | None = None
     status: str = "queued"     # queued|downloading|paused|completed|failed|cancelled
     want: str | None = None    # "pause" or "cancel", read by the writing loop
     received: int = 0
     total: int = 0
     error: str | None = None
+    #: The reason as a NAME, and the one figure it is read with, beside
+    #: the sentence. The sentence stays: it is the fallback for a reader
+    #: that does not know the name, and it carries our own ValueError
+    #: messages, which are already specific and get no name.
+    error_code: str = ""
+    error_detail: str = ""
     task: asyncio.Task | None = None
 
     @property
@@ -119,6 +131,8 @@ class _RomJob:
             "status": self.status, "received": self.received, "total": self.total,
             "percent": round(self.received / self.total * 100, 1) if self.total else -1,
             "error": self.error,
+            "error_code": self.error_code,
+            "error_detail": self.error_detail,
         }
 
 
@@ -129,7 +143,7 @@ _jobs: dict[int, _RomJob] = {}
 _KEEP_FINISHED = 200   # finished jobs remembered, so the list cannot grow forever
 
 # Post-download scans are coalesced: a burst of downloads shares one full ROM
-# scan instead of each running its own (see _coalesced_scan_after_write).
+# scan instead of each running its own (see scan_after_write).
 _scan_cv = asyncio.Condition()
 _writes_seen = 0      # bumped as each downloaded file lands, under _scan_cv
 _writes_covered = 0   # highest _writes_seen a completed scan has included
@@ -564,6 +578,73 @@ def assert_room_for(dest_dir: Path, need: int) -> None:
         )
 
 
+def _download_audience(job) -> dict:
+    """Who a download event is addressed to.
+
+    `GET /rom-sources/downloads` shows an uploader their own jobs and an
+    administrator everything, and these events carry the same thing: filenames,
+    platforms, job numbers, progress. They were broadcast to every authenticated
+    client, so a plain account with none of the three permissions the route
+    requires was handed the lot over its socket.
+
+    The account that started it, plus administrators. A job with nobody behind
+    it - an internal fetch - goes to administrators alone.
+    """
+    from handler.socket_handler import _role_room, _user_room
+
+    rooms = [_role_room("admin")]
+    actor_id = getattr(job, "actor_id", None)
+    if actor_id:
+        rooms.append(_user_room(actor_id))
+    return {"rooms": rooms}
+
+
+async def _emit_download(job, event: str, payload: dict) -> None:
+    """Send one download event to that audience, one room at a time."""
+    from handler.socket_handler import sio
+
+    for room in _download_audience(job)["rooms"]:
+        try:
+            await sio.emit(event, payload, room=room)
+        except Exception:   # noqa: BLE001 - a progress line, never the transfer
+            logger.debug("Could not emit %s", event, exc_info=True)
+
+
+async def _ceiling_for_job(job) -> int:
+    """The per-file ceiling in force for this job's account, or 0 for no room.
+
+    A job with nobody behind it - an internal fetch, or one queued before the
+    account was recorded - gets the install-wide figure, which is what was in
+    force for everything before this existed. A failure to read the quota falls
+    back the same way: refusing a download because the limit could not be looked
+    up would be worse than the limit not binding for one transfer.
+
+    A FULL ACCOUNT IS NOT SUCH A FAILURE. `ceiling_for` reports one by raising a
+    413, and an HTTPException is an Exception, so the blanket fallback below
+    used to catch the single case this whole mechanism exists to stop and answer
+    it with the entire install-wide allowance - logged as a lookup problem that
+    had not happened. Every download an over-quota account started from then on
+    was unbounded.
+    """
+    if not getattr(job, "actor_id", None):
+        return max_rom_bytes()
+    try:
+        from handler.database.users_handler import UsersHandler
+        from handler.library import quota
+
+        user = await UsersHandler().get_by_id(job.actor_id)
+        if user is None:
+            return max_rom_bytes()
+        return await quota.ceiling_for(user, max_rom_bytes())
+    except HTTPException:
+        # An answer, and the caller refuses the job on it.
+        return 0
+    except Exception:
+        logger.warning("Could not read the upload quota for job %s; "
+                       "falling back to the install limit", getattr(job, "id", "?"))
+        return max_rom_bytes()
+
+
 def max_rom_bytes() -> int:
     """The per-file ceiling in force, honouring the Settings > ROMs override.
 
@@ -619,11 +700,9 @@ def _gate() -> asyncio.Semaphore:
 
 
 def _roms_base() -> str:
-    try:
-        cfg = config_manager.get_section("roms")
-        return cfg.get("library_path") or ROMS_PATH
-    except Exception:
-        return ROMS_PATH
+    from handler.filesystem.rom_paths import roms_library_path
+
+    return roms_library_path(config_manager)
 
 
 def _safe_rom_filename(raw: str) -> str:
@@ -704,7 +783,7 @@ def _resolve_entry(inst: Any, entry_id: str) -> dict[str, Any] | None:
 
 async def queue_downloads(
     source_id: str, entry_ids: Iterable[str], actor: str | None = None,
-    force: bool = False,
+    force: bool = False, actor_id: int | None = None,
 ) -> dict[str, Any]:
     """Resolve and queue single-ROM downloads. Returns the accepted jobs.
 
@@ -770,7 +849,7 @@ async def queue_downloads(
             id=next(_job_seq), source_id=source_id, entry_id=entry_id,
             url=spec["url"], filename=spec["filename"], fs_slug=spec["fs_slug"],
             headers=spec["headers"], cookies=spec["cookies"], actor=actor,
-            entry_key=ekey, dest_key=dkey,
+            actor_id=actor_id, entry_key=ekey, dest_key=dkey,
         )
         job_id = job.id
         _jobs[job_id] = job
@@ -786,7 +865,7 @@ async def queue_downloads(
 
 async def import_rom(
     url: str, fs_slug: str, filename: str, actor: str | None = None,
-    force: bool = False,
+    force: bool = False, actor_id: int | None = None,
 ) -> dict[str, Any]:
     """General primitive: download one ROM by direct URL into roms/<fs_slug>/.
 
@@ -818,7 +897,7 @@ async def import_rom(
     job = _RomJob(
         id=next(_job_seq), source_id="import", entry_id=safe_name, url=url,
         filename=safe_name, fs_slug=fs_slug, headers=None, cookies=None,
-        actor=actor, entry_key=None, dest_key=dkey,
+        actor=actor, actor_id=actor_id, entry_key=None, dest_key=dkey,
     )
     _jobs[job.id] = job
     job.task = asyncio.create_task(_rom_download_job(job))
@@ -842,17 +921,35 @@ def _failed_host(e: Exception, job: _RomJob) -> str:
     return urlparse(job.url).hostname or "?"
 
 
-def _safe_error(e: Exception) -> str:
-    """A user-facing error that never echoes the URL or auth headers back."""
+def _safe_error(e: Exception) -> tuple[str, str, str]:
+    """A user-facing error that never echoes the URL or auth headers back.
+
+    Returns the sentence, the NAME of the reason, and the one figure that reason
+    is read with. The sentence stays because it is the fallback for a reader
+    that does not know the name; the name is what lets the tray say it in the
+    reader's language.
+
+    This function already sorted every failure into five outcomes - it was
+    written to keep the source URL and the auth header out of the message - so
+    nothing here is new classification. It only stopped throwing the
+    classification away at the door.
+    """
     if isinstance(e, httpx.HTTPStatusError):
-        return f"Source returned HTTP {e.response.status_code}."
+        status = str(e.response.status_code)
+        # The status is the whole difference between "the archive is down" and
+        # "that file is gone", so it travels beside the name rather than inside
+        # a sentence somebody would have to parse back out.
+        return f"Source returned HTTP {status}.", "rom_http", status
     if isinstance(e, ValueError):
-        return str(e)[:200] or "Download failed."
+        # Ours, and written on purpose - a quota refusal and its like. No name:
+        # the screen falls through to the sentence, which is the right answer
+        # for a message that is already specific.
+        return str(e)[:200] or "Download failed.", "", ""
     if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
-        return "Could not reach the source."
+        return "Could not reach the source.", "rom_unreachable", ""
     if isinstance(e, httpx.TimeoutException):
-        return "The source timed out."
-    return "Download failed."
+        return "The source timed out.", "rom_timeout", ""
+    return "Download failed.", "rom_failed", ""
 
 
 def _release_job_locks(job: _RomJob) -> None:
@@ -889,7 +986,7 @@ async def _rom_download_job(job: _RomJob, resume_from: int = 0) -> None:
         job.want = None
         job.task = None
         _release_job_locks(job)
-        fire_task(sio.emit("romsource:download_state", job.as_dict()))
+        fire_task(_emit_download(job, "romsource:download_state", job.as_dict()))
         raise
     landed = False
     try:
@@ -923,8 +1020,8 @@ async def _register_after_download(job: _RomJob) -> None:
     """
     from handler.socket_handler import sio
 
-    rom_id = await _register_and_scrape(job.fs_slug, job.filename)
-    await sio.emit("romsource:download_complete", {
+    rom_id = await _register_and_scrape(job.fs_slug, job.filename, owner_id=job.actor_id)
+    await _emit_download(job, "romsource:download_complete", {
         "id": job.id,
         "source_id": job.source_id,
         "entry_id": job.entry_id,
@@ -941,7 +1038,12 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
     dest_dir = Path(_roms_base()) / job.fs_slug
     dest_path = dest_dir / job.filename
     part_path = dest_dir / (job.filename + ".part")
-    max_bytes = max_rom_bytes()
+    # The install-wide per-file ceiling, brought down to whatever the account
+    # that asked for this has left of its quota. Handing the loop below a lower
+    # number puts the quota inside the counting that was already happening,
+    # rather than beside it: without this the limit was only ever noticed after
+    # the bytes had landed, so every account could exceed it by one download.
+    max_bytes = await _ceiling_for_job(job)
     size = resume_from
     started = time.monotonic()
     last_emit = 0.0
@@ -949,6 +1051,15 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
     job.want = None
     job.error = None
     try:
+        # Nothing spare, so nothing is fetched. Inside the try because that is
+        # where a refusal becomes a failed job with a sentence on it; raised
+        # rather than returned because every other reason this cannot go ahead -
+        # the disk being full, the URL being refused - arrives the same way.
+        if max_bytes <= 0:
+            raise ValueError(
+                "Upload quota reached: this account has no room left for another "
+                "download."
+            )
         dest_dir.mkdir(parents=True, exist_ok=True)
         # Scope credential cookies to the URL's registrable domain (with a leading
         # dot) so a redirect to another host - an open redirect, a compromised hop,
@@ -1018,7 +1129,7 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
                         if now - last_emit >= 1.0:
                             last_emit = now
                             elapsed = max(now - started, 0.001)
-                            await sio.emit("romsource:download_progress", {
+                            await _emit_download(job, "romsource:download_progress", {
                                 "id": job.id,
                                 "source_id": job.source_id,
                                 "entry_id": job.entry_id,
@@ -1065,7 +1176,7 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
             except Exception:
                 pass
         job.status = "failed"
-        job.error = _safe_error(e)
+        job.error, job.error_code, job.error_detail = _safe_error(e)
         # Neither the exception message nor the entry id: httpx puts the full
         # request URL in the message of an HTTP error, and an entry id IS a URL
         # for a source that keys its listing on one (the shipping archive.org
@@ -1082,13 +1193,15 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
             job.id, job.source_id, job.fs_slug, job.filename, job.error,
             type(e).__name__, _failed_host(e, job),
         )
-        await sio.emit("romsource:download_error", {
+        await _emit_download(job, "romsource:download_error", {
             "id": job.id,
             "source_id": job.source_id,
             "entry_id": job.entry_id,
             "fs_slug": job.fs_slug,
             "filename": job.filename,
             "error": job.error,
+            "error_code": job.error_code,
+            "error_detail": job.error_detail,
         })
     finally:
         job.task = None
@@ -1128,7 +1241,7 @@ async def _settle_stopped(job: _RomJob, part_path: Path, forced: bool = False) -
     logger.info(
         "ROM download #%d %s: %s/%s%s", job.id, job.status, job.fs_slug, job.filename,
         " (connection was idle)" if forced else "")
-    await sio.emit("romsource:download_state", job.as_dict())
+    await _emit_download(job, "romsource:download_state", job.as_dict())
 
 
 # ── Controlling a download in flight ───────────────────────────────────────────
@@ -1140,6 +1253,31 @@ def list_jobs() -> list[dict[str, Any]]:
 
 def get_job(job_id: int) -> _RomJob | None:
     return _jobs.get(job_id)
+
+
+def job_owners() -> dict[int, int | None]:
+    """Which account started each job.
+
+    Not part of `as_dict()`, deliberately: the listing route is narrowed to the
+    caller's own jobs unless they hold ROMS_WRITE, so for everybody else a name
+    here would be an account name they have no reason to be handed. The route
+    asks for this and adds the name only when it is answering about other
+    people's transfers.
+    """
+    return {job_id: getattr(job, "actor_id", None) for job_id, job in _jobs.items()}
+
+
+def own_jobs(user_id: int | None) -> list[_RomJob]:
+    """The jobs this account started, newest first.
+
+    A real id on both sides. A job with no account behind it - an internal fetch
+    - belongs to nobody rather than to everybody, which is the same reading the
+    delete rules use for a row with no owner.
+    """
+    if not user_id:
+        return []
+    return [j for j in sorted(_jobs.values(), key=lambda j: -j.id)
+            if j.actor_id == user_id]
 
 
 async def _request_stop(job: _RomJob, tryb: str) -> None:
@@ -1213,7 +1351,7 @@ async def cancel_or_forget_job(job_id: int) -> bool:
         if job.entry_key is not None:
             _in_flight.discard(job.entry_key)
         _dest_locks.discard(job.dest_key)
-        await sio.emit("romsource:download_state", job.as_dict())
+        await _emit_download(job, "romsource:download_state", job.as_dict())
         return True
     # Finished, failed or already cancelled: forget it, and sweep up any
     # fragment a hard stop may have left behind.
@@ -1249,11 +1387,11 @@ async def retry_job(job_id: int) -> bool:
     except OSError:
         start_at = 0
     job.task = asyncio.create_task(_rom_download_job(job, start_at))
-    await sio.emit("romsource:download_state", job.as_dict())
+    await _emit_download(job, "romsource:download_state", job.as_dict())
     return True
 
 
-async def _coalesced_scan_after_write() -> None:
+async def scan_after_write() -> None:
     """Run a full ROM scan that includes this just-written file, sharing one scan
     across a burst of concurrent downloads instead of running N of them.
 
@@ -1264,7 +1402,9 @@ async def _coalesced_scan_after_write() -> None:
     own full-tree scan back-to-back.
     """
     global _writes_seen, _writes_covered, _scan_busy
-    import endpoints.roms.roms_router as _rr
+    # The scan lock lives with the scanner now; this used to reach into the
+    # router for it, which is what made moving it worth doing.
+    from handler.filesystem import rom_scanner as _scanner
 
     async with _scan_cv:
         _writes_seen += 1
@@ -1275,12 +1415,12 @@ async def _coalesced_scan_after_write() -> None:
                 snapshot = _writes_seen
                 _scan_cv.release()
                 try:
-                    async with _rr._scan_lock:
-                        _rr._scan_running = True
+                    async with _scanner._scan_lock:
+                        _scanner._scan_running = True
                         try:
                             await scan_roms_path(_roms_base())
                         finally:
-                            _rr._scan_running = False
+                            _scanner._scan_running = False
                 except Exception:
                     logger.warning("Coalesced ROM scan failed", exc_info=True)
                 finally:
@@ -1295,18 +1435,85 @@ async def _coalesced_scan_after_write() -> None:
                 await _scan_cv.wait()
 
 
-async def _register_and_scrape(fs_slug: str, filename: str) -> int | None:
+async def _register_and_scrape(fs_slug: str, filename: str, *, owner_id: int | None = None) -> int | None:
     """Ensure the just-downloaded file is scanned in (coalesced with any
     concurrent downloads), then best-effort auto-scrape the new Rom."""
-    await _coalesced_scan_after_write()
+    # Up to three scans, the same as the upload path beside it and for the same
+    # reason: the scan that registers this file can be stopped by an
+    # administrator halfway, and a stopped scan takes back the rows it created.
+    # One attempt then found nothing and gave up - and because the scan is
+    # owner-blind by design, no later one repairs it: the ROM belongs to nobody
+    # for ever, counts against no quota, and the account that fetched it cannot
+    # remove it.
+    #
+    # Bounded, because an administrator holding Stop must not have us scanning
+    # without end.
+    #
+    # THE PLATFORM IS ASKED FOR INSIDE THE LOOP, after a scan. `rom_platforms`
+    # is written in exactly one place - the scanner's upsert - so on the first
+    # download to a shelf nobody has scanned there is nothing to find yet, and
+    # asking before the loop returned None before the scan that would have
+    # created it. That is the ordinary way a shelf begins: `_init_rom_dirs`
+    # makes a folder for every known platform at boot and they stay row-less
+    # until something lands in one. The caller then emits
+    # `romsource:download_complete` with `rom_id: null` - no page to open, no
+    # metadata - and the row a later scan finally makes carries no owner.
+    #
+    # Whether this name already had a row BEFORE this download registered.
+    # Asked before the scan below, which is what makes a row for a new file.
+    # A row that was already there - a copy under roms/, the same name in other
+    # letter case, a ROM re-fetched over with force - is not this account's to
+    # own. If a scan elsewhere slips in between the file landing and this
+    # question, the answer errs towards no owner, never towards a wrong one.
+    _before = await rom_platform_handler.get_by_slug(slug_from_fs_slug(fs_slug))
+    had_row = (
+        _before is not None
+        and await rom_handler.get_by_fs_name(_before.id, filename) is not None
+    )
+    # And the newest row so far. The scan can carry this file onto an OLD row -
+    # a ROM whose file vanished, found again under this name by its hash - and
+    # that row keeps its id, because saves and play history key on it. After
+    # the scan it has exactly this name in exactly this shelf; only the id says
+    # this download did not make it.
+    newest_before = await rom_handler.max_rom_id()
 
-    platform = await rom_platform_handler.get_by_slug(slug_from_fs_slug(fs_slug))
-    if platform is None:
-        return None
-    rom = await rom_handler.get_by_fs_name(platform.id, filename)
+    platform = None
+    rom = None
+    for _attempt in range(3):
+        await scan_after_write()
+        if platform is None:
+            platform = await rom_platform_handler.get_by_slug(slug_from_fs_slug(fs_slug))
+        if platform is not None:
+            rom = await rom_handler.get_by_fs_name(platform.id, filename)
+            if rom is not None:
+                break
     if rom is None:
-        logger.warning("Downloaded ROM %s not found after scan (platform %s)", filename, fs_slug)
+        logger.warning(
+            "Downloaded ROM %s still not found after three scans (platform %s); "
+            "it is owned by nobody and counts against no quota",
+            filename, fs_slug,
+        )
         return None
+
+    # The scan that just ran is owner-blind on purpose: it re-walks the whole
+    # tree, so stamping there would hand one account every ROM on the disk. This
+    # is the one place that knows a particular file was fetched by a particular
+    # person, so this is where it is recorded. Only onto a row that has no owner
+    # yet, so re-downloading over an existing file cannot quietly move it from
+    # one account to another, or undo an admin's claim.
+    #
+    # And exactly this file, in exactly this shelf: the lookup above compares
+    # names without regard to case and does not care which folder the row
+    # points at. The upload path beside this one asks the same questions.
+    this_file = (
+        getattr(rom, "fs_name", None) == filename
+        and Path(str(getattr(rom, "fs_path", "") or "")).resolve()
+        == (Path(_roms_base()) / fs_slug).resolve()
+    )
+    made_here = int(getattr(rom, "id", 0) or 0) > newest_before
+    if (owner_id and not had_row and this_file and made_here
+            and getattr(rom, "published_by", None) is None):
+        await rom_handler.set_owner(rom.id, owner_id)
 
     try:
         full = await rom_handler.get_with_platform(rom.id)

@@ -27,6 +27,7 @@ from decorators.auth import protected_route
 from handler.auth.scopes import Scope as Scopes
 from handler.database.collection_handler import collection_handler
 from handler.database.library_registry_handler import library_registry_handler
+from handler.library.metadata_lock import assert_unlocked
 from handler.database.session import async_session_factory
 from models.gog_game import GogGame
 from models.library_game import LibraryGame
@@ -218,14 +219,40 @@ async def list_collections(request: Request, library: str | None = None) -> list
     average rating and year range. Scoped to one container library when `library`
     (its slug) is given; otherwise every collection across all containers (used
     by the theme store / membership picker)."""
+    # Which container, and whether this account may be shown it. The kind check
+    # was the only one here: a collections shelf that is hidden or switched off
+    # answered in full, and the variant with NO slug at all - the one the core
+    # frontend calls on load - went through `get_all()` and returned every
+    # collection in every container, disabled ones included.
+    user = request.state.user
     lib_id: int | None = None
     if library is not None:
         lib = await library_registry_handler.get_by_slug(library)
         if lib is None or lib.kind != "collections":
             return []
+        if not await library_registry_handler.user_can_access(user, lib):
+            return []
         lib_id = lib.id
-
-    colls = await collection_handler.get_for_library(lib_id) if lib_id is not None else await collection_handler.get_all()
+        colls = await collection_handler.get_for_library(lib_id)
+    else:
+        shown = [
+            shelf for shelf in await library_registry_handler.get_all()
+            if shelf.kind == "collections"
+            and await library_registry_handler.user_can_access(user, shelf)
+        ]
+        shown_ids = {shelf.id for shelf in shown}
+        colls = [
+            c for c in await collection_handler.get_all()
+            # A collection with NO container is kept, deliberately. `library_id`
+            # is nullable because the column arrived by an ALTER, so collections
+            # made before it have none - and a collection with no shelf has no
+            # shelf to be hidden by. That is the same answer this codebase
+            # already gives for a game belonging to no library: it stays
+            # visible rather than vanishing because something unrelated was
+            # switched off.
+            if getattr(c, "library_id", None) is None
+            or getattr(c, "library_id", None) in shown_ids
+        ]
     if not colls:
         return []
 
@@ -313,10 +340,31 @@ async def set_game_collections(request: Request, game_id: int, body: CollectionM
         game = await s.get(LibraryGame, game_id)
     if game is None:
         raise HTTPException(status_code=404, detail="Game not found")
+    assert_unlocked(request, game)
 
     await collection_handler.set_collections_for_game(game_id, wanted)
     kept = {c.slug for c in all_colls if c.id in set(wanted)}
     return {"ok": True, "collections": [s for s in body.collections if s in kept]}
+
+
+async def _may_see_container(user, coll) -> bool:
+    """Whether the shelf this collection sits on may be shown to this account.
+
+    The same rule the listing applies, including its exception: a collection
+    with NO container is kept. `library_id` is nullable because the column
+    arrived by an ALTER, so collections made before it have none - and a
+    collection with no shelf has no shelf to be hidden by.
+    """
+    lib_id = getattr(coll, "library_id", None)
+    if lib_id is None:
+        return True
+    shelf = next(
+        (lib for lib in await library_registry_handler.get_all() if lib.id == lib_id),
+        None,
+    )
+    if shelf is None:
+        return True
+    return await library_registry_handler.user_can_access(user, shelf)
 
 
 # ── Detail ────────────────────────────────────────────────────────────────────
@@ -327,6 +375,14 @@ async def get_collection(request: Request, slug: str) -> dict:
     """A collection's metadata plus its member games (newest first)."""
     coll = await collection_handler.get_by_slug(slug)
     if coll is None:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    # And the shelf it sits on, which the listing beside this already asks
+    # about. Without it, switching a collections shelf off hid its collections
+    # from the grid and left every one of them answering here in full - name,
+    # description, artwork, aggregates and the member list. The slug comes
+    # straight from the name and the frontend routes on it, so a bookmark or a
+    # browser history entry was the whole of the way in.
+    if not await _may_see_container(request.state.user, coll):
         raise HTTPException(status_code=404, detail="Collection not found")
 
     members = await collection_handler.get_members(coll.id)

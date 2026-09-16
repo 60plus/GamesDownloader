@@ -29,11 +29,14 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from config import GAMES_PATH
+from handler.library import quota
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.database.library_handler import LibraryHandler
+from handler.library.ownership import assert_can_upload_into
 from models.library_file import LibraryFile
 from utils.async_utils import fire_task, note_unscanned
+from utils.errors import safe_note, safe_note_ref
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +186,7 @@ async def _finalize_upload(
     version: str | None,
     actor: str | None,
     staged: Path | None = None,
+    owner_id: int | None = None,
 ) -> dict:
     """Shared tail of every upload path: optional ClamAV check, duplicate
     guard and the LibraryFile record. Raises _VirusFound when ClamAV blocks
@@ -227,9 +231,43 @@ async def _finalize_upload(
 
     rel = _rel_from_abs(str(dest_path))
 
-    # Check for duplicate record
+    # The path already has a row, so the bytes on disk just changed under it.
+    #
+    # This used to return here without a single write, and the quota is a SUM of
+    # `LibraryFile.size_bytes` in SQL - never a counter, never measured from the
+    # disk - so the row was the only thing saying how big the file is, and it
+    # went on saying the old number. Write one byte under a name, replace it
+    # with the real file, and the disk grows while `used_bytes` does not.
+    #
+    # And the OWNER goes with them.
+    #
+    # This used to leave `published_by` alone, reasoning that a catalogue entry
+    # fetched a second time reuses the first account's game on purpose. That is
+    # true of the GAME and not of the file: on a file row this column means "who
+    # brought these bytes in", and after a replacement that is whoever just
+    # replaced them.
+    #
+    # Leaving it made one account's allowance move by another account's action.
+    # The store route hardcodes `overwrite=True` and asks only for an upload
+    # permission and store access, so a second person fetching the same entry
+    # rewrote the size on the first person's row: their bar jumped, they could be
+    # pushed over the limit and refused their next upload for something they did
+    # not do, and the account that actually put the bytes on the disk was charged
+    # nothing and could repeat it.
+    #
+    # NOT closed with a refusal. Two accounts fetching the same catalogue entry
+    # is what that route is for.
     existing_files = await _lib.get_files_for_game(game_id)
-    if any(f.file_path == rel for f in existing_files):
+    prior = next((f for f in existing_files if f.file_path == rel), None)
+    if prior is not None:
+        changes: dict = {"size_bytes": size, "is_available": True}
+        # Only when there is somebody to charge. Some ways in carry no account -
+        # a server-side fetch, a job with no caller - and writing None over a
+        # real owner would take the bytes off every total and leave the sum
+        # smaller than the disk.
+        if owner_id:
+            changes["published_by"] = owner_id
+        await _lib.update_file(prior, changes)
         return {
             "ok": True,
             "file_path": rel,
@@ -249,6 +287,12 @@ async def _finalize_upload(
         file_path=rel,
         source="custom",
         is_available=True,
+        # Charged to whoever brought this file in, rather than worked out later
+        # from the game it hangs off. A game can hold files from two accounts -
+        # a catalogue entry downloaded a second time reuses the first account's
+        # game on purpose - and asking only the game billed the second person's
+        # bytes to the first.
+        published_by=owner_id,
     )
     created = await _lib.create_file(lib_file)
     logger.info("Uploaded '%s' (%d B) for game %d", filename, size, game_id)
@@ -279,6 +323,10 @@ async def upload_game_file(
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    # Whose game this is. Without it an uploader who owns nothing had a quota
+    # that read zero for ever: any game id would do, and the bytes were charged
+    # to whoever did own it.
+    assert_can_upload_into(request, game)
 
     try:
         dest_dir = _dest_dir_for(
@@ -298,6 +346,34 @@ async def upload_game_file(
         raise HTTPException(status_code=409, detail=str(exc))
 
     max_bytes = await _max_upload_bytes(getattr(request.state, "user", None))
+    # Two different limits, and both have to hold: max_bytes is the ceiling on
+    # this one file, room_left is what the account has spare across everything
+    # it owns. Asked before a byte is written, so a hopeless upload is refused
+    # at once rather than after the whole file has crossed the wire.
+    _uploader = getattr(request.state, "user", None)
+    _quota = await quota.limit_for(_uploader)
+    room_left = 0
+    if _quota > 0:
+        used = await quota.used_bytes(getattr(_uploader, "id", None))
+        # Minus what this upload is about to give back. `used` already counts
+        # the file being replaced, so charging the replacement on top of it
+        # would refuse an account whose allowance is filled by the very file it
+        # is swapping - which is the ordinary reason to send the same path
+        # twice. Only the caller's own bytes come back: a file somebody else is
+        # charged for stays on their total until the row is rewritten.
+        replacing = 0
+        if overwrite:
+            for f in await _lib.get_files_for_game(game_id):
+                if f.file_path == _rel_from_abs(str(dest_path)) and (
+                        f.published_by or None) == getattr(_uploader, "id", None):
+                    replacing = int(f.size_bytes or 0)
+                    break
+        room_left = max(0, _quota - used + replacing)
+        if room_left == 0:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Upload quota reached: {used} of {_quota} bytes already used.",
+            )
 
     # Into a .part, never straight onto the destination. Writing to the final
     # name truncated whatever was already there before a single byte of the
@@ -306,6 +382,7 @@ async def upload_game_file(
     part_path = _part_path(dest_path)
     size = 0
     aborted = False
+    over_quota = False
     try:
         with open(part_path, "wb") as fh:
             while chunk := await file.read(_CHUNK_WRITE):
@@ -313,6 +390,13 @@ async def upload_game_file(
                 size += len(chunk)
                 if size > max_bytes:
                     aborted = True
+                    break
+                # The quota is checked here as well as before the write. The
+                # size is not known in advance for a streamed body, so the only
+                # honest moment to stop is when it has actually gone past.
+                if room_left and size > room_left:
+                    aborted = True
+                    over_quota = True
                     break
     except Exception:
         part_path.unlink(missing_ok=True)
@@ -322,8 +406,12 @@ async def upload_game_file(
             part_path.unlink(missing_ok=True)
             raise HTTPException(
                 status_code=413,
-                detail=f"File exceeds maximum allowed upload size "
-                       f"({max_bytes // (1024 ** 3)} GB).",
+                detail=(
+                    f"Upload quota reached: only {room_left} bytes were free."
+                    if over_quota else
+                    f"File exceeds maximum allowed upload size "
+                    f"({max_bytes // (1024 ** 3)} GB)."
+                ),
             )
 
     actor = (request.state.user.username
@@ -333,6 +421,7 @@ async def upload_game_file(
             game_id, dest_path, filename, size,
             os_platform, file_type, language, version, actor,
             staged=part_path,
+            owner_id=getattr(getattr(request.state, "user", None), "id", None),
         )
     except _VirusFound as v:
         raise HTTPException(
@@ -368,6 +457,26 @@ def _safe_filename(raw: str, fallback: str = "download.bin") -> str:
     return re.sub(r'[<>:"/\\|?*]', "_", name)
 
 
+async def _emit_url_job(actor_id: int | None, event: str, payload: dict) -> None:
+    """Send one URL-upload event to the account that started it, and to admins.
+
+    These four events used to go out with no room at all, which socket.io reads
+    as everybody: the game's title, the file name and the job id to every
+    logged-in account on the server. The ROM download path had the same hole and
+    was given `_download_audience`; this one lives in another file and was
+    missed. Same rule, asked from there so the two cannot drift.
+    """
+    from handler.roms.rom_source_handler import _download_audience
+    from handler.socket_handler import sio
+    from types import SimpleNamespace
+
+    for room in _download_audience(SimpleNamespace(actor_id=actor_id))["rooms"]:
+        try:
+            await sio.emit(event, payload, room=room)
+        except Exception:   # noqa: BLE001 - a progress line, never the transfer
+            logger.debug("Could not emit %s", event, exc_info=True)
+
+
 async def _url_upload_job(
     job_id: int,
     game_id: int,
@@ -383,6 +492,7 @@ async def _url_upload_job(
     game_title: str = "",
     tray: bool = False,
     overwrite: bool = False,
+    actor_id: int | None = None,
 ) -> None:
     from handler.socket_handler import sio
     import httpx
@@ -436,7 +546,7 @@ async def _url_upload_job(
                         if now - last_emit >= 1.0:
                             last_emit = now
                             elapsed = max(now - started, 0.001)
-                            await sio.emit("upload:url_progress", {
+                            await _emit_url_job(actor_id, "upload:url_progress", {
                                 "id":       job_id,
                                 "game_id":  game_id,
                                 "game_title": game_title,
@@ -451,16 +561,21 @@ async def _url_upload_job(
         result = await _finalize_upload(
             game_id, dest_path, filename, size,
             os_platform, file_type, language, version, actor,
-            staged=part_path,
+            staged=part_path, owner_id=actor_id,
         )
-        await sio.emit("upload:url_complete", {"id": job_id, "game_id": game_id, "game_title": game_title, "tray": tray, **result})
+        await _emit_url_job(actor_id, "upload:url_complete", {"id": job_id, "game_id": game_id, "game_title": game_title, "tray": tray, **result})
         logger.info("URL upload #%d finished for game %d (%s, %d B)", job_id, game_id, filename, size)
     except _VirusFound as v:
         part_path.unlink(missing_ok=True)
-        await sio.emit("upload:url_error", {
+        await _emit_url_job(actor_id, "upload:url_error", {
             "id": job_id, "game_id": game_id,
             "game_title": game_title, "tray": tray,
+            # The sentence stays as the fallback; the name is what the tray
+            # translates. The signature is not ours to translate - it is a name,
+            # and rewriting it would make it unsearchable.
             "error": f"Blocked by antivirus ({v.threat}).",
+            "error_code": "url_virus",
+            "error_detail": v.threat,
         })
     except Exception as e:
         # Only ever the .part. This line used to name the destination, and
@@ -469,17 +584,25 @@ async def _url_upload_job(
         # guard turned down. A dead link deleted a finished game.
         part_path.unlink(missing_ok=True)
         logger.warning("URL upload #%d failed for game %d: %s", job_id, game_id, e)
-        await sio.emit("upload:url_error", {
+        said, ref = safe_note_ref(e, what="Download failed")
+        await _emit_url_job(actor_id, "upload:url_error", {
             "id": job_id, "game_id": game_id,
             "game_title": game_title, "tray": tray,
-            "error": str(e)[:300] or "Download failed.",
+            # Nothing here can be classified - it is whatever went wrong - so
+            # the reason travels as "we do not know" plus the reference that
+            # ties this row to the traceback in the log. Without the reference
+            # on its own, the tray could only repeat the English sentence.
+            "error": said,
+            "error_code": "url_failed",
+            "error_detail": ref,
         })
 
 
 async def queue_url_download(
     game, url: str, *, os_platform: str, file_type: str,
     language: str | None = None, version: str | None = None,
-    actor: str | None = None, max_bytes: int, storage_folder: str | None = None,
+    actor: str | None = None, actor_id: int | None = None,
+    max_bytes: int, storage_folder: str | None = None,
     storage_title: str | None = None, tray: bool = False,
     overwrite: bool = False,
 ) -> dict:
@@ -521,6 +644,7 @@ async def queue_url_download(
         job_id, game.id, url, dest_dir, filename,
         os_platform, file_type, language, version, actor, max_bytes,
         game_title=game.title, tray=tray, overwrite=overwrite,
+        actor_id=actor_id,
     ))
     return {"id": job_id, "filename": filename}
 
@@ -530,6 +654,10 @@ async def upload_game_file_from_url(request: Request, game_id: int, body: Upload
     game = await _lib.get_by_id(game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    # Whose game this is. Without it an uploader who owns nothing had a quota
+    # that read zero for ever: any game id would do, and the bytes were charged
+    # to whoever did own it.
+    assert_can_upload_into(request, game)
 
     try:
         return await queue_url_download(
@@ -538,7 +666,11 @@ async def upload_game_file_from_url(request: Request, game_id: int, body: Upload
             language=body.language, version=body.version,
             actor=(request.state.user.username
                    if getattr(request.state, "user", None) else None),
-            max_bytes=await _max_upload_bytes(getattr(request.state, "user", None)),
+            actor_id=getattr(getattr(request.state, "user", None), "id", None),
+            max_bytes=await quota.ceiling_for(
+                getattr(request.state, "user", None),
+                await _max_upload_bytes(getattr(request.state, "user", None)),
+            ),
             overwrite=body.overwrite,
         )
     # UnsafeURLError is a ValueError, so the blocked-URL case lands here too.

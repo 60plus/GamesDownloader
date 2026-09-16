@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile, status
@@ -17,6 +18,8 @@ from models.user import User
 from schemas.user import PasswordChange, UserCreate, UserResponse, UserUpdate
 from utils.async_utils import fire_task
 from utils.uploads import read_upload_capped
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["users"])
 _users_db = UsersHandler()
@@ -102,6 +105,19 @@ async def change_password(request: Request, data: PasswordChange) -> dict:
     revoked = await session_handler.revoke_all_for_user(
         user.username, keep_access_jti=getattr(request.state, "token_jti", None),
     )
+    # The sockets go too, and ALL of them, including this browser's. The
+    # sessions are what "everything but this browser" is about; a socket is not
+    # a session, it is a pipe opened once and never asked about again, and the
+    # other browser this was pressed to shut out would keep receiving live
+    # activity through it.
+    #
+    # Dropping this browser's as well costs a blink - the client reconnects on
+    # its own and the handshake lets it straight back in, because its token is
+    # the one that was kept. The other browser's reconnect is refused, which is
+    # the point.
+    from handler.socket_handler import drop_sockets_for_user
+
+    await drop_sockets_for_user(user.id)
     return {"ok": True, "sessions_revoked": revoked}
 
 
@@ -177,6 +193,67 @@ async def create_user(request: Request, data: UserCreate) -> UserResponse:
     return UserResponse.model_validate(user)
 
 
+def access_changed(before, after) -> bool:
+    """Whether a socket already open was let in on terms that no longer hold.
+
+    A socket works out its rooms once, at the handshake, from the scopes the
+    account has then - and `connect` also refuses an account that is switched
+    off. Nothing asks again for the life of the connection, so anything that
+    changes either answer has to end it and let the client shake hands afresh.
+
+    THE EFFECTIVE SCOPES, not the permissions dictionary. That dictionary also
+    carries the upload quota, so comparing it whole meant raising somebody's
+    allowance by a gigabyte kicked their socket and froze the progress bar they
+    were watching - a change that decides nothing about any room.
+
+    Switching an account OFF counts, and switching it back on does not: the
+    handshake will admit it again on its own, and there is nothing open to end.
+    """
+    from handler.auth.scopes import apply_permission_overrides, scopes_for_role
+
+    def _scopes(account):
+        return apply_permission_overrides(
+            dict(getattr(account, "permissions", None) or {}),
+            scopes_for_role(account.role),
+        )
+
+    if getattr(before, "enabled", True) and not getattr(after, "enabled", True):
+        return True
+    return _scopes(before) != _scopes(after)
+
+
+def _may_upload(account) -> bool:
+    """Whether this account may put anything into the library at all.
+
+    The effective scopes, not the role: `_PERM_REVOKE` takes LIBRARY_UPLOAD away
+    without touching the role, which is the whole reason a rule that reads the
+    role drifts from a route that reads the scope. A switched-off account cannot
+    upload whatever either of them says.
+    """
+    from handler.auth.scopes import (
+        Scope, apply_permission_overrides, scopes_for_role,
+    )
+
+    if not getattr(account, "enabled", True):
+        return False
+    return Scope.LIBRARY_UPLOAD in apply_permission_overrides(
+        dict(getattr(account, "permissions", None) or {}),
+        scopes_for_role(account.role),
+    )
+
+
+def lost_upload(before, after) -> bool:
+    """Whether this change takes away the right to add things to the library.
+
+    Narrower than `access_changed` above on purpose. That one asks whether a
+    socket was admitted on terms that no longer hold, and answers yes to any
+    change of scope at all; handing somebody's transfers to an administrator is
+    not something to do because a permission moved in the other direction, or
+    because a quota was raised by a gigabyte. Only this one direction counts.
+    """
+    return _may_upload(before) and not _may_upload(after)
+
+
 @protected_route(router.patch, "/{user_id}", [Scope.USERS_WRITE])
 async def update_user(request: Request, user_id: int, data: UserUpdate) -> UserResponse:
     me = request.state.user
@@ -188,8 +265,43 @@ async def update_user(request: Request, user_id: int, data: UserUpdate) -> UserR
     from models.user import Role
     if me.id == user_id and data.role is not None and data.role != Role.ADMIN:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot change your own admin role")
-    prev_role = user.role
+    from types import SimpleNamespace
+
+    before = SimpleNamespace(
+        role=user.role,
+        permissions=dict(getattr(user, "permissions", None) or {}),
+        enabled=getattr(user, "enabled", True),
+    )
+    prev_role = before.role
     updated = await _users_db.update(user, data.model_dump(exclude_unset=True))
+
+    # A socket works out which rooms it belongs in at handshake, from the scopes
+    # this account has then, and the handshake is also where a switched-off
+    # account is refused. Neither is asked again, so a connection already open
+    # would go on being sent what it may no longer fetch until the token ran out
+    # - an hour by default. Dropping it is enough: the client reconnects by
+    # itself and the handshake asks again.
+    if access_changed(before, updated):
+        from handler.socket_handler import drop_sockets_for_user
+
+        await drop_sockets_for_user(user_id)
+
+    # A torrent already running is not stopped by this - losing a permission is
+    # not a reason to destroy work in progress, which is the same answer the ROM
+    # download path was given. It changes hands instead: a transfer belonging to
+    # an account that may no longer upload is that account still spending an
+    # allowance it does not have, on a game it would own when the transfer
+    # lands. The administrator making the change takes it, exactly as claiming a
+    # game does, and who brought it in is left alone.
+    if lost_upload(before, updated):
+        from handler.torrent.torrent_ownership import hand_running_torrents_to
+
+        try:
+            await hand_running_torrents_to(user_id, getattr(me, "id", None))
+        except Exception:  # noqa: BLE001 - the permission change is the point
+            logger.warning(
+                "Could not hand over the running torrents of account %s", user_id,
+                exc_info=True)
 
     # Alert when a user is promoted to admin
     if data.role is not None and data.role == Role.ADMIN and prev_role != Role.ADMIN:
@@ -215,6 +327,13 @@ async def admin_reset_password(request: Request, user_id: int, data: dict) -> di
     # minting fresh access tokens made it a no-op. No exception here, because
     # the target is somebody else and all of their sessions are suspect.
     revoked = await session_handler.revoke_all_for_user(user.username)
+    # And the socket, which the revocation does not reach. This is the one
+    # route in the application whose own comment calls it containment, and a
+    # socket authenticated at the handshake goes on carrying the owner's
+    # activity for as long as the tab stays open.
+    from handler.socket_handler import drop_sockets_for_user
+
+    await drop_sockets_for_user(user_id)
     return {"ok": True, "sessions_revoked": revoked}
 
 
@@ -229,4 +348,10 @@ async def delete_user(request: Request, user_id: int) -> dict:
         from exceptions.common import NotFoundException
         raise NotFoundException("User", user_id)
     await _users_db.delete(user)
+    # There is no session to revoke here - the row simply goes - and without
+    # this the socket outlives the account, sitting in `user:<id>` and
+    # `role:<role>` and receiving everything sent to them.
+    from handler.socket_handler import drop_sockets_for_user
+
+    await drop_sockets_for_user(user_id)
     return {"ok": True}

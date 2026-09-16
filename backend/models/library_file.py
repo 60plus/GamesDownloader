@@ -43,6 +43,17 @@ class LibraryFile(Base):
     # file it describes, so it cannot drift the way a hand-set flag does.
     is_archive:   Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # The account that brought THIS file in, which is not always the account
+    # that owns the game it hangs off. A catalogue entry downloaded a second
+    # time deliberately reuses the game the first account created, because it is
+    # the same game - and until this column existed the quota, being a sum over
+    # owned games, charged the second person's gigabytes to the first.
+    #
+    # Nullable, and the sum falls back to the game's owner when it is not set.
+    # Every row that predates this therefore counts exactly as it did before,
+    # which a NOT NULL default of anybody would not have managed.
+    published_by: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
     # ── Relationships ─────────────────────────────────────────────────────────
     game: Mapped[LibraryGame] = relationship("LibraryGame", back_populates="files")
 

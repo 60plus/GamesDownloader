@@ -199,7 +199,8 @@
               </button>
 
               <!-- Edit Metadata -->
-              <button v-if="canEdit" class="gd-btn-ghost" @click="showEditPanel = !showEditPanel" :title="t('detail.edit_metadata')">
+              <button v-if="canEdit"
+              :disabled="metaLocked" class="gd-btn-ghost" :class="{ 'gd-btn--locked': metaLocked }" @click="showEditPanel = !showEditPanel" :title="metaLocked ? t('meta.locked_by_admin') : t('detail.edit_metadata')">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -208,7 +209,7 @@
               </button>
 
               <!-- Refresh Metadata (scrape) -->
-              <button v-if="canEdit" class="gd-btn-ghost" :disabled="scraping" @click="onScrapeClick" :title="t('detail.fetch_metadata_hint')">
+              <button v-if="isAdmin" class="gd-btn-ghost" :disabled="scraping" @click="onScrapeClick" :title="t('detail.fetch_metadata_hint')">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" :class="{ spin: scraping }">
                   <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
                   <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
@@ -342,6 +343,27 @@
                 <span class="gd-dv gd-owner-cell">
                   <svg class="gd-owner-crown" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm0 2h14v2H5v-2z"/></svg>
                   {{ game.owner_username }}
+                  <!-- Only worth offering while somebody else owns it. An admin
+                       claiming a game they already own would change nothing. -->
+                  <button
+                    v-if="isAdmin && game.published_by && game.published_by !== auth.user?.id"
+                    class="gd-claim"
+                    :disabled="claiming"
+                    :title="t('detail.claim_hint', 'Take this game over: it leaves the uploader quota and they can no longer remove it')"
+                    @click="claimGame"
+                  >
+                    <i class="mdi mdi-account-arrow-left-outline"></i>
+                    {{ t('detail.claim', 'Take over') }}
+                  </button>
+                </span>
+              </template>
+              <!-- Shown only once a claim has parted the two. Before that the
+                   uploader is the owner and the row above already says so. -->
+              <template v-if="game.uploader_username">
+                <span class="gd-dk">{{ t('detail.uploader', 'Uploaded by') }}</span>
+                <span class="gd-dv gd-owner-cell">
+                  <i class="mdi mdi-tray-arrow-up gd-uploader-icon"></i>
+                  {{ game.uploader_username }}
                 </span>
               </template>
               <template v-if="(game.genres || []).length">
@@ -424,6 +446,42 @@
             {{ t('detail.file_management') }}
             <span class="admin-badge">{{ t('detail.admin_badge') }}</span>
           </h2>
+
+          <!-- Add a file to THIS game.
+               Reported by the owner: he uploaded Ion Fury, then its DLC, and got
+               a second library entry - because the only upload dialog in the
+               whole interface begins by creating a game. Nothing anywhere added
+               a file to a game already on the shelf, so there was no right thing
+               to click. This is that door. -->
+          <div class="admin-add-file">
+            <input
+              ref="addFileInput"
+              type="file"
+              class="admin-add-file-input"
+              :disabled="addBusy"
+              @change="onAddFilePicked"
+            />
+            <select v-model="addForm.os" class="admin-add-select" :disabled="addBusy">
+              <option value="windows">Windows</option>
+              <option value="mac">macOS</option>
+              <option value="linux">Linux</option>
+              <option value="all">All</option>
+            </select>
+            <select v-model="addForm.file_type" class="admin-add-select" :disabled="addBusy">
+              <option value="game">{{ t('upload.type_game') }}</option>
+              <option value="dlc">DLC</option>
+              <option value="extra">{{ t('upload.type_extra') }}</option>
+            </select>
+            <button
+              class="gd-btn-ghost"
+              :disabled="addBusy || !addFile"
+              @click="submitAddFile"
+            >
+              {{ addBusy ? `${addProgress}%` : t('detail.add_file') }}
+            </button>
+            <span v-if="addError" class="field-server-error">{{ addError }}</span>
+          </div>
+
           <div class="admin-files-list">
             <div v-for="f in game.files" :key="f.id" class="admin-file-row">
               <div class="admin-file-info">
@@ -617,7 +675,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
+import * as libActions from '@/lib/libraryActions'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
@@ -691,7 +750,12 @@ interface LibGame {
   hltb_main_s: number | null
   hltb_complete_s: number | null
   is_active: boolean
+  published_by: number | null
   owner_username: string | null
+  // Only sent when a claim has parted them from the owner; otherwise the two
+  // are the same account and the page shows one name.
+  uploaded_by: number | null
+  uploader_username: string | null
   files: LibFile[]
 }
 
@@ -706,6 +770,11 @@ const isAdmin    = computed(() => auth.user?.role === 'admin')
 
 const isUploader = computed(() => ['admin','uploader'].includes(auth.user?.role as string))
 const canEdit    = computed(() => ['admin','uploader','editor'].includes(auth.user?.role as string))
+// A locked entry is the admin's alone, so there is nothing here for anyone
+// else to open. Refusing at the button matters beyond tidiness: opening the
+// editor fires searches at the metadata providers, and some of them charge
+// for the request.
+const metaLocked = computed(() => !isAdmin.value && !!(game.value as any)?.metadata_locked)
 
 const game       = ref<LibGame | null>(null)
 const loading    = ref(true)
@@ -1070,6 +1139,29 @@ async function onMetadataSaved(_payload: Record<string, unknown>) {
 
 // ── Admin game actions ─────────────────────────────────────────────────────────
 
+// Taking a game over from whoever uploaded it. Worth a confirmation because
+// two of its three effects land on somebody else's account rather than on this
+// page: their quota frees up and their delete button goes away.
+const claiming = ref(false)
+async function claimGame() {
+  if (!game.value || claiming.value) return
+  if (!await gdConfirm(
+    t('detail.claim_body', 'Take this game over from {name}? It stops counting against their upload quota and they will no longer be able to remove it. Their name stays on the game as the uploader.')
+      .replace('{name}', game.value.owner_username || '?'),
+    { title: t('detail.claim', 'Take over') },
+  )) return
+  claiming.value = true
+  try {
+    await client.post(`/library/games/${game.value.id}/claim`)
+    await fetchGame()
+  } catch (e) {
+    console.error('Claim failed', e)
+    await gdAlert(t('detail.claim_failed', 'Could not take this game over.'))
+  } finally {
+    claiming.value = false
+  }
+}
+
 async function unpublishGame() {
   if (!game.value) return
   if (!await gdConfirm('Unpublish this game? It will be hidden from users.')) return
@@ -1107,6 +1199,46 @@ async function deleteGame() {
     await client.delete(`/library/games/${game.value.id}`, { params: { delete_files: deleteFiles } })
     router.push({ name: 'games-library' })
   } catch (e) { console.error('Delete failed', e) }
+}
+
+// ── Adding a file to this game ───────────────────────────────────────────────
+//
+// The counterpart to the upload dialog's new question. That dialog asks before
+// making a second entry for a title it already knows; this is the way round
+// that never has to ask, because the game is the one on screen.
+const addFileInput = ref<HTMLInputElement>()
+const addFile = ref<File | null>(null)
+const addForm = reactive({ os: 'windows', file_type: 'game' })
+const addBusy = ref(false)
+const addProgress = ref(0)
+const addError = ref('')
+
+function onAddFilePicked(e: Event) {
+  addFile.value = (e.target as HTMLInputElement).files?.[0] ?? null
+  addError.value = ''
+}
+
+async function submitAddFile() {
+  if (!game.value || !addFile.value || addBusy.value) return
+  addBusy.value = true
+  addProgress.value = 0
+  addError.value = ''
+  try {
+    await libActions.uploadFile(game.value.id, addFile.value, {
+      os: addForm.os,
+      fileType: addForm.file_type,
+      onProgress: (percent) => { addProgress.value = percent },
+    })
+    addFile.value = null
+    // The picker keeps the old name otherwise, so a second add looks like it
+    // is about to send the file that already went.
+    if (addFileInput.value) addFileInput.value.value = ''
+    await fetchGame()
+  } catch (e: any) {
+    addError.value = e?.response?.data?.detail || t('upload.failed')
+  } finally {
+    addBusy.value = false
+  }
 }
 
 async function toggleFileAvailability(f: LibFile) {
@@ -1484,6 +1616,19 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 /* ── Admin file management ───────────────────────────────────────────────────── */
 .gd-admin-section { border: 1px solid rgba(239,68,68,.15); border-radius: 10px; padding: var(--space-5, 20px); }
 .admin-files-list { display: flex; flex-direction: column; gap: 6px; }
+/* Adding a file to this game. Sits above the list it adds to, and wraps rather
+   than pushing the panel wider on a narrow window. */
+.admin-add-file {
+  display: flex; align-items: center; gap: var(--space-2, 8px); flex-wrap: wrap;
+  padding: 8px 12px; margin-bottom: var(--space-2, 8px);
+  background: var(--glass-bg); border: 1px dashed var(--glass-border); border-radius: 6px;
+}
+.admin-add-file-input { font-size: var(--fs-xs, 10px); color: var(--muted); max-width: 100%; }
+.admin-add-select {
+  padding: 4px 8px; font-size: var(--fs-xs, 10px); font-family: inherit;
+  background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm, 4px); color: var(--text); outline: none;
+}
 .admin-file-row {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 12px; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 6px;
@@ -1692,6 +1837,23 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 .gd-mono { font-family: monospace; font-size: var(--fs-sm, 12px); }
 .gd-owner-cell { display: flex; align-items: center; gap: 6px; }
 .gd-owner-crown { color: #f59e0b; flex-shrink: 0; filter: drop-shadow(0 0 4px rgba(245,158,11,.4)); }
+.gd-uploader-icon { color: var(--pl); flex-shrink: 0; opacity: .8; font-size: 15px; }
+.gd-claim {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 4px; padding: 1px 8px;
+  font: inherit; font-size: 11px; line-height: 18px;
+  color: var(--pl); cursor: pointer;
+  background: color-mix(in srgb, var(--pl) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl) 30%, transparent);
+  border-radius: 999px;
+  transition: border-color .15s, background .15s;
+}
+.gd-claim:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pl) 20%, transparent);
+  border-color: color-mix(in srgb, var(--pl) 50%, transparent);
+}
+.gd-claim:disabled { opacity: .5; cursor: default; }
+.gd-claim .mdi { font-size: 13px; }
 
 .gd-tag-inline { display: flex; flex-wrap: wrap; gap: var(--space-1, 4px); }
 .gd-itag {
@@ -1913,4 +2075,12 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
   .gd-dlist { grid-template-columns: 30px auto 1fr; font-size: var(--fs-sm, 12px); }
 }
 
+
+/* Shut rather than broken: amber says somebody else holds this, which is not
+   the same as something having gone wrong. */
+.gd-btn--locked, .gd-btn--locked:hover {
+  background: rgba(245,158,11,.14) !important;
+  border-color: rgba(245,158,11,.4) !important;
+  color: #f59e0b; cursor: not-allowed;
+}
 </style>
