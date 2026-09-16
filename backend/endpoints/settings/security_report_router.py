@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.config.config_handler import config_handler
+from utils.errors import safe_detail
 
 router = APIRouter(prefix="/api/settings/security/report", tags=["security-report"])
 
@@ -53,7 +54,7 @@ async def send_report_now(request: Request) -> dict:
     try:
         await send_now(frequency)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to send report: {exc}")
+        raise HTTPException(status_code=400, detail=safe_detail(exc, request, what="Failed to send report"))
     return {"ok": True}
 
 

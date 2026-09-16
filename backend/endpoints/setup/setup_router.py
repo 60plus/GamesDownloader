@@ -14,6 +14,7 @@ from handler.auth.passwords import hash_password, password_problem
 from handler.config.config_handler import config_handler
 from handler.database.users_handler import UsersHandler
 from handler.gog.gog_auth_handler import gog_auth_handler
+from utils.errors import safe_detail
 from models.user import Role, User
 
 setup_router = APIRouter(prefix="/api/setup", tags=["setup"])
@@ -127,7 +128,7 @@ async def setup_gog(req: GogCodeRequest) -> dict:
         result = await gog_auth_handler.exchange_code(req.code)
         return result
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"GOG authentication failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=safe_detail(e, what="GOG authentication failed"))
 
 
 @setup_router.post("/gog/avatar")

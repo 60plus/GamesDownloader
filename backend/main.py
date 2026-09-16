@@ -40,6 +40,7 @@ from handler.socket_handler import sio
 from models.base import Base
 from models.user import Role, User
 from plugins.manager import plugin_manager
+from utils.log_redaction import install_log_redaction
 from utils.save_paths import is_save_path, saves_root, saves_root_is_legacy, superseded_dir
 
 logging.basicConfig(
@@ -47,6 +48,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+install_log_redaction()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -294,6 +296,14 @@ async def _init_db() -> None:
         ("catalog_entries", "genres",               "JSON NULL"),
         ("catalog_entries", "screenshots",          "JSON NULL"),
         ("catalog_entries", "meta_ratings",         "JSON NULL"),
+        # The same column on the two older tables. It has been on the models
+        # since March and only ever reached a database through create_all, which
+        # makes tables and never alters one - so a fresh install has it and an
+        # install that predates it does not, and the ratings query there answers
+        # "Unknown column". Written down as an alembic revision at the time and
+        # nothing runs alembic here; this list is what actually runs.
+        ("gog_games",       "meta_ratings",         "JSON NULL"),
+        ("library_games",   "meta_ratings",         "JSON NULL"),
         ("catalog_entries", "languages",            "JSON NULL"),
         ("catalog_entries", "requirements",         "JSON NULL"),
         ("catalog_entries", "hltb_main_s",          "INT NULL"),
@@ -308,6 +318,59 @@ async def _init_db() -> None:
         ("library_games",  "gog_product_id",       "INT NULL"),
         ("library_games",  "steam_appid",          "INT NULL"),
         ("library_games",  "igdb_id",              "INT NULL"),
+        # Closed to everyone but an admin. Default 0 rather than NULL so an
+        # upgrade cannot leave a library that reads as frozen while nobody
+        # has touched a padlock.
+        ("library_games",  "metadata_locked",      "TINYINT(1) NOT NULL DEFAULT 0"),
+        ("roms",           "metadata_locked",      "TINYINT(1) NOT NULL DEFAULT 0"),
+        # Who brought a game in, as opposed to who owns it now. The two are the
+        # same until an admin claims the game; the backfill below is what makes
+        # that true of everything uploaded before the column existed.
+        ("library_games",  "uploaded_by",          "INT NULL"),
+        # The account that queued a torrent, so the game it becomes has an
+        # owner and therefore counts against a quota.
+        ("torrent_downloads", "created_by_id",     "INT NULL"),
+        # Who brought that torrent in, as opposed to who owns it now. The two
+        # part when the owner loses the right to upload and the transfer is
+        # handed to an administrator, the same way claiming a game parts them.
+        ("torrent_downloads", "uploaded_by_id",    "INT NULL"),
+        # Why a transfer stopped, as a name the screen can translate. No
+        # backfill on purpose: a row written before this keeps its English
+        # sentence and the screen falls back to showing it, which is exactly
+        # what it did yesterday. Guessing a code for those would be inventing a
+        # reason nobody recorded.
+        ("torrent_downloads", "error_code",        "VARCHAR(40) NULL"),
+        ("torrent_downloads", "error_detail",      "VARCHAR(255) NULL"),
+        # The same two questions for a GOG download, and with the same
+        # deliberate absence of a backfill: a job that failed last week
+        # has no code, keeps its English sentence, and the screen falls
+        # back to showing it - exactly what it did before today.
+        # Guessing a code for those would be inventing a reason nobody
+        # recorded.
+        ("download_jobs",   "error_code",        "VARCHAR(40) NULL"),
+        ("download_jobs",   "error_detail",      "VARCHAR(255) NULL"),
+        # Paths a scan is told never to look at, one pattern per line. Empty
+        # everywhere on upgrade, which is the only safe default: a pattern
+        # arriving without anybody having typed it could only ever hide things.
+        ("libraries",      "scan_exclude",         "TEXT NULL"),
+        ("rom_platforms",  "scan_exclude",         "TEXT NULL"),
+        # The same two questions for a ROM. Deliberately with NO backfill: the
+        # download job registry was process memory, so nothing ever recorded who
+        # fetched what, and a guess here would put real uploaders over their
+        # quota on the first boot after an upgrade. Every ROM already on disk
+        # keeps a NULL owner and counts against nobody, which is true.
+        ("roms",           "published_by",         "INT NULL"),
+        ("roms",           "uploaded_by",          "INT NULL"),
+        # Who brought a particular FILE in, which is not always who owns the
+        # game it hangs off: a catalogue entry downloaded a second time reuses
+        # the first account's game on purpose, because it is the same game, and
+        # the quota was charging the second person's gigabytes to the first.
+        #
+        # No backfill, and the sum falls back to the game's owner where this is
+        # NULL, so every row that already exists counts exactly as it did
+        # before. Filling it in would be a guess, and a guess here moves real
+        # accounts' usage figures on the first boot after an upgrade.
+        ("library_files",  "published_by",         "INT NULL"),
     ]
     _added_columns: set[tuple[str, str]] = set()
     async with async_engine.begin() as conn:
@@ -334,6 +397,63 @@ async def _init_db() -> None:
         # marked as one or it would vanish from the navigation on upgrade. Keyed
         # on the column having just been created, so it runs exactly once and an
         # admin who later unticks GOG is not overruled on the next boot.
+        # Every game that existed before the column was uploaded by whoever owns
+        # it, because nothing had been claimed yet. Without this an upgrade would
+        # leave the whole library with no uploader, and the first claim after it
+        # would erase the only record of where the game came from. Keyed on the
+        # column being new, so it runs once and never overwrites a real answer.
+        if ("library_games", "uploaded_by") in _added_columns:
+            try:
+                await conn.execute(
+                    text("UPDATE `library_games` SET `uploaded_by` = `published_by` "
+                         "WHERE `published_by` IS NOT NULL")
+                )
+                logger.info("Migration: backfilled library_games.uploaded_by")
+            except Exception as exc:
+                logger.warning("Migration: uploader backfill failed: %s", exc)
+
+        # Downloads queued before the column exist only as a username, which is
+        # enough to find the account. Without this every torrent already in the
+        # library stays uncounted for good, since nothing revisits a finished
+        # download to ask who asked for it.
+        if ("torrent_downloads", "created_by_id") in _added_columns:
+            try:
+                await conn.execute(
+                    text("UPDATE `torrent_downloads` t JOIN `users` u "
+                         "ON u.username = t.created_by SET t.created_by_id = u.id")
+                )
+                # And the games those downloads already became. The rule is not
+                # about future torrents, and the download still names the game
+                # it turned into, so the two can be joined back up. Restricted
+                # to rows with nothing recorded, so it fills a blank and never
+                # overwrites an answer somebody arrived at by claiming.
+                await conn.execute(
+                    text("UPDATE `library_games` g "
+                         "JOIN `torrent_downloads` t ON t.game_id = g.id "
+                         "SET g.published_by = t.created_by_id, "
+                         "    g.uploaded_by  = t.created_by_id "
+                         "WHERE g.published_by IS NULL "
+                         "  AND t.created_by_id IS NOT NULL")
+                )
+                logger.info("Migration: backfilled torrent_downloads.created_by_id")
+            except Exception as exc:
+                logger.warning("Migration: torrent uploader backfill failed: %s", exc)
+
+        # Every transfer that already exists was queued by its owner, because
+        # until now one column said both things. So the answer for all of them
+        # is the owner they have, and this is the one case where copying is not
+        # a guess.
+        if ("torrent_downloads", "uploaded_by_id") in _added_columns:
+            try:
+                await conn.execute(
+                    text("UPDATE `torrent_downloads` "
+                         "SET `uploaded_by_id` = `created_by_id` "
+                         "WHERE `created_by_id` IS NOT NULL")
+                )
+                logger.info("Migration: backfilled torrent_downloads.uploaded_by_id")
+            except Exception as exc:
+                logger.warning("Migration: torrent handover backfill failed: %s", exc)
+
         if ("libraries", "is_store") in _added_columns:
             try:
                 await conn.execute(
@@ -985,11 +1105,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Remove storefronts whose catalogue plugin is gone (uninstalled while GD was
     # down, or before the per-uninstall cleanup existed). Keeps downloaded games.
-    from handler.library.catalog_sync_handler import reconcile_catalog_stores
+    from handler.library.catalog_sync_handler import (
+        reconcile_catalog_stores, reconcile_shelf_switches,
+    )
     try:
         await reconcile_catalog_stores()
     except Exception:
         logger.exception("Catalogue-store reconcile failed")
+
+    # And the shelves of plugins that are still installed but switched OFF. The
+    # two switches are only kept in step by the plugin buttons, so a plugin
+    # disabled while GD was down brought its shelf back up live - scanned, in the
+    # exclusions screen, in the navigation - with nothing behind it.
+    try:
+        await reconcile_shelf_switches()
+    except Exception:
+        logger.exception("Catalogue-shelf switch reconcile failed")
 
     # Pre-warm LaunchBox index in background (takes ~35s, avoids timeout on first search)
     from handler.metadata import launchbox_handler as _lb
@@ -1038,10 +1169,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # rows to decide whether a game counts as downloaded.
     await _unstick_downloads()
 
-    # One-shot: re-align file availability and the GOG downloaded flag with what
-    # is on disk, in case a crash landed between the files and the bookkeeping.
+    # Re-align file availability and the GOG downloaded flag with what is on
+    # disk, in case a crash landed between the files and the bookkeeping. It ran
+    # once per start until 1.0.34, which on a server nobody restarts meant the
+    # correction never happened; it now repeats on an interval from settings.
     from handler.library.reconcile import reconcile_loop as _reconcile_loop
     _reconcile_task = asyncio.create_task(_reconcile_loop())
+
+    # Re-scan the ROM tree on a timer. Off unless somebody sets an interval, and
+    # it shares the scan lock, so it never runs beside a scan somebody asked for.
+    from handler.filesystem.rom_scanner import periodic_scan_loop as _scan_loop
+    _rom_scan_task = asyncio.create_task(_scan_loop())
 
     yield
 
@@ -1063,6 +1201,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _loops = [
         _clamav_task, _report_task, _digest_task,
         _seed_task, _dl_mon_task, _queue_task, _reconcile_task,
+        _rom_scan_task,
     ]
     for _t in _loops:
         _t.cancel()
@@ -1088,6 +1227,13 @@ app = FastAPI(
     docs_url="/api/docs" if DEBUG else None,
     redoc_url="/api/redoc" if DEBUG else None,
 )
+
+# A refusal keeps `detail` a sentence and carries its reason name and figures
+# beside it, so a theme published before the names existed still prints
+# something a person can read. See utils/errors.py.
+from utils.errors import RefusalError, refusal_handler  # noqa: E402
+
+app.add_exception_handler(RefusalError, refusal_handler)
 
 # ── Middleware (order matters: outermost = last added runs first) ─────────────
 

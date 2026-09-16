@@ -21,6 +21,7 @@ import httpx
 
 from utils.apicalypse import sanitize_search
 from handler.metadata.igdb_auth import igdb_headers
+from utils.errors import safe_note
 
 
 async def fetch_meta_source(
@@ -107,7 +108,7 @@ async def fetch_meta_source(
                     "languages":         raw_langs if isinstance(raw_langs, dict) else {},
                 })
         except Exception as exc:
-            result["error"] = str(exc)
+            result["error"] = safe_note(exc, what="Metadata source failed")
 
     # ── RAWG search (returns candidates list) ─────────────────────────────────
     elif source == "rawg":
@@ -135,7 +136,7 @@ async def fetch_meta_source(
                 result["found"] = True
                 result["candidates"] = candidates
         except Exception as exc:
-            result["error"] = str(exc)
+            result["error"] = safe_note(exc, what="Metadata source failed")
 
     # ── RAWG detail fetch (q = slug or numeric id) ────────────────────────────
     elif source == "rawg-detail":
@@ -176,7 +177,7 @@ async def fetch_meta_source(
                     "languages":         {},
                 })
         except Exception as exc:
-            result["error"] = str(exc)
+            result["error"] = safe_note(exc, what="Metadata source failed")
 
     # ── IGDB ─────────────────────────────────────────────────────────────────
     elif source == "igdb":
@@ -244,7 +245,7 @@ async def fetch_meta_source(
                 result["found"] = True
                 result["candidates"] = candidates
         except Exception as exc:
-            result["error"] = str(exc)
+            result["error"] = safe_note(exc, what="Metadata source failed")
 
     # ── Steam ────────────────────────────────────────────────────────────────
     elif source == "steam":
@@ -276,6 +277,6 @@ async def fetch_meta_source(
                 "languages":         steam.get("languages", {}),
             })
         except Exception as exc:
-            result["error"] = str(exc)
+            result["error"] = safe_note(exc, what="Metadata source failed")
 
     return result

@@ -19,6 +19,7 @@ from handler.database.scan_handler import scan_handler
 from handler.database.quarantine_handler import quarantine_handler
 from handler.clamav import clamav_handler
 from utils.async_utils import fire_task
+from utils.errors import safe_detail
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +237,7 @@ async def restore_quarantine(request: Request, entry_id: int):
     try:
         shutil.move(entry.quarantine_path, entry.original_path)
     except Exception as exc:
-        raise HTTPException(500, f"Failed to restore file: {exc}") from exc
+        raise HTTPException(500, safe_detail(exc, request, what="Failed to restore file")) from exc
 
     await quarantine_handler.delete(entry_id)
     logger.info("ClamAV quarantine: restored %s → %s", entry.quarantine_path, entry.original_path)
@@ -255,7 +256,7 @@ async def delete_quarantine(request: Request, entry_id: int):
         try:
             os.remove(entry.quarantine_path)
         except Exception as exc:
-            raise HTTPException(500, f"Failed to delete file: {exc}") from exc
+            raise HTTPException(500, safe_detail(exc, request, what="Failed to delete file")) from exc
 
     await quarantine_handler.delete(entry_id)
     logger.info("ClamAV quarantine: permanently deleted %s (%s)", entry.filename, entry.threat)

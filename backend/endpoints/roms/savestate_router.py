@@ -54,6 +54,7 @@ from utils.save_paths import (
     states_dir as _states_dir,
 )
 from utils.async_utils import note_unscanned
+from utils.errors import safe_note
 
 logger = logging.getLogger(__name__)
 
@@ -864,7 +865,7 @@ async def _import_archive(request: Request, raw: bytes) -> list[dict]:
                 # entries before it are already committed and the user has no way
                 # to tell how far it got.
                 logger.exception("Import: entry %s failed", label)
-                out.append({"name": label, "status": "error", "detail": str(exc)})
+                out.append({"name": label, "status": "error", "detail": safe_note(exc, what="Could not read the save")})
     return out
 
 

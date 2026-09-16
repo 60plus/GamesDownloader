@@ -6,6 +6,8 @@ from pydantic import BaseModel
 
 from decorators.auth import protected_route
 from handler.config.config_handler import config_handler
+from handler.auth.scopes import Scope
+from utils.errors import safe_detail
 
 router = APIRouter(prefix="/api/settings/security/email", tags=["email"])
 
@@ -19,7 +21,7 @@ class AlertConfig(BaseModel):
     alert_on_brute_force:   bool = True
 
 
-@protected_route(router.get, "", response_model=AlertConfig)
+@protected_route(router.get, "", scopes=[Scope.SETTINGS_READ], response_model=AlertConfig)
 async def get_alert_config(request: Request) -> AlertConfig:
     return AlertConfig(
         smtp_to               = await config_handler.get("alert_smtp_to")                    or "",
@@ -31,7 +33,7 @@ async def get_alert_config(request: Request) -> AlertConfig:
     )
 
 
-@protected_route(router.post, "")
+@protected_route(router.post, "", scopes=[Scope.SETTINGS_WRITE])
 async def save_alert_config(request: Request, data: AlertConfig) -> dict:
     await config_handler.set_many({
         "alert_smtp_to":          (data.smtp_to,                             False),
@@ -44,7 +46,7 @@ async def save_alert_config(request: Request, data: AlertConfig) -> dict:
     return {"ok": True}
 
 
-@protected_route(router.post, "/test")
+@protected_route(router.post, "/test", scopes=[Scope.SETTINGS_WRITE])
 async def test_alert_email(request: Request) -> dict:
     """Send a test alert email using the shared Notifications SMTP config."""
     host      = await config_handler.get("smtp_host")         or ""
@@ -90,5 +92,5 @@ async def test_alert_email(request: Request) -> dict:
             tls_mode  = tls_mode,
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to send: {exc}")
+        raise HTTPException(status_code=400, detail=safe_detail(exc, request, what="Failed to send"))
     return {"ok": True}

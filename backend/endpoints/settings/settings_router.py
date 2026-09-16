@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.config.config_handler import config_handler
+from utils.errors import safe_detail
 
 settings_router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -373,7 +374,7 @@ async def test_webhook(request: Request, req: WebhookRequest) -> dict:
             )
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=safe_detail(e, request, what="Could not save the settings"))
 
 
 # ─── Security - Brute-force config ────────────────────────────────────────────
