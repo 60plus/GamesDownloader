@@ -58,7 +58,22 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
 
-          <div class="ls-pill" :class="{ on: lib.enabled }" @click="toggle(lib)" role="switch" :aria-checked="lib.enabled">
+          <!-- A plugin's shelf comes and goes with its plugin, so while the
+               plugin is off this switch cannot bring it back - the server
+               refuses it, and a control that does nothing is worse than none.
+               Switching one OFF stays available: that is the direction the
+               plugin would take it anyway. -->
+          <div
+            class="ls-pill"
+            :class="{ on: lib.enabled, 'ls-pill--locked': waitingForPlugin(lib) }"
+            :title="waitingForPlugin(lib)
+              ? t('libraries.waiting_for_plugin', 'This shelf belongs to a plugin that is switched off. Enable the plugin and the shelf comes back with it.')
+              : ''"
+            role="switch"
+            :aria-checked="lib.enabled"
+            :aria-disabled="waitingForPlugin(lib)"
+            @click="toggle(lib)"
+          >
             <div class="ls-pill-knob" />
           </div>
         </div>
@@ -179,6 +194,19 @@
     </div>
 
     <div v-if="!loading" class="ls-foot">{{ t('libraries.foot') }}</div>
+
+    <!-- ── Scan exclusions ──────────────────────────────────────────────── -->
+    <!-- Only libraries a folder scan actually walks. GOG has its own sync
+         pipeline, Emulation derives its games from the ROM table and a
+         collections container holds no files, so a pattern saved on any of them
+         would be read by nobody. The server refuses one for the same reason. -->
+    <div v-if="!loading" class="ls-section">
+      <div class="ls-sec-title">{{ t('xc.title', 'Scan exclusions') }}</div>
+      <div class="ls-sec-desc">
+        {{ t('xc.desc_library', 'Folders and files that sit among the games without being games. Set per library, and saving one changes nothing that is already here.') }}
+      </div>
+      <SettingsScanExclusions kind="library" :items="exclusionLibraries" />
+    </div>
     </template>
 
     <!-- ── Everyone: my home / navigation view ──────────────────────────── -->
@@ -287,6 +315,7 @@ import { useDialog } from '@/composables/useDialog'
 import { useI18n } from '@/i18n'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import LibraryIconPicker from '@/components/common/LibraryIconPicker.vue'
+import SettingsScanExclusions from './SettingsScanExclusions.vue'
 import { getHomeSections, isSettingManaged } from '@/themes'
 import type { LibraryInfo } from '@/stores/libraries'
 
@@ -353,6 +382,18 @@ function moveVis(i: number, dir: number) {
 }
 
 const items = ref<LibraryInfo[]>([])
+
+// Exclusion patterns are only offered where a folder scan actually walks, and
+// the server answers that rather than this working it out again: it used to be
+// "a storage folder, and a kind whose games come out of one", which stopped
+// matching the moment a plugin's shelf whose plugin is switched off became part
+// of the answer. The box then went on being offered for a shelf nothing walks -
+// a setting that saves cleanly and is read by nobody, which is exactly what the
+// server refuses. One rule, `is_folder_scanned`, sent as `folder_scanned`.
+const exclusionLibraries = computed(() =>
+  items.value
+    .filter(l => l.folder_scanned)
+    .map(l => ({ slug: l.slug, name: l.name, sub: l.storage_folder || l.slug })))
 const loading = ref(true)
 
 const newName = ref('')
@@ -484,7 +525,15 @@ async function load() {
   }
 }
 
+/** A plugin's shelf whose plugin is not loaded: the server refuses to switch it
+ *  back on, so the screen does not offer it either. Answered by the server, not
+ *  worked out here - the runtime state is not something a browser can see. */
+function waitingForPlugin(lib: LibraryInfo): boolean {
+  return !lib.enabled && lib.waiting_for_plugin === true
+}
+
 async function toggle(lib: LibraryInfo) {
+  if (waitingForPlugin(lib)) return
   const next = !lib.enabled
   lib.enabled = next
   try {
@@ -734,6 +783,7 @@ onMounted(() => {
   border: 1px solid var(--glass-border); cursor: pointer;
   transition: background var(--transition), border-color var(--transition); flex-shrink: 0;
 }
+.ls-pill--locked { opacity: .45; cursor: not-allowed; }
 .ls-pill.on {
   background: color-mix(in srgb, var(--pl, #7c3aed) 30%, transparent);
   border-color: color-mix(in srgb, var(--pl, #7c3aed) 45%, transparent);

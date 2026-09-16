@@ -499,14 +499,8 @@ async def scrape_rom(
                 if isinstance(_gd, dict) and _gd.get("provider_id") == _pid:
                     _r = _numeric_rating(_pid, _gd.get("rating"))
                     if _r is not None:
-                        from pathlib import Path as _P
-                        from config import PLUGINS_PATH as _PP2
-                        _plid = _pid
-                        if not _P(_PP2, _pid).is_dir():
-                            for _sfx in ["-metadata", "-scraper", "-plugin"]:
-                                if _P(_PP2, _pid + _sfx).is_dir():
-                                    _plid = _pid + _sfx
-                                    break
+                        from plugins.manager import plugin_dir_for_provider
+                        _plid = plugin_dir_for_provider(_pid)
                         # The label names the SOURCE, not the game. `_best`
                         # comes from metadata_search_game, whose contract says
                         # `name` is the matched game's title - storing that put

@@ -343,23 +343,37 @@ def _classify_trailer_error(message: str) -> str:
     return "failed"
 
 
-async def download_youtube_video(
-    game_id: int, video_id: str, quality: str = "1080",
+async def download_youtube_to(
+    dest_dir, video_id: str, quality: str = "1080",
 ) -> tuple[str | None, str | None]:
-    """Download a trailer to resources/library/{id}/video/video.{ext} via
-    yt-dlp so players serve it locally (same rule as covers: never hotlink).
-    Runs the blocking yt-dlp call in a thread.
+    """Fetch one YouTube video into `dest_dir` as video.{ext}, via yt-dlp.
 
-    Returns (local_url, None) on success and (None, error_code) on failure.
-    It used to return None either way, which meant a trailer YouTube refuses to
-    hand over was indistinguishable from one still downloading: the editor
-    polled for five minutes and then gave up without telling anyone anything.
+    Returns (filename, None) on success and (None, error_code) on failure. The
+    caller turns the filename into whatever URL its own media are served under,
+    because a library game and a ROM keep their media in different places and
+    that is the only thing that ever differed between them. Everything above -
+    the options, the format ladder, the error classes, running the blocking call
+    off the event loop - is one copy on purpose: two would be two sets of yt-dlp
+    options to drift apart, and the one that drifts is the one nobody watches.
+
+    Failure has to be distinguishable from "still going". It used to return None
+    either way, which meant a trailer YouTube refuses to hand over looked exactly
+    like one still downloading: the editor polled for five minutes and then gave
+    up without telling anybody anything.
     """
     import asyncio
+    from pathlib import Path
+
+    vdir = Path(dest_dir)
+    vdir.mkdir(parents=True, exist_ok=True)
+    for old_file in vdir.glob("video.*"):
+        try:
+            old_file.unlink()
+        except OSError:
+            pass
 
     def _dl() -> str | None:
         from yt_dlp import YoutubeDL
-        vdir = _clear_video_dir(game_id)
         opts = {
             "format": _video_format(quality),
             "merge_output_format": "mp4",
@@ -374,33 +388,51 @@ async def download_youtube_video(
         for ext in _VIDEO_EXTS:
             p = vdir / f"video{ext}"
             if p.exists() and p.stat().st_size > 0:
-                return f"/resources/library/{game_id}/video/video{ext}?v={int(p.stat().st_mtime)}"
+                return f"video{ext}?v={int(p.stat().st_mtime)}"
         return None
 
     try:
-        url = await asyncio.to_thread(_dl)
+        name = await asyncio.to_thread(_dl)
     except Exception as exc:
         code = _classify_trailer_error(str(exc))
-        logger.warning(
-            "Trailer download failed game_id=%s video=%s (%s): %s",
-            game_id, video_id, code, exc,
-        )
+        logger.warning("Trailer download failed dir=%s video=%s (%s): %s",
+                       vdir, video_id, code, exc)
         return None, code
 
-    if url:
-        return url, None
+    if name:
+        return name, None
 
     # yt-dlp reported success but left nothing behind. Rare, and worth its own
     # code rather than being folded into the generic failure.
-    logger.warning(
-        "Trailer download produced no file game_id=%s video=%s", game_id, video_id,
-    )
+    logger.warning("Trailer download produced no file dir=%s video=%s", vdir, video_id)
     return None, "no_file"
 
 
-async def save_uploaded_video(game_id: int, upload, ext: str, max_bytes: int) -> str | None:
-    """Stream an uploaded video file to the game's video dir (no full read
-    into memory). Returns the local URL, or None when the size cap is hit."""
+async def download_youtube_video(
+    game_id: int, video_id: str, quality: str = "1080",
+) -> tuple[str | None, str | None]:
+    """The same, for a library game, served from resources/library/{id}/video/."""
+    name, error = await download_youtube_to(
+        _game_dir(game_id) / "video", video_id, quality,
+    )
+    if not name:
+        return None, error
+    return f"/resources/library/{game_id}/video/{name}", None
+
+
+async def save_uploaded_video(
+    game_id: int, upload, ext: str, max_bytes: int,
+) -> tuple[str | None, str | None]:
+    """Stream an uploaded video to the game's video dir, without reading it all
+    into memory. Returns (local_url, None) or (None, error_code).
+
+    The error code matters. This used to answer None for the size cap and None
+    again for a failed write, and the route turned either into "Video too large
+    (max 1 GB)" - so a full disk, a permissions problem or a dropped stream all
+    told somebody their file was too big, and the one remedy that suggests is
+    the one that could not have helped. Same defect the trailer downloader above
+    already carries a paragraph about.
+    """
     vdir = _clear_video_dir(game_id)
     dest = vdir / f"video{ext}"
     total = 0
@@ -414,13 +446,14 @@ async def save_uploaded_video(game_id: int, upload, ext: str, max_bytes: int) ->
                 if total > max_bytes:
                     out.close()
                     dest.unlink(missing_ok=True)
-                    return None
+                    return None, "too_large"
                 out.write(chunk)
-        return f"/resources/library/{game_id}/video/video{ext}?v={int(dest.stat().st_mtime)}"
+        url = f"/resources/library/{game_id}/video/video{ext}?v={int(dest.stat().st_mtime)}"
+        return url, None
     except Exception as exc:
         logger.warning("Video upload failed game_id=%s: %s", game_id, exc)
         dest.unlink(missing_ok=True)
-        return None
+        return None, "write_failed"
 
 
 async def download_collection_image(slug: str, url: str, kind: str = "cover") -> str | None:

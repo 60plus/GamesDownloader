@@ -42,6 +42,15 @@ export interface LibraryInfo {
   // Set when this store is a plugin catalogue's shelf: its page shows the
   // catalogue, and it cannot be hand-deleted (it lives with the plugin).
   catalog_id?: string | null
+  // Whether a folder scan ever walks this library, answered by the server with
+  // the same function the scan picks its targets with. Not re-derived here:
+  // "switched off" means one thing for a library an admin is preparing and
+  // another for a shelf whose plugin is gone, and a second copy of that stopped
+  // matching the first.
+  folder_scanned?: boolean
+  // A plugin's shelf whose plugin is not in the runtime. The switch beside it is
+  // refused while this is true: the shelf comes and goes with its plugin.
+  waiting_for_plugin?: boolean
 }
 
 export const useLibrariesStore = defineStore('libraries', () => {

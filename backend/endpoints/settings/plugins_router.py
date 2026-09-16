@@ -290,6 +290,13 @@ async def enable_plugin(request: Request, plugin_id: str) -> dict:
     except Exception:
         logger.exception("Failed to load plugin '%s'", plugin_id)
 
+    # The shelf comes back with the plugin, listings and all.
+    try:
+        from handler.library.catalog_sync_handler import set_catalog_stores_enabled
+        await set_catalog_stores_enabled(plugin_id, True)
+    except Exception:
+        logger.exception("Failed to show catalogue store(s) for %s on enable", plugin_id)
+
     return {"ok": True}
 
 
@@ -309,6 +316,18 @@ async def disable_plugin(request: Request, plugin_id: str) -> dict:
         plugin_manager.unload_single(plugin_id)
     except Exception:
         logger.exception("Failed to unload plugin '%s'", plugin_id)
+
+    # And hide any storefront it registered. Unloading the plugin leaves the
+    # shelf unable to refresh or download anything, and it used to stay in the
+    # navigation, in the library settings and in the scan exclusions offering
+    # exactly that. Hidden rather than removed: disabling is reversible, so the
+    # listings stay and enabling brings it back as it was. Downloaded games are
+    # untouched - they live in the Games library, not in the store.
+    try:
+        from handler.library.catalog_sync_handler import set_catalog_stores_enabled
+        await set_catalog_stores_enabled(plugin_id, False)
+    except Exception:
+        logger.exception("Failed to hide catalogue store(s) for %s on disable", plugin_id)
 
     return {"ok": True}
 
@@ -543,6 +562,7 @@ async def get_plugin_asset(plugin_id: str, file_path: str) -> FileResponse:
 
 from models.plugin_config import PluginStoreSource
 from utils.async_utils import fire_task
+from utils.errors import safe_detail
 
 
 @protected_route(plugins_router.get, "/store/sources", scopes=[Scope.PLUGINS_READ])
@@ -794,8 +814,8 @@ async def install_from_store(request: Request) -> dict:
     # Only install from GitHub or a configured store-source host. Without this,
     # an attacker-supplied downloadUrl points install_plugin_from_url (which runs
     # pip on the package) at any server, turning this into arbitrary-URL RCE.
-    # Allowlisted hosts skip an IP check, so a LAN-hosted store (e.g. a local
-    # gitea) keeps working.
+    # Allowlisted hosts skip an IP check, so a LAN-hosted store (e.g. a git
+    # server on the home network) keeps working.
     from urllib.parse import urlparse
     dl_host = (urlparse(download_url).hostname or "").lower()
     if urlparse(download_url).scheme not in ("http", "https") or not dl_host:
@@ -969,7 +989,7 @@ async def start_plugin_download(request: Request, provider_id: str, body: _Plugi
     try:
         return dict(fn(body.game_id, body.destination or "") or {})
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Provider error: {e}")
+        raise HTTPException(status_code=502, detail=safe_detail(e, request, what="Provider error"))
 
 
 @protected_route(plugins_router.get, "/download/providers/{provider_id}/status/{task_id}", scopes=[Scope.LIBRARY_READ])
@@ -984,7 +1004,7 @@ async def plugin_download_status(request: Request, provider_id: str, task_id: st
     try:
         return dict(fn(task_id) or {})
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Provider error: {e}")
+        raise HTTPException(status_code=502, detail=safe_detail(e, request, what="Provider error"))
 
 
 # ── Plugin library sources (library_source_* hooks) ──────────────────────────
@@ -1025,7 +1045,7 @@ async def scan_library_source(request: Request, source_id: str, body: _LibrarySo
     try:
         discovered = fn(body.path) or []
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Source error: {e}")
+        raise HTTPException(status_code=502, detail=safe_detail(e, request, what="Source error"))
     return {"discovered": list(discovered)}
 
 
@@ -1064,7 +1084,7 @@ async def sync_library_catalog(request: Request, catalog_id: str, body: _Catalog
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("Catalogue sync failed for %s", catalog_id)
-        raise HTTPException(status_code=502, detail=f"Catalogue error: {e}")
+        raise HTTPException(status_code=502, detail=safe_detail(e, request, what="Catalogue error"))
 
 
 @protected_route(plugins_router.post, "/library/catalogs/{catalog_id}/clear-metadata",
@@ -1208,10 +1228,11 @@ async def get_catalog_entry(request: Request, entry_id: int) -> dict:
 
 
 @protected_route(plugins_router.post, "/library/catalog-entries/{entry_id}/download",
-                 scopes=[Scope.LIBRARY_UPLOAD])
+                 scopes=[Scope.LIBRARY_UPLOAD, Scope.STORE_ACCESS])
 async def download_catalog_entry(request: Request, entry_id: int, body: _CatalogDownload) -> dict:
     """Pull an entry's builds onto the server, one download job per build."""
     from endpoints.library.upload_router import _max_upload_bytes
+    from handler.library import quota
     user = getattr(request.state, "user", None)
     # A restricted store is admin-only until opened: an uploader who is not on it
     # must not download from it, matching what its library listing already allows.
@@ -1224,7 +1245,11 @@ async def download_catalog_entry(request: Request, entry_id: int, body: _Catalog
         return await queue_entry_downloads(
             entry_id, body.assets,
             actor=(user.username if user else None),
-            max_bytes=await _max_upload_bytes(user),
+            # The name is for showing; the id is what the quota can be summed
+            # against. Passing only the first is how these games ended up
+            # belonging to nobody.
+            user_id=getattr(user, "id", None),
+            max_bytes=await quota.ceiling_for(user, await _max_upload_bytes(user)),
         )
     except DownloadInProgress as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -1262,7 +1287,7 @@ async def scrape_catalog_metadata(request: Request, catalog_id: str, body: _Cata
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("Catalogue metadata pass failed for %s", catalog_id)
-        raise HTTPException(status_code=502, detail=f"Metadata error: {e}")
+        raise HTTPException(status_code=502, detail=safe_detail(e, request, what="Metadata error"))
 
 
 @protected_route(plugins_router.post, "/library/catalog-entries/{entry_id}/scrape-metadata",
@@ -1567,19 +1592,25 @@ async def plugin_metadata_providers(request: Request) -> list[dict]:
                 ratings = bool(ratings_fn()) if callable(ratings_fn) else True
             except Exception:
                 ratings = True
-            # Resolve plugin_id for logo URL (provider_id may differ from plugin_id)
-            plugin_id = pid
-            if not Path(PLUGINS_PATH, pid).is_dir():
-                # Try common suffixes
-                for suffix in ["-metadata", "-scraper", "-plugin"]:
-                    if Path(PLUGINS_PATH, pid + suffix).is_dir():
-                        plugin_id = pid + suffix
-                        break
+            # The logo is served from the plugin's directory, which is not the
+            # provider id: protondb's plugin is `steam-deck-compatibility`, and
+            # guessing by suffix answered with a URL that 404s. Shared with the
+            # ROM editor's search, which needs the same answer for its chips.
+            from plugins.manager import plugin_dir_for_provider
+            plugin_id = plugin_dir_for_provider(pid)
+            # Which art this provider supplies, read from the hooks it implements.
+            # The editors draw a provider above a search only when it can answer
+            # it: one with game search alone was promising covers it did not have.
+            art = [kind for kind, hook_name in (("grids", "metadata_get_covers"),
+                                                ("heroes", "metadata_get_heroes"),
+                                                ("logos", "metadata_get_logos"))
+                   if callable(getattr(plug, hook_name, None))]
             providers.append({
                 "id": pid,
                 "name": pname or pid,
                 "logo_url": f"/api/plugins/{plugin_id}/logo",
                 "ratings": ratings,
+                "art": art,
             })
     except Exception as e:
         logger.warning("Failed to list metadata providers: %s", e)
@@ -1781,7 +1812,7 @@ async def translate_text_endpoint(request: Request) -> dict:
         return result
     except Exception as e:
         logger.exception("Translation error")
-        raise HTTPException(status_code=500, detail=str(e)[:200])
+        raise HTTPException(status_code=500, detail=safe_detail(e, request, what="Plugin action failed"))
 
 
 # ── Container restart (for theme plugin .vue recompilation) ──────────────────

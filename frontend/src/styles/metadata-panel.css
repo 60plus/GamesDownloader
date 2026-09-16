@@ -285,6 +285,18 @@
 .mep-std .mep-err {color: #f87171;}
 
 .mep-std .mep-footer-actions {display: flex; gap: 10px;}
+/* The padlock and the save status share the left of the footer, so the footer
+   keeps its two children and its space-between keeps meaning what it did. */
+.mep-std .mep-footer-left {display: flex; align-items: center; gap: 12px; min-width: 0;}
+.mep-std .mep-lock {width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid var(--glass-border); color: var(--muted); cursor: pointer; font-size: 17px; flex-shrink: 0; transition: all .15s;}
+.mep-std .mep-lock:hover:not(:disabled) {color: var(--pl-light, #a78bfa); border-color: color-mix(in srgb, var(--pl, #7c3aed) 45%, transparent);}
+/* Closed reads as a warning rather than as an error: nothing is wrong, it is
+   simply somebody else's to change. */
+.mep-std .mep-lock--on {color: #f59e0b; border-color: rgba(245,158,11,.45); background: rgba(245,158,11,.10);}
+.mep-std .mep-lock--on:hover:not(:disabled) {color: #fbbf24; border-color: rgba(245,158,11,.7);}
+/* Not faded away when it cannot be pressed: an editor needs to see that it is
+   shut, which is the whole reason their Save is greyed out. */
+.mep-std .mep-lock:disabled {cursor: not-allowed;}
 
 .mep-std .mep-btn-cancel {padding: 9px 20px; border-radius: var(--radius-sm); background: rgba(255,255,255,.06); border: 1px solid var(--glass-border); color: var(--muted); font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; transition: all .15s;}
 

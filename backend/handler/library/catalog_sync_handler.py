@@ -20,7 +20,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete as sql_delete, func, select, update as sql_update
+from sqlalchemy import and_, delete as sql_delete, func, or_, select, update as sql_update
 
 from config import RESOURCES_PATH
 from handler.database.library_registry_handler import library_registry_handler
@@ -362,7 +362,9 @@ async def get_entry(entry_id: int, *, session=None) -> CatalogEntry | None:
         )).scalars().first()
 
 
-async def _ensure_game_for_entry(session, entry: CatalogEntry) -> tuple[LibraryGame, str]:
+async def _ensure_game_for_entry(
+    session, entry: CatalogEntry, *, user_id: int | None = None,
+) -> tuple[LibraryGame, str]:
     """Return the game an entry downloads into, creating it on the first download.
 
     The GOG shape: the catalogue lists, and a download turns one listing into a
@@ -398,6 +400,13 @@ async def _ensure_game_for_entry(session, entry: CatalogEntry) -> tuple[LibraryG
         # source made these games invisible to both. Which catalogue it came
         # from is recorded on the catalog_entry, where it belongs.
         source="custom",
+        # Whoever asked for the download owns what arrives, the same as every
+        # other way a game reaches the library. This was left NULL, and because
+        # the quota sums by owner, an account whose games all came from a
+        # storefront read as using nothing at all - so the ceiling it asked for
+        # on the way in could never tighten.
+        published_by=user_id,
+        uploaded_by=user_id,
         title=entry.title,
         subtitle=entry.subtitle,
         slug=await _unique_slug(
@@ -474,7 +483,7 @@ async def _unique_storage_title(session, game_id: int, storage_folder: str, titl
 
 async def queue_entry_downloads(
     entry_id: int, asset_names: list[str] | None, *,
-    actor: str | None, max_bytes: int,
+    actor: str | None, max_bytes: int, user_id: int | None = None,
 ) -> dict[str, Any]:
     """Pull a catalogue entry's builds onto the server.
 
@@ -493,13 +502,46 @@ async def queue_entry_downloads(
         raise DownloadInProgress(f"A download of entry {entry_id} is already running")
     async with lock:
         return await _queue_entry_downloads_locked(
-            entry_id, asset_names, actor=actor, max_bytes=max_bytes,
+            entry_id, asset_names, actor=actor, max_bytes=max_bytes, user_id=user_id,
+        )
+
+
+def refuse_if_over_budget(assets: list[dict], max_bytes: int) -> None:
+    """Refuse a selection that does not fit, as a selection.
+
+    `max_bytes` is the smaller of the per-file ceiling and what this account has
+    left. Every build used to be weighed against the whole of it on its own, so
+    three 4 GB builds each fitted inside 5 GB and one click queued 12 GB against
+    a 5 GB allowance, with no race involved. The ROM upload route states the
+    rule for itself - ten files of a gigabyte are a ten gigabyte upload - and
+    this is the same sentence for a storefront.
+
+    Both halves are kept. One build bigger than the whole allowance is named on
+    its own, because "these come to too much" is unhelpful when one of them
+    could never have fitted. A build whose size the store does not publish
+    counts as nothing here; the per-job ceiling still stops it as it arrives.
+    """
+    oversized = [a for a in assets if int(a.get("size") or 0) > max_bytes]
+    if oversized:
+        raise ValueError(
+            "larger than the upload limit: "
+            + ", ".join(str(a.get("name")) for a in oversized)
+        )
+    together = sum(int(a.get("size") or 0) for a in assets)
+    if together > max_bytes:
+        from utils.sizes import human_bytes
+
+        # Sizes the way a person reads them. This sentence exists to let
+        # somebody judge how much to free, and a raw byte count does not.
+        raise ValueError(
+            f"these builds come to {human_bytes(together)} and only "
+            f"{human_bytes(max_bytes)} is left for this account"
         )
 
 
 async def _queue_entry_downloads_locked(
     entry_id: int, asset_names: list[str] | None, *,
-    actor: str | None, max_bytes: int,
+    actor: str | None, max_bytes: int, user_id: int | None = None,
 ) -> dict[str, Any]:
     from endpoints.library.upload_router import queue_url_download
     from handler.database.library_handler import LibraryHandler
@@ -526,18 +568,13 @@ async def _queue_entry_downloads_locked(
             if not assets:
                 raise ValueError("no build selected")
 
-            oversized = [a for a in assets if int(a.get("size") or 0) > max_bytes]
-            if oversized:
-                raise ValueError(
-                    "larger than the upload limit: "
-                    + ", ".join(str(a.get("name")) for a in oversized)
-                )
+            refuse_if_over_budget(assets, max_bytes)
 
             # A game made by THIS call is the only one safe to undo if nothing
             # queues - an entry already pointing at a game has real files from an
             # earlier download.
             game_was_new = entry.library_game_id is None
-            game, folder = await _ensure_game_for_entry(session, entry)
+            game, folder = await _ensure_game_for_entry(session, entry, user_id=user_id)
             game_id = game.id
             game_was_new = game_was_new and entry.library_game_id is not None
             entry_title = entry.title
@@ -564,7 +601,14 @@ async def _queue_entry_downloads_locked(
                 # what the project itself calls this build, which beats
                 # inventing something tidier that matches nothing upstream.
                 version=release_tag or None,
-                actor=actor, max_bytes=max_bytes,
+                actor=actor,
+                # Charged to whoever asked for it. The game may well be
+                # somebody else's: an entry downloaded a second time reuses the
+                # first account's game on purpose, because it is the same game,
+                # and until the file carried an owner those bytes were counted
+                # against that first account.
+                actor_id=user_id,
+                max_bytes=max_bytes,
                 # Files under the store's folder (/data/games/PC Ports/...),
                 # even though the game shows in the Games library.
                 storage_folder=folder,
@@ -1091,16 +1135,21 @@ async def remove_catalog_store(catalog_id: str) -> bool:
             return True
 
 
-def _catalog_owners() -> dict[str, str]:
-    """Map each loaded catalogue plugin's catalogue id to its plugin id.
+def _owners_and_completeness() -> tuple[dict[str, str], bool]:
+    """The catalogue-to-plugin map, and whether every loaded plugin answered.
 
-    Used by the reconcile to backfill a store made before the plugin_id column,
-    and to tell a legacy store whose plugin is gone from one whose plugin is
-    merely not loaded. A plugin whose library_catalog_id raises is skipped; its
-    own store already carries plugin_id (set when the hook worked at creation),
-    so leaving it out here cannot condemn it.
+    The second half matters because the map is read as a NEGATIVE elsewhere -
+    "no loaded plugin claims this catalogue, so its plugin must be switched
+    off". A plugin whose `library_catalog_id()` raises is skipped here, and the
+    old note said that could not condemn anything because such a store "already
+    carries plugin_id". That is true of stores made after the owner column and
+    false of the ones this question is about: a legacy store has no plugin_id at
+    all, so a hook that throws made its shelf look orphaned while its plugin was
+    enabled and running - and the way back needs somebody to press Enable on a
+    plugin that is already enabled.
     """
     owners: dict[str, str] = {}
+    complete = True
     for inst in plugin_manager.get_plugin_instances():
         fn = getattr(inst, "library_catalog_id", None)
         if not callable(fn):
@@ -1108,11 +1157,22 @@ def _catalog_owners() -> dict[str, str]:
         try:
             cid = fn()
         except Exception:
+            complete = False
             continue
         pid = plugin_manager.id_for_instance(inst)
         if cid and pid:
             owners[str(cid)] = pid
-    return owners
+    return owners, complete
+
+
+def _catalog_owners() -> dict[str, str]:
+    """Map each loaded catalogue plugin's catalogue id to its plugin id.
+
+    Used to backfill a store made before the plugin_id column, and to tell a
+    legacy store whose plugin is gone from one whose plugin is merely not
+    loaded. Callers that read it as a negative want `_owners_and_completeness`.
+    """
+    return _owners_and_completeness()[0]
 
 
 async def reconcile_catalog_stores() -> int:
@@ -1172,6 +1232,182 @@ async def reconcile_catalog_stores() -> int:
             "Catalogue-store reconcile removed %d orphaned store(s)", removed,
         )
     return removed
+
+
+async def reconcile_shelf_switches(stores=None) -> int:
+    """Put every storefront's switch back in step with its plugin's. Count.
+
+    `set_catalog_stores_enabled` is called from two places, the plugin's enable
+    and disable buttons, so the pair only stays in step while GD is running.
+    Switch a plugin off while it is down - a database restored from a backup, a
+    row edited by hand, an upgrade that turns one off - and the shelf comes back
+    up enabled with nothing behind it. Every guard written for this then stands
+    down, because each of them reads `enabled` first: the shelf is scanned, it
+    takes a field on the exclusions screen, and it sits in the navigation
+    offering a store that cannot serve a thing.
+
+    ONE DIRECTION. A shelf whose plugin is off is switched off; a shelf
+    somebody switched off by hand is left alone, because turning shelves back on
+    at every boot would undo them - and the plugin's own enable button already
+    brings the shelf back, which is the path a person actually uses.
+
+    Read from what is STORED, not from the runtime. A plugin that is enabled and
+    failed to load is absent from the runtime as well, and hiding its shelf for
+    that would put it away for good on one bad boot with nothing to bring it
+    back. `shelf_waiting_for_its_plugin` asks the runtime because it is
+    answering a different question - is there anything there right now - and
+    that one is allowed to be temporary.
+
+    *stores* is for the tests; without it the shelves are read and written here.
+    """
+    disabled = plugin_manager.disabled_external_ids()
+    if not disabled:
+        # Nothing is switched off, so nothing here can be out of step - neither
+        # a shelf tagged with its owner nor one from before that column.
+        return 0
+
+    # A shelf made before the `plugin_id` column carries only `catalog_id`, and
+    # its owner cannot simply be looked up: `_catalog_owners()` asks the LOADED
+    # plugins, and a switched-off plugin is not loaded. What can be said is
+    # narrower and still enough - if every installed plugin is either loaded or
+    # explicitly switched off, then a legacy shelf whose catalogue no loaded
+    # plugin claims must belong to one of the switched-off ones.
+    #
+    # When that does not hold, some plugin failed to load for reasons of its own
+    # and nothing here can tell which catalogue was its. The shelf is left alone
+    # then, because hiding it on a guess would hide it for good: nothing
+    # switches a legacy shelf back on.
+    settled = all(
+        pid in disabled or plugin_manager.get_instance(pid) is not None
+        for pid in plugin_manager.installed_external_ids()
+    )
+    owners, complete = _owners_and_completeness() if settled else ({}, False)
+    # A map missing an answer is no better than an unsettled runtime for this
+    # question, and for the same reason: it cannot be read as "nobody claims
+    # this catalogue". A plugin whose hook throws is loaded and enabled, so
+    # nothing would ever bring its shelf back.
+    settled = settled and complete
+
+    def _orphaned_legacy(store) -> bool:
+        if getattr(store, "plugin_id", None):
+            return False
+        catalog_id = getattr(store, "catalog_id", None)
+        if not settled or not catalog_id:
+            return False
+        return str(catalog_id) not in owners
+
+    async def _apply(rows) -> int:
+        changed = 0
+        for store in rows:
+            if not store.enabled:
+                continue
+            if getattr(store, "plugin_id", None) in disabled or _orphaned_legacy(store):
+                store.enabled = False
+                changed += 1
+        return changed
+
+    if stores is not None:
+        return await _apply(stores)
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            # `plugin_id` is NOT required here any more: the shelves that
+            # predate that column are exactly the ones this was missing, and
+            # they are recognised by their catalogue instead.
+            rows = (await session.execute(
+                select(Library).where(
+                    Library.is_store.is_(True), Library.enabled.is_(True),
+                )
+            )).scalars().all()
+            changed = await _apply(rows)
+    if changed:
+        logger.info(
+            "Hid %d catalogue shelf/shelves whose plugin is switched off", changed,
+        )
+    return changed
+
+
+def shelf_waiting_for_its_plugin(library) -> bool:
+    """A plugin's storefront whose plugin is not in the runtime.
+
+    The shelf comes and goes with its plugin, so the library switch in Settings
+    must not be able to take it out again on its own: disabling the plugin put
+    the shelf away, and one click on the other switch brought it back into the
+    navigation with nothing behind it - unable to refresh its listings or
+    download a thing.
+
+    Read off the runtime rather than off the plugin's stored flag, because that
+    is the question being asked: not "did somebody mean to enable it" but "is
+    there anything there to serve this shelf". A plugin that is enabled and
+    failed to load answers the same way, correctly.
+
+    `catalog_id` as well as `plugin_id`, because the owner column came later. A
+    store made before it is owned by whichever loaded plugin claims that
+    catalogue, and none does while the plugin is off - the same answer, reached
+    from the other side.
+    """
+    plugin_id = getattr(library, "plugin_id", None)
+    catalog_id = getattr(library, "catalog_id", None)
+    if not (plugin_id or catalog_id):
+        return False
+    if plugin_id:
+        return plugin_manager.get_instance(plugin_id) is None
+    return str(catalog_id) not in _catalog_owners()
+
+
+async def set_catalog_stores_enabled(plugin_id: str, enabled: bool) -> int:
+    """Switch a plugin's storefronts on or off with the plugin itself.
+
+    Disabling a plugin unloads it, so its catalogue can no longer be refreshed
+    or downloaded from - but the shelf it registered stayed in the navigation,
+    in the library settings and in the scan-exclusions list, offering a store
+    with nothing behind it. Uninstalling removed it; disabling did not.
+
+    Hidden rather than removed, because disabling is meant to be reversible.
+    The listings stay, so switching the plugin back on brings the shelf back as
+    it was instead of needing a full re-sync. Games already downloaded are not
+    touched either way: they live in the Games library, not in the store.
+
+    The shelf follows its plugin, so an admin who switched a store off by hand
+    will see it come back when the plugin is enabled again. That is the
+    predictable reading of one switch controlling the other.
+    """
+    # The same key the HIDING uses. `reconcile_shelf_switches` recognises a
+    # shelf made before the owner column by its `catalog_id`, and this asked
+    # about `plugin_id` alone - which a legacy shelf does not have. So switching
+    # the plugin off hid it and switching the plugin back on left it hidden,
+    # silently, with the only way back being an administrator finding it in
+    # Settings > Libraries and flipping it by hand.
+    catalog_ids = [cid for cid, pid in _catalog_owners().items() if pid == plugin_id]
+    mine = Library.plugin_id == plugin_id
+    if catalog_ids:
+        mine = or_(mine, and_(Library.plugin_id.is_(None),
+                              Library.catalog_id.in_(catalog_ids)))
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            result = await session.execute(
+                sql_update(Library)
+                .where(Library.is_store.is_(True), mine,
+                       Library.enabled.is_(not enabled))
+                .values(enabled=enabled)
+            )
+            changed = int(result.rowcount or 0)
+            # And record the owner while the plugin is loaded and can be asked,
+            # so this is a one-time trap on an upgrade rather than a standing
+            # one: once the shelf knows its plugin, both halves ask the same
+            # question again.
+            if catalog_ids:
+                await session.execute(
+                    sql_update(Library)
+                    .where(Library.is_store.is_(True), Library.plugin_id.is_(None),
+                           Library.catalog_id.in_(catalog_ids))
+                    .values(plugin_id=plugin_id)
+                )
+    if changed:
+        logger.info("Catalogue store(s) for %s now %s", plugin_id,
+                    "visible" if enabled else "hidden")
+    return changed
 
 
 async def remove_catalog_stores_for_plugin(plugin_id: str) -> int:

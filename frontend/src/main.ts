@@ -15,6 +15,8 @@ import { useDialog } from "./composables/useDialog";
 import { useCouchTheme } from "./composables/useCouchTheme";
 import { getEjsCore } from "./utils/ejsCores";
 import { buildLanguageList } from "./utils/langMap";
+import { describeUpload, uploadHadRefusals } from "./lib/uploadResult";
+import { describeAddRefusal } from "./lib/transferError";
 import { sanitizeHtml } from "./utils/sanitize";
 import i18n from "./i18n";
 import { useAuthStore } from "./stores/auth";
@@ -111,6 +113,13 @@ const PLUGIN_SOCKET_EVENTS = new Set([
   // Disc conversion to CHD (__GD__.roms.convertToChd), one payload carrying
   // the whole job ({ id, rom_id, status, percent, done_discs, total_discs }).
   "chd:convert",
+  // A ROM scan, so a theme with its own Retro screen can show where it is and
+  // offer to stop it instead of polling a boolean. Progress carries
+  // { running, cancelling, platform, platform_index, platform_total,
+  //   files_done, files_total, current }; completion carries the scan stats
+  //   plus `cancelled`, which says whether it finished or was stopped.
+  "roms:scan_progress",
+  "roms:scan_complete",
 ]);
 
 function createPluginEventBridge() {
@@ -165,6 +174,18 @@ function createSafeSocketStore() {
   utils: {
     buildLanguageList,
     sanitizeHtml,
+    // describeUpload(answer, t) turns what the ROM upload route answered into
+    // one sentence, refusals included. Offered here because a theme with its
+    // own upload dialog would otherwise write the mapping again - and did:
+    // the core learned to report refusals while Vapor went on saying
+    // "0 ROM(s) uploaded successfully!" to the only person testing it.
+    describeUpload,
+    // describeAddRefusal(err, t) turns a refusal from the add-torrent routes
+    // into a sentence in the reader's language. Handed over because all three
+    // skins keep their own copy of that dialog, and `detail` is an object now:
+    // a theme still printing it directly would render "[object Object]".
+    describeAddRefusal,
+    uploadHadRefusals,
   },
   registerTheme,
   registerPluginLayout,
@@ -290,6 +311,11 @@ function createSafeSocketStore() {
   // + membership) with no per-theme logic. The URL-upload and torrent calls run
   // server-side and report progress over socket.io - use __GD__.events.on(...)
   // to follow "upload:url_*" / "torrent:download_*" keyed on the returned id.
+  //   library.findGameByTitle(title, library)         -> the game already on
+  //       that shelf with exactly this title, or null. ASK THIS BEFORE
+  //       createGame: `POST /library/games` always creates, so an upload dialog
+  //       that skips the question turns a second file for the same game into a
+  //       second library entry (`ion-fury`, then `ion-fury-1`).
   //   library.createGame({title, library})            -> game (has .id)
   //   library.uploadFile(gameId, file, {os, fileType, onProgress})
   //   library.uploadFromUrl(gameId, {url, os, fileType}) -> {id, filename}

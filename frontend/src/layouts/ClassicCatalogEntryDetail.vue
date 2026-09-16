@@ -63,7 +63,7 @@
                is no hierarchy to express, which is what had forced these out
                into a row of their own. -->
           <div class="cover-overlay">
-            <button v-if="entry.available && assets.length" class="cov-btn" :title="t('detail.download')" @click="showDownload = true">
+            <button v-if="canUseStores && entry.available && assets.length" class="cov-btn" :title="t('detail.download')" @click="showDownload = true">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
             <a v-if="homepageHost" class="cov-btn" :href="entry.homepage || undefined" target="_blank" rel="noopener noreferrer" :title="homepageHost">
@@ -419,7 +419,7 @@ const coverIsSquarish = ref(false)
 
 const {
   entry, loading, showDownload, showMetaPanel, scraping, coverFailed,
-  isAdmin, assets, screenshots, entryLangs, releaseYear, storeName,
+  isAdmin, isUploader, canUseStores, assets, screenshots, entryLangs, releaseYear, storeName,
   pluginRows, pluginGame, homepageHost, assetOses, buildsByOs,
   externalRatings, pluginRatings, hasRatings, hasMatchRows, totalSize, reqRows,
   fmtSize, hideImg, load, onMetadataSaved, refreshMeta, goBack,

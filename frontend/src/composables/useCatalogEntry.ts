@@ -106,6 +106,14 @@ export function useCatalogEntry(opts: { onLoaded?: (entry: CatalogEntry | null) 
   const coverFailed   = ref(false)
 
   const isAdmin = computed(() => auth.user?.role === 'admin')
+  // Fetching a listing onto the server asks for LIBRARY_UPLOAD, which the
+  // uploader has and a reader does not. Offering the button to everyone made
+  // a promise the server refuses.
+  const isUploader = computed(() => ['admin', 'uploader'].includes(auth.user?.role as string))
+  // Downloading an entry pulls it onto the server, which is the store
+  // permission rather than the upload one. Being an uploader is half of
+  // what the route asks for, so it is half of what the button may check.
+  const canUseStores = computed(() => auth.canUseStores)
 
   const assets      = computed<EntryAsset[]>(() => entry.value?.assets || [])
   const screenshots = computed<string[]>(() => entry.value?.screenshots || [])
@@ -291,7 +299,7 @@ export function useCatalogEntry(opts: { onLoaded?: (entry: CatalogEntry | null) 
 
   return {
     entry, loading, showDownload, showMetaPanel, scraping, coverFailed,
-    isAdmin, assets, screenshots, entryLangs, releaseYear, storeName,
+    isAdmin, isUploader, canUseStores, assets, screenshots, entryLangs, releaseYear, storeName,
     pluginRows, pluginGame, homepageHost,
     assetOses, buildsByOs,
     externalRatings, providerNames, pluginRatings, hasRatings,

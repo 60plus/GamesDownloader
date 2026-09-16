@@ -106,6 +106,7 @@
                 <img src="/icons/igdb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/steamgriddb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/launchbox.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                <img v-for="mp in artProviders('grids')" :key="mp.id" :src="mp.logo_url" width="14" height="14" :alt="mp.name" :title="mp.name" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <span class="mep-source-name">{{ t('meta.cover_sources', 'All Sources') }}</span>
                 <div class="mep-chip-bar" style="margin-left:auto">
                   <button class="mep-chip-btn" :class="{ active: coverFilter === 'all' }" @click="setCoverFilter('all')">{{ t('meta.all') }}</button>
@@ -168,6 +169,7 @@
                 <img src="/icons/gog.ico" width="14" height="14" alt="" />
                 <img src="/icons/RAWG.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/steamgriddb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                <img v-for="mp in artProviders('heroes')" :key="mp.id" :src="mp.logo_url" width="14" height="14" :alt="mp.name" :title="mp.name" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <span class="mep-source-name">{{ t('meta.cover_sources', 'All Sources') }}</span>
               </div>
               <div class="mep-search-row">
@@ -222,6 +224,7 @@
                 <img src="/icons/gog.ico" width="14" height="14" alt="" />
                 <img src="/icons/steamgriddb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/launchbox.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                <img v-for="mp in artProviders('logos')" :key="mp.id" :src="mp.logo_url" width="14" height="14" :alt="mp.name" :title="mp.name" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <span class="mep-source-name">{{ t('meta.cover_sources', 'All Sources') }}</span>
               </div>
               <div class="mep-search-row">
@@ -451,6 +454,14 @@ const coverSearching    = ref(false)
 const coverSearchDone   = ref(false)
 const coverFilter       = ref<'all' | 'static' | 'animated'>('all')
 const allCoverResults   = ref<CoverOption[]>([])
+const metadataProviders = ref<{id: string; name: string; logo_url: string; art?: string[]}[]>([])
+
+/** The plugins that supply this kind of art, for the row above its search. A
+ *  plugin with game search alone has no covers to give, and drawing it there
+ *  promised a source that never answers. */
+function artProviders(kind: 'grids' | 'heroes' | 'logos') {
+  return metadataProviders.value.filter(p => (p.art || []).includes(kind))
+}
 
 const filteredCoverResults = computed(() => {
   if (coverFilter.value === 'all') return allCoverResults.value
@@ -897,6 +908,11 @@ async function onDelete() {
 }
 
 onMounted(async () => {
+  // Which plugins supply which art, for the rows above the searches.
+  try {
+    const { data } = await client.get('/plugins/metadata/providers')
+    metadataProviders.value = Array.isArray(data) ? data : []
+  } catch { /* no plugins */ }
   await searchAllCovers()
 })
 </script>

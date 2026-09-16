@@ -188,7 +188,7 @@
                    (on offer, or a download that failed); a ghost re-download once
                    the game has files or a download was just queued. -->
               <button
-                v-if="entry.available && assets.length"
+                v-if="canUseStores && entry.available && assets.length"
                 :class="(entry.downloaded || justQueued) ? 'ced-btn-ghost' : 'ced-btn-dl'"
                 @click="download"
               >
@@ -198,8 +198,12 @@
                 {{ t('detail.download') }}
                 <span class="ced-btn-count">{{ t('detail.file_count', { count: assets.length }) }}</span>
               </button>
-              <span v-else-if="!entry.available" class="ced-no-files">{{ entry.unavailable_reason || t('detail.unavailable') }}</span>
-              <span v-else class="ced-no-files">{{ t('detail.no_files') }}</span>
+              <!-- Both of these are answers to "why is there no button", so they
+                   belong to somebody who would otherwise have had one. Without
+                   the condition a reader is told the listing has no files,
+                   which is not true and not the reason. -->
+              <span v-else-if="isUploader && !entry.available" class="ced-no-files">{{ entry.unavailable_reason || t('detail.unavailable') }}</span>
+              <span v-else-if="isUploader" class="ced-no-files">{{ t('detail.no_files') }}</span>
 
               <!-- The catalogue's own page for this listing. Labelled with its
                    host, which needs no translation. -->
@@ -548,7 +552,7 @@ const justQueued = ref(false)
 
 const {
   entry, loading, showDownload, showMetaPanel, scraping, coverFailed,
-  isAdmin, assets, screenshots, entryLangs, releaseYear, storeName,
+  isAdmin, isUploader, canUseStores, assets, screenshots, entryLangs, releaseYear, storeName,
   pluginRows, pluginGame, homepageHost, assetOses, buildsByOs,
   externalRatings, pluginRatings, hasMatchRows, totalSize, reqRows, reqOs,
   fmtSize, hideImg, load, onMetadataSaved, refreshMeta, goBack,

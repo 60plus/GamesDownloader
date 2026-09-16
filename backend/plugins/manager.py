@@ -343,6 +343,16 @@ class PluginManager:
             if d.is_dir() and not d.name.startswith(".")
         }
 
+    def disabled_external_ids(self) -> set[str]:
+        """Ids of installed plugins somebody has switched OFF, as stored.
+
+        Not the same question as "is it in the runtime". A plugin that is
+        enabled and threw on import is absent from the runtime too, and reading
+        that as switched off would let a bad boot put a shelf away for good.
+        This one says only what a person chose, which is what a shelf follows.
+        """
+        return set(self._disabled_ids) & self.installed_external_ids()
+
     def all_external_plugins_loaded(self) -> bool:
         """True only when at least one external plugin is on disk and every one
         of them is loaded. False for a missing/empty directory or any
@@ -376,6 +386,67 @@ class PluginManager:
 
 # Singleton instance
 plugin_manager = PluginManager()
+
+
+def _hook_value(inst: Any, name: str) -> str:
+    """One of a plugin's self-describing hooks, or "" if it will not say."""
+    fn = getattr(inst, name, None)
+    if not callable(fn):
+        return ""
+    try:
+        return str(fn() or "")
+    except Exception:
+        return ""
+
+
+def plugin_dir_for_provider(provider: str) -> str:
+    """The directory a metadata provider's plugin lives in.
+
+    A plugin's logo is served from its DIRECTORY, so every `/api/plugins/<x>/logo`
+    in this codebase is built from this. The directory is not the provider id:
+    ppe's plugin sits in `ppe-metadata`, which a suffix can reach, and
+    protondb's in `steam-deck-compatibility`, which none can.
+
+    >>> ACCEPTS THE ID OR THE DISPLAY NAME, because the hooks disagree about
+    which one they hand back. `metadata_search_game` labels its rows with
+    `provider_id`; the three art hooks label theirs with `_source`, which is the
+    display NAME. Four places used to lower that name, strip its spaces and look
+    for a directory of that shape - which worked for "TheGamesDB" by luck and
+    would have answered 404 for "PPE.pl". One question, one answer, whichever
+    way it is asked.
+
+    The exact id wins over another plugin's name, so installing a plugin cannot
+    move an existing one's logo. The suffixes stay last, for a provider whose
+    plugin is not in the runtime.
+    """
+    def _norm(s: str) -> str:
+        return s.lower().replace(" ", "")
+
+    wanted, wanted_n = provider, _norm(provider)
+    by_name: str | None = None
+
+    for inst in plugin_manager.get_plugin_instances():
+        pid = _hook_value(inst, "metadata_provider_id")
+        if not pid:
+            continue
+        directory = plugin_manager.id_for_instance(inst)
+        if not directory:
+            continue
+        if pid == wanted or _norm(pid) == wanted_n:
+            return directory
+        if by_name is None:
+            name = _hook_value(inst, "metadata_provider_name")
+            if name and _norm(name) == wanted_n:
+                by_name = directory
+    if by_name:
+        return by_name
+
+    if Path(PLUGINS_PATH, provider).is_dir():
+        return provider
+    for sfx in ("-metadata", "-scraper", "-plugin"):
+        if Path(PLUGINS_PATH, provider + sfx).is_dir():
+            return provider + sfx
+    return provider
 
 
 @lru_cache(maxsize=1)

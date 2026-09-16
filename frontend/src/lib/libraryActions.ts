@@ -75,6 +75,42 @@ export interface AddByUploadOpts {
   onProgress?: (percent: number, ev: unknown) => void;
 }
 
+/** The game already on this shelf with exactly this title, or null.
+ *
+ *  Reported by the owner: he uploaded Ion Fury, then uploaded its DLC under the
+ *  same title with the type set to DLC, and got a SECOND library entry -
+ *  `ion-fury` and `ion-fury-1`. The file itself went to the right place, under
+ *  one `Ion Fury/` folder with the DLC in `dlc/`; what went wrong was the row.
+ *
+ *  `POST /library/games` always creates, appending `-1`, `-2` to a slug that is
+ *  taken, and every upload dialog began by calling it. So the same title always
+ *  made a second entry, and nothing in the interface added a file to a game
+ *  that was already there.
+ *
+ *  This lives here rather than in each dialog because FOUR of them ask the
+ *  question - the two core layouts and both themes - and the themes are
+ *  published separately, so a copy inside one of them could not be corrected
+ *  along with the core.
+ */
+export async function findGameByTitle(
+  title: string,
+  library?: string | null,
+): Promise<any | null> {
+  const wanted = (title || "").trim().toLowerCase();
+  if (!wanted) return null;
+  const { data } = await client.get("/library/games", {
+    // Narrowed to the shelf being uploaded to: the same title on a different
+    // library is a different game, and treating it as a collision would refuse
+    // a perfectly ordinary upload.
+    params: { search: title.trim(), library: _target(library) ?? "", limit: 25 },
+  });
+  const rows = (data?.games ?? data?.items ?? data) as any[];
+  if (!Array.isArray(rows)) return null;
+  // The search is a search: it answers with anything similar. Only an exact
+  // title is a collision - "Ion Fury" must not match "Ion Fury: Aftershock".
+  return rows.find(g => String(g?.title ?? "").trim().toLowerCase() === wanted) ?? null;
+}
+
 /** Create a LibraryGame. When `library` names a folder-backed custom library
  * the server adds membership and keeps the game out of the default Games
  * library. Returns the created game (has `.id`). */
@@ -275,7 +311,16 @@ export async function clearGameMetadata(kind: GameKind, id: number | string): Pr
   }
 }
 
+// >>> EVERY FUNCTION A THEME MAY CALL HAS TO BE LISTED HERE, BY HAND.
+// The core screens import this module as a namespace (`import * as libActions`)
+// and see every export; a theme only ever sees THIS object, through
+// `__GD__.library`. Adding an export and forgetting this list therefore works
+// perfectly in Modern and Classic and throws `undefined is not a function` in
+// Vapor and NEON HORIZON - which is exactly what happened to `findGameByTitle`
+// on 2026-09-10: the owner's upload died in the browser before a single request
+// went out, and the tray said only "Upload failed".
 const libraryActions = {
+  findGameByTitle,
   createGame,
   uploadFile,
   uploadFromUrl,

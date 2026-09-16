@@ -75,6 +75,7 @@ def _require_scope(request: Request, *scopes: Scope) -> None:
 
 from utils.apicalypse import sanitize_search as _sanitize_search
 from handler.metadata.igdb_auth import igdb_headers
+from utils.errors import safe_detail
 
 
 def _game_dict(g, owner_username: str | None = None) -> dict:
@@ -148,7 +149,7 @@ async def auth_callback(req: GogCodeRequest, request: Request) -> dict:
         result = await gog_auth_handler.exchange_code(req.code)
         return result
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"GOG authentication failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=safe_detail(e, request, what="GOG authentication failed"))
 
 
 @gog_router.get("/auth/status")
@@ -725,24 +726,20 @@ async def get_cover_options(
         search_term = q or (game.title if game else "")
         try:
             from plugins.manager import plugin_manager
+            # No hook for any other kind. Falling back to the cover hook offered a
+            # plugin's box art as candidate icons.
             hook_name = {"grids": "metadata_get_covers", "heroes": "metadata_get_heroes",
-                         "logos": "metadata_get_logos"}.get(asset_type, "metadata_get_covers")
-            hook = getattr(plugin_manager.hook, hook_name, None)
+                         "logos": "metadata_get_logos"}.get(asset_type)
+            hook = getattr(plugin_manager.hook, hook_name, None) if hook_name else None
             if hook:
                 all_results = hook(query=search_term)
                 for provider_results in all_results:
                     if isinstance(provider_results, list):
                         for r in provider_results:
-                            # Use plugin logo as source icon - resolve plugin_id
-                            pid = (r.get("_source") or "").lower().replace(" ", "")
-                            from pathlib import Path
-                            from config import PLUGINS_PATH
-                            plugin_id = pid
-                            if not Path(PLUGINS_PATH, pid).is_dir():
-                                for sfx in ["-metadata", "-scraper", "-plugin"]:
-                                    if Path(PLUGINS_PATH, pid + sfx).is_dir():
-                                        plugin_id = pid + sfx
-                                        break
+                            # `_source` is the provider's DISPLAY name; the logo
+                            # is served from its directory. One resolver, shared.
+                            from plugins.manager import plugin_dir_for_provider
+                            plugin_id = plugin_dir_for_provider(r.get("_source") or "")
                             r["_sourceIcon"] = f"/api/plugins/{plugin_id}/logo"
                         results.extend(provider_results)
         except Exception as exc:
@@ -933,8 +930,6 @@ async def get_screenshot_options(
         # Plugin screenshots (via metadata_get_game -> screenshots field)
         try:
             from plugins.manager import plugin_manager
-            from pathlib import Path
-            from config import PLUGINS_PATH
             all_plugin = plugin_manager.hook.metadata_search_game(query=search_term)
             for provider_results in all_plugin:
                 if not isinstance(provider_results, list) or not provider_results:
@@ -948,13 +943,9 @@ async def get_screenshot_options(
                 for gd in game_data_list:
                     if not isinstance(gd, dict) or gd.get("provider_id") != pid:
                         continue
+                    from plugins.manager import plugin_dir_for_provider
+                    plugin_id = plugin_dir_for_provider(pid)
                     for ss_url in (gd.get("screenshots") or []):
-                        plugin_id = pid
-                        if not Path(PLUGINS_PATH, pid).is_dir():
-                            for sfx in ["-metadata", "-scraper", "-plugin"]:
-                                if Path(PLUGINS_PATH, pid + sfx).is_dir():
-                                    plugin_id = pid + sfx
-                                    break
                         results.append({
                             "url": ss_url, "thumb": ss_url, "type": "static",
                             "label": gd.get("title", ""), "author": pid.upper(),
@@ -1172,7 +1163,7 @@ async def srl_search(request: Request, q: str = Query(..., description="Game tit
             r = await client.get(f"{BASE}/all-games-list/?filter={filter_val}")
             r.raise_for_status()
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"SRL unreachable: {exc}")
+        raise HTTPException(status_code=502, detail=safe_detail(exc, request, what="SRL unreachable"))
 
     soup = BeautifulSoup(r.text, "html.parser")
     games: list[dict] = []
@@ -1242,7 +1233,7 @@ async def srl_fetch(request: Request, url: str = Query(..., description="SRL req
             pr = await client.get(url)
             pr.raise_for_status()
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"SRL fetch failed: {loggable_error(exc)}")
+        raise HTTPException(status_code=502, detail=safe_detail(exc, request, what="SRL fetch failed"))
 
     page = BeautifulSoup(pr.text, "html.parser")
     min_cont = _find_container(page, ["minimum", "min-req", "minreq"])
@@ -1295,7 +1286,7 @@ async def user_gog_callback(request: Request, req: GogCodeRequest) -> dict:
         result = await gog_auth_handler.exchange_code(req.code, user_id=user_id)
         return result
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"GOG authentication failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=safe_detail(e, request, what="GOG authentication failed"))
 
 
 @gog_router.delete("/user/auth")

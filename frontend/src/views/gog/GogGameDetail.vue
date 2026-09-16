@@ -180,7 +180,10 @@
                 </svg>
                 {{ t('detail.download') }}
               </button>
-              <button class="gd-btn-ghost" @click="showMetadataPanel = true" :title="t('detail.edit_metadata')">
+              <button v-if="canEdit" :disabled="metaLocked" class="gd-btn-ghost"
+                      :class="{ 'gd-btn--locked': metaLocked }"
+                      @click="showMetadataPanel = true"
+                      :title="metaLocked ? t('meta.locked_by_admin') : t('detail.edit_metadata')">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -744,6 +747,12 @@ const { success: notifySuccess, error: notifyError } = useNotifications()
 
 const auth           = useAuthStore()
 const isAdmin        = computed(() => auth.user?.role === 'admin')
+// This button had no role condition at all, so every signed-in account was
+// offered an editor whose save the server would refuse. The same three roles
+// as everywhere else, and not at all once an admin has locked the entry:
+// opening it fires searches at the metadata providers, and some charge.
+const canEdit        = computed(() => ['admin','uploader','editor'].includes(auth.user?.role as string))
+const metaLocked     = computed(() => !isAdmin.value && !!(game.value as any)?.metadata_locked)
 
 // ── Publish to Library ─────────────────────────────────────────────────────────
 const publishLoading  = ref(false)
@@ -2220,5 +2229,13 @@ async function clearMetadata() {
   .gd-body { padding: 20px 16px 40px; }
   .gd-cols { gap: var(--space-5, 20px); }
   .gd-dlist { grid-template-columns: 30px auto 1fr; font-size: var(--fs-sm, 12px); }
+}
+
+/* Shut rather than broken: amber says somebody else holds this, which is not
+   the same as something having gone wrong. */
+.gd-btn--locked, .gd-btn--locked:hover {
+  background: rgba(245,158,11,.14) !important;
+  border-color: rgba(245,158,11,.4) !important;
+  color: #f59e0b; cursor: not-allowed;
 }
 </style>

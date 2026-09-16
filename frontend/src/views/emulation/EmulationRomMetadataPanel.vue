@@ -117,7 +117,7 @@
                 <div class="mep-covers-grid" style="position:relative">
                   <div
                     v-for="result in filteredResults"
-                    :key="(result.ss_id || result.igdb_id || (result as any).launchbox_id || result.sgdb_id || '') + result.name"
+                    :key="(result.ss_id || result.igdb_id || (result as any).launchbox_id || result.sgdb_id || result.provider_game_id || '') + result.name"
                     class="mep-cover-option"
                     :class="{ selected: isResultSelected(result) }"
                     @click="selectResult(result)"
@@ -134,7 +134,7 @@
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2"><rect x="2" y="6" width="20" height="14" rx="2"/></svg>
                       </div>
                       <div class="mep-source-badge" :title="result.source">
-                        <img :src="sourceIcon(result.source)" width="12" height="12" alt="" />
+                        <img :src="resultIcon(result)" width="12" height="12" alt="" />
                       </div>
                       <div v-if="isResultSelected(result)" class="mep-selected-check">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
@@ -187,7 +187,7 @@
             </div>
 
             <!-- Box Art variants - shown after selecting a game -->
-            <div v-if="selectedSsId || selectedIgdbId || selectedLaunchboxId" class="mep-source-section">
+            <div v-if="hasPickedGame" class="mep-source-section">
               <div class="mep-source-header">
                 <img src="/icons/ScreenScraper.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/igdb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
@@ -256,7 +256,7 @@
                 <span class="mep-source-name">{{ t('meta.fanart_bg') }}</span>
               </div>
               <div v-if="mediaLoading" class="mep-loading"><div class="mep-spinner" /> {{ t('meta.loading_media') }}</div>
-              <div v-else-if="!selectedSsId && !selectedIgdbId && !selectedLaunchboxId" class="mep-empty-state-sm">{{ t('meta.select_game_first') }}</div>
+              <div v-else-if="!hasPickedGame" class="mep-empty-state-sm">{{ t('meta.select_game_first') }}</div>
               <div v-else-if="!allMedia.fanarts.length" class="mep-empty-state-sm">{{ t('meta.no_bg_art') }}</div>
               <div v-else class="mep-covers-grid mep-covers-grid--wide">
                 <div
@@ -329,7 +329,7 @@
                 <span class="mep-source-name">{{ t('meta.screenshots_source') }}</span>
               </div>
               <div v-if="mediaLoading" class="mep-loading"><div class="mep-spinner" /> {{ t('meta.loading_media') }}</div>
-              <div v-else-if="!selectedSsId && !selectedIgdbId && !selectedLaunchboxId" class="mep-empty-state-sm">{{ t('meta.select_game_first') }}</div>
+              <div v-else-if="!hasPickedGame" class="mep-empty-state-sm">{{ t('meta.select_game_first') }}</div>
               <div v-else-if="!allMedia.screenshots.length" class="mep-empty-state-sm">{{ t('meta.no_ss_found_rom') }}</div>
               <div v-else class="mep-covers-grid mep-covers-grid--wide">
                 <div
@@ -639,6 +639,65 @@
               </div>
             </div>
 
+            <!-- Trailers from a provider, fetched onto the server. The section
+                 the ROM editor was missing: ScreenScraper's videos above are
+                 whatever it happened to have, an upload needs a file already in
+                 hand, and a pasted URL has to be a direct video file. This is
+                 the one that finds a trailer and brings it here, the way the
+                 library editor does, and serves it locally afterwards like
+                 every other piece of media. -->
+            <div class="mep-source-section">
+              <div class="mep-source-header">
+                <img src="/icons/igdb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                <span class="mep-source-name">{{ t('meta.find_trailers', 'Find trailers') }}</span>
+              </div>
+              <div class="mep-search-row">
+                <input
+                  v-model="trailerQuery"
+                  class="mep-search-input"
+                  :placeholder="t('meta.search_trailers', 'Search all sources for trailers...')"
+                  @keydown.enter="searchTrailers"
+                />
+                <button class="mep-search-btn" :disabled="trailerSearching" @click="searchTrailers">
+                  <div v-if="trailerSearching" class="mep-spinner mep-spinner--sm" />
+                  {{ t('meta.search') }}
+                </button>
+              </div>
+              <div v-if="trailerSearching" class="mep-loading"><div class="mep-spinner" /> {{ t('meta.searching') }}</div>
+              <div v-else-if="trailerSearched && !trailers.length" class="mep-empty-state-sm">{{ t('meta.no_trailers') }}</div>
+              <div v-else-if="trailers.length" class="mep-covers-grid mep-covers-grid--wide">
+                <div
+                  v-for="v in trailers"
+                  :key="v.video_id"
+                  class="mep-cover-option"
+                  :class="{ selected: pickedTrailer === v.video_id }"
+                  @click="pickedTrailer = v.video_id"
+                >
+                  <div class="mep-cover-option-img mep-cover-option-img--wide">
+                    <img :src="v.thumb" :alt="v.label" loading="lazy" />
+                  </div>
+                  <div class="mep-cover-label">{{ v.label }}</div>
+                </div>
+              </div>
+              <div class="mep-search-row" style="margin-top:12px">
+                <select v-model="trailerQuality" class="mep-search-input" style="flex:0 0 110px" :title="t('meta.video_quality')">
+                  <option value="best">{{ t('meta.quality_best') }}</option>
+                  <option value="2160">2160p</option>
+                  <option value="1440">1440p</option>
+                  <option value="1080">1080p</option>
+                  <option value="720">720p</option>
+                  <option value="480">480p</option>
+                </select>
+                <button class="mep-search-btn" :disabled="!pickedTrailer || trailerDownloading" @click="downloadTrailer">
+                  {{ trailerDownloading ? t('meta.video_downloading') : t('meta.video_download') }}
+                </button>
+              </div>
+              <!-- YouTube refuses plenty of trailers, age gates above all. Without
+                   this the button sat on "Downloading" for five minutes and then
+                   went quiet, which is the failure the library editor already had. -->
+              <div v-if="trailerError" class="mep-err" style="margin-top:10px">{{ trailerError }}</div>
+            </div>
+
             <div class="mep-source-section">
               <div class="mep-source-header"><span class="mep-source-name">{{ t('meta.manual_url') }}</span>
                 <label class="mep-upload-btn-sm">
@@ -673,19 +732,19 @@
               <div v-if="ssResults.length" class="mep-desc-results">
                 <button
                   v-for="result in ssResults"
-                  :key="'d' + (result.ss_id || result.igdb_id || (result as any).launchbox_id || result.sgdb_id || '') + result.name"
+                  :key="'d' + (result.ss_id || result.igdb_id || (result as any).launchbox_id || result.sgdb_id || result.provider_game_id || '') + result.name"
                   class="mep-desc-result"
                   :class="{ selected: isResultSelected(result) }"
                   @click="selectResult(result)"
                 >
-                  <img :src="sourceIcon(result.source)" width="12" height="12" alt="" @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')" />
+                  <img :src="resultIcon(result)" width="12" height="12" alt="" @error="(e) => ((e.target as HTMLImageElement).style.display = 'none')" />
                   <span class="mep-desc-result-name">{{ result.name }}</span>
                   <span v-if="result.year" class="mep-desc-result-year">{{ result.year }}</span>
                 </button>
               </div>
             </div>
 
-            <div v-if="!selectedSsId && !selectedIgdbId && !selectedLaunchboxId" class="mep-empty-state-sm">{{ t('meta.select_game_desc') }}</div>
+            <div v-if="!hasPickedGame" class="mep-empty-state-sm">{{ t('meta.select_game_desc') }}</div>
             <div v-else-if="mediaLoading" class="mep-loading"><div class="mep-spinner" /> {{ t('meta.loading_media') }}</div>
             <div v-else-if="!allMedia.detail_sources?.length" class="mep-empty-state-sm">{{ t('meta.no_desc_rom') }}</div>
             <div v-else class="mep-desc-list">
@@ -717,7 +776,7 @@
           <!-- ═══════════════════════════════════════════════════════════════════ -->
           <div v-if="activeTab === 'details'" class="mep-tab-content">
 
-            <div v-if="!selectedSsId && !selectedIgdbId && !selectedLaunchboxId" class="mep-empty-state-sm">{{ t('meta.select_game_first') }}</div>
+            <div v-if="!hasPickedGame" class="mep-empty-state-sm">{{ t('meta.select_game_first') }}</div>
             <div v-else-if="mediaLoading" class="mep-loading"><div class="mep-spinner" /> {{ t('meta.loading_media') }}</div>
             <div v-else-if="!allMedia.detail_sources?.length" class="mep-empty-state-sm">{{ t('meta.no_detail_results', t('meta.no_details')) }}</div>
             <div v-else class="mep-detail-sources">
@@ -862,19 +921,36 @@
 
       <!-- ── Footer ─────────────────────────────────────────────────────────── -->
       <div class="mep-footer">
+        <div class="mep-footer-left">
+          <!-- Closed means only an administrator may change this entry. Shown
+               to everyone, because an editor who cannot save is owed the
+               reason, and only an administrator can turn it. -->
+          <button
+            v-if="isAdmin || isLocked"
+            class="mep-lock"
+            :class="{ 'mep-lock--on': isLocked }"
+            :disabled="!isAdmin || locking"
+            :title="isAdmin
+              ? (isLocked ? t('meta.unlock_hint') : t('meta.lock_hint'))
+              : t('meta.locked_by_admin')"
+            @click="toggleLock"
+          >
+            <i class="mdi" :class="isLocked ? 'mdi-lock' : 'mdi-lock-open-variant-outline'"></i>
+          </button>
         <div class="mep-save-status">
           <span v-if="saveError" class="mep-err">{{ saveError }}</span>
           <span v-else-if="saveOk" class="mep-ok">✓ {{ t('meta.saved') }}</span>
           <span v-else-if="notifyMsg" :class="notifyOk ? 'mep-ok' : 'mep-err'">{{ notifyMsg }}</span>
         </div>
+        </div>
         <div class="mep-footer-actions">
-          <button v-if="notifyEnabled" class="mep-btn-notify" :disabled="notifying" @click="resendNotification" :title="t('meta.resend_notification_hint')">
+          <button v-if="notifyEnabled" class="mep-btn-notify" :disabled="notifying || (isLocked && !isAdmin)" @click="resendNotification" :title="t('meta.resend_notification_hint')">
             <div v-if="notifying" class="mep-spinner mep-spinner--sm" />
             <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
             {{ t('meta.resend_notification') }}
           </button>
           <button class="mep-btn-cancel" @click="$emit('close')">{{ t('meta.cancel') }}</button>
-          <button class="mep-btn-save btn-save-action" :disabled="saving || !hasChanges" @click="save">
+          <button class="mep-btn-save btn-save-action" :disabled="saving || !hasChanges || (isLocked && !isAdmin)" @click="save">
             <div v-if="saving" class="mep-spinner mep-spinner--sm" />
             {{ saving ? t('meta.saving') : t('meta.save_changes') }}
           </button>
@@ -886,10 +962,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import client from '@/services/api/client'
 import TranslateButton from '@/components/common/TranslateButton.vue'
 import { useI18n } from '@/i18n'
+import { useAuthStore } from '@/stores/auth'
 
 const { t } = useI18n()
 
@@ -956,7 +1033,7 @@ interface RomDetail {
 }
 
 interface SearchResult {
-  source: 'ss' | 'igdb' | 'launchbox' | 'sgdb'
+  source: 'ss' | 'igdb' | 'launchbox' | 'sgdb' | 'plugin'
   ss_id: string | null
   igdb_id: number | null
   sgdb_id: number | null
@@ -965,6 +1042,11 @@ interface SearchResult {
   developer: string | null
   cover_url: string | null
   regions: string[]
+  // Only on rows a metadata plugin answered with. A plugin names itself, and
+  // three of them answer on a full install, so "plugin" alone is not an
+  // identity - the chips and the selection both need to know which one.
+  provider_id?: string
+  provider_game_id?: string
 }
 
 interface MediaItem {
@@ -1004,6 +1086,24 @@ interface AllMedia {
 
 const props = defineProps<{ rom: RomDetail }>()
 
+const auth = useAuthStore()
+const isAdmin = computed(() => auth.user?.role === 'admin')
+
+// The padlock. Closed means only an administrator may change this entry, and
+// the server enforces it: the button being hidden is not what stops anybody.
+const isLocked = ref<boolean>(!!(props.rom as any)?.metadata_locked)
+const locking = ref(false)
+async function toggleLock() {
+  if (!isAdmin.value || locking.value) return
+  locking.value = true
+  const next = !isLocked.value
+  try {
+    await client.post(`/roms/${props.rom.id}/lock`, { locked: next })
+    isLocked.value = next
+  } catch { /* left as it was, which is what the server still thinks */ }
+  finally { locking.value = false }
+}
+
 // The save-disk name only means anything on the Amiga, where a game asks for
 // its save floppy by name.
 const isAmiga = computed(() =>
@@ -1030,31 +1130,152 @@ const activeTab = ref<TabId>('cover')
 
 // ── Search ─────────────────────────────────────────────────────────────────────
 const ssQuery    = ref(props.rom.name)
+
+// ── Trailers ─────────────────────────────────────────────────────────────────
+// Candidates are searched live by title rather than read from a column: a ROM
+// has no stored list and needs none. The fetch itself runs server-side in a
+// background task, so the outcome comes back from a status route - watching the
+// ROM for a video_path could only ever see success, and a refusal would look
+// exactly like "still working".
+interface Trailer { video_id: string; thumb: string; label: string }
+
+const trailerQuery       = ref(String(props.rom.name || (props.rom as any).fs_name_no_ext || ''))
+const trailers           = ref<Trailer[]>([])
+const trailerSearching   = ref(false)
+const trailerSearched    = ref(false)
+const pickedTrailer      = ref('')
+const trailerQuality     = ref('1080')
+const trailerDownloading = ref(false)
+const trailerError       = ref('')
+let _trailerPoll: ReturnType<typeof setInterval> | null = null
+
+function _stopTrailerPoll() {
+  if (_trailerPoll) { clearInterval(_trailerPoll); _trailerPoll = null }
+  trailerDownloading.value = false
+}
+
+async function searchTrailers() {
+  if (trailerSearching.value) return
+  trailerSearching.value = true
+  trailerError.value = ''
+  try {
+    const { data } = await client.get(`/roms/${props.rom.id}/videos`, {
+      params: { q: trailerQuery.value },
+    })
+    trailers.value = Array.isArray(data) ? data : []
+  } catch {
+    trailers.value = []
+  } finally {
+    trailerSearching.value = false
+    trailerSearched.value = true
+  }
+}
+
+async function downloadTrailer() {
+  if (!pickedTrailer.value || trailerDownloading.value) return
+  trailerDownloading.value = true
+  trailerError.value = ''
+  try {
+    await client.post(`/roms/${props.rom.id}/video/download`, {
+      video_id: pickedTrailer.value, quality: trailerQuality.value,
+    })
+  } catch (e: any) {
+    _stopTrailerPoll()
+    trailerError.value = e?.response?.data?.detail || t('meta.video_err_failed')
+    return
+  }
+  let tries = 0
+  _trailerPoll = setInterval(async () => {
+    tries++
+    try {
+      const { data } = await client.get(`/roms/${props.rom.id}/video/status`)
+      if (data?.state === 'done' && data?.url) {
+        selectedVideo.value = data.url
+        _stopTrailerPoll()
+        return
+      }
+      if (data?.state === 'failed') {
+        trailerError.value = t('meta.video_err_failed')
+        _stopTrailerPoll()
+        return
+      }
+    } catch { /* transient */ }
+    if (tries > 60) {                    // give up after about five minutes
+      trailerError.value = t('meta.video_err_timeout')
+      _stopTrailerPoll()
+    }
+  }, 5000)
+}
+
+onUnmounted(_stopTrailerPoll)
 const ssLoading  = ref(false)
 const ssSearched = ref(false)
 const ssResults  = ref<SearchResult[]>([])
-type FilterKey = 'all' | 'ss' | 'igdb' | 'launchbox' | 'sgdb'
+type FilterKey = 'all' | 'ss' | 'igdb' | 'launchbox' | 'sgdb' | `plugin:${string}`
 const searchFilter  = ref<FilterKey>('all')
 
-const filteredResults = computed(() => {
-  if (searchFilter.value === 'all') return ssResults.value
-  return ssResults.value.filter(r => r.source === searchFilter.value)
+/** What the cover grid offers.
+ *
+ * A metadata plugin's result without a picture is left out of the grid. PPE.pl
+ * answers every search that way, and it is there for its Polish description and
+ * screenshots - which arrive with ANY picked result, because all-media asks each
+ * plugin for the ROM's own name whatever was clicked (measured 2026-09-16 on
+ * Crash Bandicoot 2: picking the ScreenScraper result brought PPE.pl's
+ * description). Its tile added an empty box to the grid and nothing to the
+ * edit. The Description tab still lists every result, and when nothing else is
+ * left to pick the grid shows them after all, so a game only a plugin knows can
+ * still be picked.
+ */
+const coverResults = computed(() => {
+  const pictured = ssResults.value.filter(r => r.source !== 'plugin' || !!r.cover_url)
+  return pictured.length ? pictured : ssResults.value
 })
+
+const filteredResults = computed(() => {
+  const key = searchFilter.value
+  if (key === 'all') return coverResults.value
+  if (key.startsWith('plugin:')) {
+    const provider = key.slice('plugin:'.length)
+    return coverResults.value.filter(r => r.source === 'plugin' && r.provider_id === provider)
+  }
+  return coverResults.value.filter(r => r.source === key)
+})
+
+/** A plugin's own name for itself, falling back to its id. */
+function providerLabel(providerId: string): string {
+  const mp = metadataProviders.value.find(p => p.id === providerId)
+  return mp?.name || providerId.toUpperCase()
+}
 
 const searchFilters = computed((): { key: FilterKey; label: string; count: number; icon: string }[] => {
   const counts = { ss: 0, igdb: 0, launchbox: 0, sgdb: 0 }
-  for (const r of ssResults.value) {
+  // One chip per metadata plugin that answered, not one chip for "plugins".
+  // Three of them answer on a full install - TheGamesDB, ppe and protondb - and
+  // folding them together is the opposite of what the row of chips is for.
+  const byProvider = new Map<string, number>()
+  // Counted from what the grid draws, so a chip never leads to an empty grid.
+  for (const r of coverResults.value) {
     if (r.source === 'ss') counts.ss++
     else if (r.source === 'igdb') counts.igdb++
     else if (r.source === 'launchbox') counts.launchbox++
     else if (r.source === 'sgdb') counts.sgdb++
+    else if (r.source === 'plugin' && r.provider_id) {
+      byProvider.set(r.provider_id, (byProvider.get(r.provider_id) ?? 0) + 1)
+    }
   }
+  const plugins = [...byProvider].map(([pid, count]) => ({
+    key:   `plugin:${pid}` as FilterKey,
+    label: providerLabel(pid),
+    icon:  pluginLogoUrl(pid),
+    count,
+  }))
   return ([
-    { key: 'all' as FilterKey,       label: 'All',  icon: '',                          count: ssResults.value.length },
+    { key: 'all' as FilterKey,       label: 'All',  icon: '',                          count: coverResults.value.length },
     { key: 'ss' as FilterKey,        label: 'SS',   icon: '/icons/ScreenScraper.ico',  count: counts.ss },
     { key: 'igdb' as FilterKey,      label: 'IGDB', icon: '/icons/igdb.ico',           count: counts.igdb },
     { key: 'launchbox' as FilterKey, label: 'LB',   icon: '/icons/launchbox.ico',      count: counts.launchbox },
     { key: 'sgdb' as FilterKey,      label: 'SGDB', icon: '/icons/steamgriddb.ico',    count: counts.sgdb },
+    ...plugins,
   ] as { key: FilterKey; label: string; count: number; icon: string }[]).filter(f => f.key === 'all' || f.count > 0)
 })
 
@@ -1066,6 +1287,14 @@ const scrapeVersionOk      = ref(false)
 const selectedSsId         = ref<string | null>(props.rom.ss_id || null)
 const selectedIgdbId       = ref<number | null>(props.rom.igdb_id || null)
 const selectedLaunchboxId  = ref<string | null>((props.rom as any).launchbox_id || null)
+//: A game picked from a metadata plugin. It has no column on the ROM, so it
+//: lives only for as long as the editor is open - which is all the art sections
+//: need, and it keeps a plugin's pick from looking like a ScreenScraper id that
+//: "Scrape this version" would then act on.
+const selectedPlugin = ref<{ provider_id: string; provider_game_id: string } | null>(null)
+/** Whether a game has been picked at all, from any source. */
+const hasPickedGame = computed(() =>
+  !!(selectedSsId.value || selectedIgdbId.value || selectedLaunchboxId.value || selectedPlugin.value))
 const allMedia       = ref<AllMedia>({
   covers: [], fanarts: [], screenshots: [],
   supports: [], wheels: [], bezels: [],
@@ -1073,6 +1302,8 @@ const allMedia       = ref<AllMedia>({
   detail_sources: [],
 })
 const mediaLoading = ref(false)
+// Numbers each pick's media request; only the latest may fill the tabs.
+let mediaRequest = 0
 
 // ── Image selections ───────────────────────────────────────────────────────────
 const selectedCover     = ref(props.rom.cover_path      || '')
@@ -1187,7 +1418,17 @@ function sourceIcon(source: string): string {
   return map[source] || pluginLogoUrl(source)
 }
 
+/** The logo to put on a result tile: a plugin's own, not the source word's. */
+function resultIcon(result: SearchResult): string {
+  if (result.source === 'plugin') return pluginLogoUrl(result.provider_id || '')
+  return sourceIcon(result.source)
+}
+
 function isResultSelected(result: SearchResult): boolean {
+  if (result.source === 'plugin' && result.provider_game_id) {
+    return selectedPlugin.value?.provider_id === result.provider_id
+        && selectedPlugin.value?.provider_game_id === result.provider_game_id
+  }
   if (result.source === 'ss' && result.ss_id) return selectedSsId.value === result.ss_id
   if (result.source === 'igdb' && result.igdb_id) return selectedIgdbId.value === result.igdb_id
   if (result.source === 'launchbox' && (result as any).launchbox_id) return selectedLaunchboxId.value === (result as any).launchbox_id
@@ -1275,7 +1516,18 @@ async function selectResult(result: SearchResult) {
   if (result.cover_url) selectedCover.value = result.cover_url
   scrapeVersionOk.value = false
 
-  if (result.source === 'sgdb') {
+  selectedPlugin.value = null
+  if (result.source === 'plugin') {
+    // No ss/igdb/launchbox id is invented here. Those three drive "Scrape this
+    // version", which would then go and scrape a different provider's game.
+    selectedSsId.value        = null
+    selectedIgdbId.value      = null
+    selectedLaunchboxId.value = null
+    selectedPlugin.value      = {
+      provider_id:      result.provider_id      || '',
+      provider_game_id: result.provider_game_id || '',
+    }
+  } else if (result.source === 'sgdb') {
     selectedSsId.value        = null
     selectedIgdbId.value      = null
     selectedLaunchboxId.value = null
@@ -1289,10 +1541,16 @@ async function selectResult(result: SearchResult) {
     selectedLaunchboxId.value = null
   }
 
+  const request = ++mediaRequest
   mediaLoading.value = true
   try {
     const params: Record<string, any> = { platform_slug: props.rom.platform_slug }
-    if (result.source === 'sgdb') {
+    if (result.source === 'plugin') {
+      // The plugins' own art comes back keyed on the ROM's name whatever is
+      // passed here; the query gives IGDB something to answer with too, so
+      // picking a plugin result is not a poorer choice than picking any other.
+      params.igdb_query = result.name
+    } else if (result.source === 'sgdb') {
       if (result.sgdb_id) params.sgdb_id = result.sgdb_id
     } else if (result.source === 'launchbox') {
       if ((result as any).launchbox_id) params.launchbox_id = (result as any).launchbox_id
@@ -1304,8 +1562,14 @@ async function selectResult(result: SearchResult) {
     }
 
     const { data } = await client.get(`/roms/${props.rom.id}/all-media`, { params })
+    // A pick made after this one owns the tabs now. ScreenScraper and the
+    // plugins behind a pick take seconds, SteamGridDB answers at once, so an
+    // earlier answer arriving last would fill the tabs with a game that is no
+    // longer the one picked.
+    if (request !== mediaRequest) return
     allMedia.value = data
   } catch {
+    if (request !== mediaRequest) return
     allMedia.value = {
       covers: [], fanarts: [], screenshots: [],
       supports: [], wheels: [], bezels: [],
@@ -1313,7 +1577,7 @@ async function selectResult(result: SearchResult) {
       detail_sources: [],
     }
   } finally {
-    mediaLoading.value = false
+    if (request === mediaRequest) mediaLoading.value = false
   }
 }
 

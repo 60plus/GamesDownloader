@@ -241,23 +241,22 @@ async def search_cover_options(
     elif source == "plugins":
         try:
             from plugins.manager import plugin_manager
+            # No hook for any other kind. Falling back to the cover hook offered a
+            # plugin's box art as candidate icons.
             hook_name = {"grids": "metadata_get_covers", "heroes": "metadata_get_heroes",
-                         "logos": "metadata_get_logos"}.get(asset_type, "metadata_get_covers")
-            hook = getattr(plugin_manager.hook, hook_name, None)
+                         "logos": "metadata_get_logos"}.get(asset_type)
+            hook = getattr(plugin_manager.hook, hook_name, None) if hook_name else None
             if hook:
                 all_results = hook(query=search_term)
                 for provider_results in all_results:
                     if isinstance(provider_results, list):
                         for r in provider_results:
-                            pid = (r.get("_source") or "").lower().replace(" ", "")
-                            from pathlib import Path
-                            from config import PLUGINS_PATH
-                            plugin_id = pid
-                            if not Path(PLUGINS_PATH, pid).is_dir():
-                                for sfx in ["-metadata", "-scraper", "-plugin"]:
-                                    if Path(PLUGINS_PATH, pid + sfx).is_dir():
-                                        plugin_id = pid + sfx
-                                        break
+                            # `_source` is the provider's DISPLAY name, and the
+                            # logo lives in its directory. Resolving that from
+                            # the name by hand worked for "TheGamesDB" by luck
+                            # and would answer 404 for "PPE.pl".
+                            from plugins.manager import plugin_dir_for_provider
+                            plugin_id = plugin_dir_for_provider(r.get("_source") or "")
                             r["_sourceIcon"] = f"/api/plugins/{plugin_id}/logo"
                         results.extend(provider_results)
         except Exception as exc:

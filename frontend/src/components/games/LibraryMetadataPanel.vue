@@ -89,6 +89,7 @@
                 <img src="/icons/steamgriddb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/launchbox.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img v-if="isCatalog" src="/icons/ScreenScraper.ico" width="14" height="14" alt="ScreenScraper" title="ScreenScraper" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                <img v-for="mp in artProviders('grids')" :key="mp.id" :src="mp.logo_url" width="14" height="14" :alt="mp.name" :title="mp.name" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <span class="mep-source-name">{{ t('meta.cover_sources', 'All Sources') }}</span>
                 <div class="mep-chip-bar" style="margin-left:auto">
                   <button class="mep-chip-btn" :class="{ active: coverFilter === 'all' }" @click="setCoverFilter('all')">{{ t('meta.all') }}</button>
@@ -151,6 +152,7 @@
                 <img src="/icons/gog.ico" width="14" height="14" alt="" />
                 <img src="/icons/RAWG.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/steamgriddb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                <img v-for="mp in artProviders('heroes')" :key="mp.id" :src="mp.logo_url" width="14" height="14" :alt="mp.name" :title="mp.name" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <span class="mep-source-name">{{ t('meta.cover_sources', 'All Sources') }}</span>
               </div>
               <div class="mep-search-row">
@@ -205,6 +207,7 @@
                 <img src="/icons/gog.ico" width="14" height="14" alt="" />
                 <img src="/icons/steamgriddb.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <img src="/icons/launchbox.ico" width="14" height="14" alt="" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
+                <img v-for="mp in artProviders('logos')" :key="mp.id" :src="mp.logo_url" width="14" height="14" :alt="mp.name" :title="mp.name" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
                 <span class="mep-source-name">{{ t('meta.cover_sources', 'All Sources') }}</span>
               </div>
               <div class="mep-search-row">
@@ -898,19 +901,36 @@
 
       <!-- ── Footer ──────────────────────────────────────────────────────────── -->
       <div class="mep-footer">
+        <div class="mep-footer-left">
+          <!-- Closed means only an administrator may change this entry. Shown
+               to everyone, because an editor who cannot save is owed the
+               reason, and only an administrator can turn it. -->
+          <button
+            v-if="isAdmin || isLocked"
+            class="mep-lock"
+            :class="{ 'mep-lock--on': isLocked }"
+            :disabled="!isAdmin || locking"
+            :title="isAdmin
+              ? (isLocked ? t('meta.unlock_hint') : t('meta.lock_hint'))
+              : t('meta.locked_by_admin')"
+            @click="toggleLock"
+          >
+            <i class="mdi" :class="isLocked ? 'mdi-lock' : 'mdi-lock-open-variant-outline'"></i>
+          </button>
         <div class="mep-save-status">
           <span v-if="saveError" class="mep-err">{{ saveError }}</span>
           <span v-else-if="saveOk" class="mep-ok">✓ {{ t('meta.saved') }}</span>
           <span v-else-if="notifyMsg" :class="notifyOk ? 'mep-ok' : 'mep-err'">{{ notifyMsg }}</span>
         </div>
+        </div>
         <div class="mep-footer-actions">
-          <button v-if="notifyEnabled" class="mep-btn-notify" :disabled="notifying" @click="resendNotification" :title="t('meta.resend_notification_hint')">
+          <button v-if="notifyEnabled" class="mep-btn-notify" :disabled="notifying || (isLocked && !isAdmin)" @click="resendNotification" :title="t('meta.resend_notification_hint')">
             <div v-if="notifying" class="mep-spinner mep-spinner--sm" />
             <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
             {{ t('meta.resend_notification') }}
           </button>
           <button class="mep-btn-cancel" @click="$emit('close')">{{ t('meta.cancel') }}</button>
-          <button class="mep-btn-save btn-save-action" :disabled="saving || !hasChanges" @click="save">
+          <button class="mep-btn-save btn-save-action" :disabled="saving || !hasChanges || (isLocked && !isAdmin)" @click="save">
             <div v-if="saving" class="mep-spinner mep-spinner--sm" />
             {{ saving ? t('meta.saving') : t('meta.save_changes') }}
           </button>
@@ -975,6 +995,21 @@ interface CoverOption {
 }
 
 const props = defineProps<{ game: LibGame; apiPrefix?: string }>()
+
+// The padlock. Closed means only an administrator may change this entry, and
+// the server enforces it: the button being hidden is not what stops anybody.
+const isLocked = ref<boolean>(!!(props.game as any)?.metadata_locked)
+const locking = ref(false)
+async function toggleLock() {
+  if (!isAdmin.value || locking.value) return
+  locking.value = true
+  const next = !isLocked.value
+  try {
+    await client.post(baseApi.value + `/${props.game.id}/lock`, { locked: next })
+    isLocked.value = next
+  } catch { /* left as it was, which is what the server still thinks */ }
+  finally { locking.value = false }
+}
 const emit  = defineEmits<{
   (e: 'close'): void
   (e: 'saved', data: Record<string, unknown>): void
@@ -1863,7 +1898,7 @@ async function searchAllCovers() {
       (r.data as CoverOption[]).filter(c => !c.asset_type).map(c => ({ ...c, _source: 'LaunchBox', _sourceIcon: 'launchbox.ico' }))
     ).catch(() => []),
     // Metadata provider plugins (covers)
-    ...(metadataProviders.value.length ? [
+    ...(artProviders('grids').length ? [
       client.get(`${baseUrl}?source=plugins&q=${qEnc}&asset_type=grids`).then(r =>
         (r.data as CoverOption[]).map(c => ({ ...c, _source: c._source || 'Plugin', _sourceIcon: c._sourceIcon || 'gog.ico' }))
       ).catch(() => [] as CoverOption[])
@@ -1909,7 +1944,7 @@ async function searchAllHeroes() {
       (r.data as CoverOption[]).map(c => ({ ...c, _source: 'SteamGridDB', _sourceIcon: 'steamgriddb.ico' }))
     ).catch(() => []),
     // Metadata provider plugins (heroes)
-    ...(metadataProviders.value.length ? [
+    ...(artProviders('heroes').length ? [
       client.get(`${baseUrl}?source=plugins&q=${qEnc}&asset_type=heroes`).then(r =>
         (r.data as CoverOption[]).map(c => ({ ...c, _source: c._source || 'Plugin', _sourceIcon: c._sourceIcon || 'gog.ico' }))
       ).catch(() => [] as CoverOption[])
@@ -1954,7 +1989,7 @@ async function searchAllLogos() {
       (r.data as CoverOption[]).filter(c => c.asset_type === 'logos').map(c => ({ ...c, _source: 'LaunchBox', _sourceIcon: 'launchbox.ico' }))
     ).catch(() => []),
     // Plugins
-    ...(metadataProviders.value.length ? [
+    ...(artProviders('logos').length ? [
       client.get(`${baseUrl}?source=plugins&q=${qEnc}&asset_type=logos`).then(r =>
         (r.data as CoverOption[]).map(c => ({ ...c, _source: c._source || 'Plugin', _sourceIcon: c._sourceIcon || 'gog.ico' }))
       ).catch(() => [] as CoverOption[])
@@ -2008,7 +2043,7 @@ async function searchAllScreenshots() {
   ssAllSearching.value = false
 }
 
-/** Unified icon search - GOG + SteamGridDB icons + plugins. */
+/** Unified icon search - GOG + SteamGridDB icons. */
 async function searchAllIcons() {
   // Enter fires this too, and that input is not disabled while a search
   // runs. Two runs race and the slower one writes last.
@@ -2030,12 +2065,7 @@ async function searchAllIcons() {
     client.get(`${baseUrl}?source=steamgriddb&q=${qEnc}&asset_type=icons&animated=any`).then(r =>
       (r.data as CoverOption[]).map(c => ({ ...c, _source: 'SteamGridDB', _sourceIcon: 'steamgriddb.ico' }))
     ).catch(() => []),
-    // Plugins
-    ...(metadataProviders.value.length ? [
-      client.get(`${baseUrl}?source=plugins&q=${qEnc}&asset_type=icons`).then(r =>
-        (r.data as CoverOption[]).map(c => ({ ...c, _source: c._source || 'Plugin', _sourceIcon: c._sourceIcon || 'gog.ico' }))
-      ).catch(() => [] as CoverOption[])
-    ] : []),
+    // No plugin is asked: there is no hook that supplies icons.
   ])
 
   allIconResults.value = results.flat()
@@ -2390,7 +2420,14 @@ async function save() {
 }
 
 // ── Metadata provider plugins ────────────────────────────────────────────────
-const metadataProviders = ref<{id: string; name: string; logo_url: string}[]>([])
+const metadataProviders = ref<{id: string; name: string; logo_url: string; art?: string[]}[]>([])
+
+/** The plugins that supply this kind of art, for the row above its search. A
+ *  plugin with game search alone has no covers to give, and drawing it there
+ *  promised a source that never answers. */
+function artProviders(kind: 'grids' | 'heroes' | 'logos') {
+  return metadataProviders.value.filter(p => (p.art || []).includes(kind))
+}
 
 /** Get plugin logo URL by provider_id (resolves via metadataProviders list). */
 function pluginLogoUrl(providerId: string): string {

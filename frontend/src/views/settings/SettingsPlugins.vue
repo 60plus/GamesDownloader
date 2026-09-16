@@ -141,6 +141,44 @@
                   @input="setConfigValue(p.plugin_id, String(key), Number(($event.target as HTMLInputElement).value))"
                 />
 
+                <!-- Password: an API key or a token, hidden until asked for.
+                     The plugins have declared these as `password` all along -
+                     TheGamesDB since its first release - and this loop drew them
+                     with the branch below, in clear, on a screen an
+                     administrator leaves open. -->
+                <div v-else-if="schema.type === 'password'" class="sp-secret">
+                  <input
+                    :type="secretShown[secretKey(p.plugin_id, String(key))] ? 'text' : 'password'"
+                    class="sp-config-input"
+                    autocomplete="off"
+                    spellcheck="false"
+                    :value="configDraft[p.plugin_id]?.[key as string] ?? ''"
+                    @input="setConfigValue(p.plugin_id, String(key), ($event.target as HTMLInputElement).value)"
+                  />
+                  <button
+                    type="button"
+                    class="sp-secret-eye"
+                    :title="secretShown[secretKey(p.plugin_id, String(key))] ? t('plugins.hide_secret') : t('plugins.reveal_secret')"
+                    :aria-label="secretShown[secretKey(p.plugin_id, String(key))] ? t('plugins.hide_secret') : t('plugins.reveal_secret')"
+                    @click="toggleSecret(p.plugin_id, String(key))"
+                  >
+                    <svg v-if="secretShown[secretKey(p.plugin_id, String(key))]"
+                      width="15" height="15" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                      <path d="M3 3l18 18" />
+                      <path d="M10.6 5.2A9.7 9.7 0 0 1 12 5c6 0 9 7 9 7a15.6 15.6 0 0 1-3.4 4.3" />
+                      <path d="M6.3 7.4A15.7 15.7 0 0 0 3 12s3 7 9 7a9.4 9.4 0 0 0 4-.9" />
+                      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+                    </svg>
+                    <svg v-else
+                      width="15" height="15" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                      <path d="M3 12s3-7 9-7 9 7 9 7-3 7-9 7-9-7-9-7Z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  </button>
+                </div>
+
                 <!-- String (default) -->
                 <input
                   v-else
@@ -239,6 +277,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import client from '@/services/api/client'
 import catalogActions from '@/lib/catalogActions'
+import { useLibrariesStore } from '@/stores/libraries'
 import { useSettingsHint } from '@/composables/useSettingsHint'
 import { useI18n } from '@/i18n'
 
@@ -284,6 +323,24 @@ const confirmDeleteId = ref<string | null>(null)
 // Config panel
 const openConfigId = ref<string | null>(null)
 const configDraft  = reactive<Record<string, Record<string, any>>>({})
+
+/** Which secrets are currently on screen, one entry per FIELD.
+ *
+ *  Per plugin and per field rather than one flag for the panel: a plugin may
+ *  declare more than one secret, and two of them certainly do. A shared flag
+ *  would uncover all of them at once, which is a louder version of the thing
+ *  being fixed. Not persisted anywhere - closing the panel hides them again.
+ */
+const secretShown = reactive<Record<string, boolean>>({})
+
+function secretKey(pluginId: string, key: string): string {
+  return `${pluginId}|${key}`
+}
+
+function toggleSecret(pluginId: string, key: string): void {
+  const at = secretKey(pluginId, key)
+  secretShown[at] = !secretShown[at]
+}
 const savingConfig = reactive<Record<string, boolean>>({})
 const configMsg    = reactive<Record<string, string>>({})
 const configOk     = reactive<Record<string, boolean>>({})
@@ -349,6 +406,7 @@ async function syncCatalogue(id: string) {
   catErr[id] = false
   try {
     await catalogActions.sync(id)
+    await useLibrariesStore().fetch()   // a sync can bring a shelf into being
     catMsg[id] = t('plugins.catalogue_synced')
   } catch (e: any) {
     catErr[id] = true
@@ -367,6 +425,10 @@ async function toggleEnabled(p: PluginInfo) {
     const action = p.enabled ? 'disable' : 'enable'
     await client.post(`/plugins/${p.plugin_id}/${action}`)
     p.enabled = !p.enabled
+    // The server switches the plugin's shelf before it answers, but every skin
+    // builds its menu from the libraries store, which read /libraries once at
+    // start. Asked again after the answer - alongside it, it reads the old state.
+    await useLibrariesStore().fetch()
   } catch (e: any) {
     listMsg.value = e?.response?.data?.detail || `Failed to ${p.enabled ? 'disable' : 'enable'} plugin.`
     listOk.value = false
@@ -383,6 +445,7 @@ async function deletePlugin(id: string) {
   try {
     await client.delete(`/plugins/${id}`)
     plugins.value = plugins.value.filter(p => p.plugin_id !== id)
+    await useLibrariesStore().fetch()   // its shelf goes with it
     confirmDeleteId.value = null
   } catch (e: any) {
     listMsg.value = e?.response?.data?.detail || t('plugins.delete_failed')
@@ -469,6 +532,7 @@ async function uploadFile(file: File) {
     uploadMsg.value = t('plugins.install_success', 'Plugin installed successfully.')
     uploadOk.value = true
     await loadPlugins()
+    await useLibrariesStore().fetch()   // a new plugin can bring a shelf
     setTimeout(() => { uploadMsg.value = '' }, 5000)
   } catch (e: any) {
     uploadMsg.value = e?.response?.data?.detail || t('plugins.install_failed', 'Installation failed.')
@@ -652,6 +716,25 @@ onMounted(() => { loadPlugins(); loadCatalogues() })
   transition: border-color var(--transition);
 }
 .sp-config-input:focus { border-color: var(--pl); }
+
+/* A secret and the eye that uncovers it. The row already lays its label and
+   control out side by side, so this only has to keep the two together and let
+   the input keep the width every other field has. */
+.sp-secret {
+  flex: 1; max-width: 220px;
+  display: flex; align-items: center; gap: 6px;
+}
+.sp-secret .sp-config-input { max-width: none; }
+.sp-secret-eye {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  background: color-mix(in srgb, var(--pl) 12%, transparent);
+  border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
+  color: var(--muted); cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+.sp-secret-eye:hover { color: var(--text); border-color: var(--pl); }
+.sp-secret-eye:focus-visible { outline: 2px solid var(--pl); outline-offset: 1px; }
 
 .sp-config-select {
   flex: 1; max-width: 220px;
