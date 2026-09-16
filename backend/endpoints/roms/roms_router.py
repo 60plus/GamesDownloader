@@ -20,8 +20,8 @@ from functools import partial
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from config import ROMS_PATH, config_manager
@@ -38,6 +38,8 @@ from handler.filesystem.rom_scanner import (
 from handler.roms import chd_jobs, rom_removal
 from handler.roms.chd_convert import convertible_disc, disc_inside_archive
 from handler.metadata.rom_scrape_handler import scrape_roms_batch
+from handler.library.metadata_lock import assert_unlocked
+from handler.library.ownership import assert_can_delete_rom_set, claim_writes
 from handler.metadata.rom_platform_map import PLATFORM_MAP, get_cover_aspect as _get_cover_aspect
 from utils import download_tickets
 from utils.ranged_file import content_disposition
@@ -49,8 +51,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/roms", tags=["roms"])
 
 # ── Scan state (single-instance lock) ─────────────────────────────────────────
-_scan_lock = asyncio.Lock()
-_scan_running = False  # read-only status flag (set under _scan_lock)
+# The lock moved to the scanner, where the thing it guards lives. It used to be
+# here, and a handler two directories away reached across to borrow it; a timed
+# scan now needs it too, and two locks would be no lock at all.
+from handler.filesystem import rom_scanner as _scanner
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -180,6 +184,317 @@ async def get_platform_stored_info(request: Request, slug: str) -> dict:
         "end_year_platform":     p_cfg.get("end_year"),
         "generation":            p_cfg.get("generation"),
     }
+
+
+class MissingRemoveBody(BaseModel):
+    """The rows that were on screen. Same rule as the exclusions, same reason.
+
+    The set of missing rows changes without anybody doing anything - a scan
+    runs, a drive comes back - so recomputing it at the moment of the click
+    would remove rows nobody was shown, including ones that had just stopped
+    being missing.
+    """
+
+    ids: list[int]
+
+
+class ExclusionsBody(BaseModel):
+    patterns: str = ""
+
+
+class ExclusionsApplyBody(BaseModel):
+    """The rows the person was looking at when they pressed the button.
+
+    Required, and it is the whole safety of this route. Without it the server
+    recomputes the match set at the moment of the click, which is NOT the set
+    that was confirmed: the saved patterns can widen in between - another tab,
+    another administrator - and the click then removes rows nobody ever saw.
+    """
+
+    ids: list[int]
+
+
+
+async def _platform_root(platform) -> str:
+    """The folder this platform's ROMs actually sit in.
+
+    Both halves of the exclusions - the preview and the save - measure patterns
+    against a root, and it has to be the folder the SCAN walks or the two are
+    judging different text. The scan takes its root from the directory it is
+    reading (`platform_dir`, whose name becomes the fs_slug); this used to be
+    built as `roms_root / platform.fs_slug` instead.
+
+    Those differ whenever a directory name maps onto a platform by an alias -
+    `genesis`, `megadrive` and `md` are one shelf - so a library kept under
+    `megadrive/` had its patterns saved against a folder that does not exist and
+    matched against one that does. The pattern covered nothing, in silence.
+
+    Read from the rows, because their `fs_path` is what the scan used when it
+    made them. The commonest wins when a shelf has been walked under two names
+    over the years; with no rows at all there is nothing to read, and the stored
+    slug is the same guess the scan will make on its first walk.
+    """
+    roms_root = await _get_roms_path()
+    fallback = str(Path(roms_root) / platform.fs_slug)
+    try:
+        rows = await rom_handler.all_for_platform(platform.id)
+    except Exception:  # noqa: BLE001 - a lookup failure must not lose the screen
+        return fallback
+    counts: dict[str, int] = {}
+    for r in rows:
+        path = (r.get("fs_path") or "").strip()
+        if path:
+            counts[path] = counts.get(path, 0) + 1
+    if not counts:
+        return fallback
+    return max(sorted(counts), key=lambda p: counts[p])
+
+
+async def _excluded_rows(platform, patterns: list[str]) -> list[dict]:
+    """Rows of this platform whose file the patterns say to leave alone.
+
+    One rule, used by both the preview and the apply. Two lists built two ways
+    is how somebody confirms one thing and loses another.
+    """
+    from handler.filesystem.exclusions import is_excluded
+
+    if not patterns:
+        return []
+    root = await _platform_root(platform)
+    rows = await rom_handler.all_for_platform(platform.id)
+    return [
+        {"id": r["id"], "fs_name": r["fs_name"], "name": r["name"],
+         "size_bytes": r["size_bytes"],
+         "path": str(Path(r["fs_path"]) / r["fs_name"])}
+        for r in rows
+        # Same root the walk uses: the platform folder the patterns were
+        # typed into. Absolute matching let `roms/` cover everything.
+        if is_excluded(str(Path(r["fs_path"]) / r["fs_name"]), patterns,
+                       root=root)
+    ]
+
+
+@protected_route(router.put, "/platforms/{slug}/exclusions", scopes=[Scopes.PLATFORMS_WRITE])
+async def set_platform_exclusions(request: Request, slug: str, body: ExclusionsBody) -> dict:
+    """Paths this platform's scan is told never to look at, one per line.
+
+    Its own route rather than a field on the platform PATCH beside the display
+    name: that one writes both fields on every call, so a request carrying only
+    this would quietly clear the other.
+
+    Saving changes nothing that is already in the library. It only stops a
+    future scan ADDING something, which is reversible by deleting the line.
+    Removing what has already slipped in is the apply route below, and it is
+    deliberately a separate act.
+    """
+    from handler.filesystem.exclusions import parse_patterns
+
+    platform = await rom_platform_handler.get_by_slug(slug)
+    if platform is None:
+        raise HTTPException(status_code=404, detail="Platform not found")
+    # The folder this platform is scanned from, for the same reason as on the
+    # library side: an absolute path is cut down before the guard sees it, so
+    # the guard cannot pass something that matching will read as `*`.
+    root = await _platform_root(platform)
+    kept = parse_patterns(body.patterns, root=root)
+    await rom_platform_handler.update(
+        platform, {"scan_exclude": "\n".join(kept) or None}
+    )
+    # What was dropped, and why, rather than silently saving less than was
+    # typed: a pattern that would swallow the whole tree is refused when read.
+    typed = [ln.strip() for ln in (body.patterns or "").splitlines()
+             if ln.strip() and not ln.strip().startswith("#")]
+    # Per line, not by comparing typed text with stored text - see the same
+    # spot in libraries_router for why those two are no longer equal.
+    return {"patterns": kept,
+            "ignored": [ln for ln in typed if not parse_patterns(ln, root=root)]}
+
+
+def _really_gone(row: dict) -> bool:
+    """Is the file actually absent, asked of the disk rather than of a flag.
+
+    `missing_from_fs` is set by a scan and only cleared by another one, so it is
+    a claim about the last completed walk rather than about now. Any way a scan
+    can end early leaves rows flagged that are perfectly present - and the
+    screen this feeds offers every listed row for removal in one act, with saves
+    and play history cascading off each.
+
+    One stat per listed row buys the whole class of stale-flag mistakes being
+    harmless. It is cheap: this list is short by definition, and if it is not,
+    something is wrong that a person needs to see anyway.
+    """
+    try:
+        return not (Path(row["fs_path"]) / row["fs_name"]).is_file()
+    except OSError:
+        # An unreadable path is not evidence the file is gone. Left alone.
+        return False
+
+
+@protected_route(router.get, "/missing", scopes=[Scopes.ROMS_WRITE])
+async def list_missing_roms(request: Request) -> dict:
+    """Rows whose file is gone, which nothing else in the application shows.
+
+    Administrator only: it reports filesystem paths, and it is the door to the
+    bulk removal below.
+
+    Checked against the disk, so the screen never offers a row it would then
+    refuse to remove - and never offers a whole library because a scan happened
+    to fall over halfway.
+    """
+    rows = [r for r in await rom_handler.all_missing() if _really_gone(r)]
+    return {
+        "count": len(rows),
+        "roms": [
+            {"id": r["id"],
+             "name": r["name"] or r["fs_name"],
+             "fs_name": r["fs_name"],
+             "platform_slug": r["platform_slug"],
+             "platform_name": r["platform_name"],
+             "size_bytes": r["size_bytes"],
+             "path": str(Path(r["fs_path"]) / r["fs_name"])}
+            for r in rows
+        ],
+    }
+
+
+@protected_route(router.post, "/missing/remove", scopes=[Scopes.ROMS_WRITE])
+async def remove_missing_roms(request: Request, body: MissingRemoveBody) -> dict:
+    """Delete the rows that were listed, and only those.
+
+    There is no file to delete - that is what makes a row missing. What goes is
+    the entry and everything hanging off it, saves and play history included,
+    which is why the screen asks for a tick first.
+    """
+    shown = set(body.ids)
+    # Two conditions, not one. The flag says the last scan did not find it; the
+    # disk says whether that is still true. A row whose file is back - or whose
+    # flag was set by a scan that fell over - is skipped and reported rather
+    # than deleted with its saves.
+    still_missing = {
+        r["id"]: r for r in await rom_handler.all_missing() if _really_gone(r)
+    }
+    to_remove = [rom_id for rom_id in body.ids if rom_id in still_missing]
+    skipped = sorted(shown - set(still_missing))
+
+    removed = 0
+    saves_gone = 0
+    failed: list[int] = []
+    for rom_id in to_remove:
+        try:
+            saves_gone += await _take_the_bytes_too(
+                rom_id, (still_missing[rom_id] or {}).get("platform_slug"))
+            if await rom_handler.delete(rom_id):
+                removed += 1
+            else:
+                failed.append(rom_id)
+        except Exception:  # noqa: BLE001 - one row must not decide the rest
+            logger.exception("Could not remove missing ROM row %s", rom_id)
+            failed.append(rom_id)
+    if removed:
+        logger.info("Removed %d ROM row(s) whose files are gone", removed)
+    return {"removed": removed, "skipped": skipped, "failed": failed}
+
+
+@protected_route(router.get, "/platforms/{slug}/exclusions",
+                 scopes=[Scopes.PLATFORMS_WRITE])
+async def get_platform_exclusions(request: Request, slug: str) -> dict:
+    """What is saved, without working out what it covers.
+
+    The preview below returns the patterns too, but it reads every row of the
+    platform to do it. A settings screen has to show what is already saved
+    before anybody edits it, and that must not walk a twenty thousand ROM table.
+
+    It also keeps the preview honest. The preview reports what the SAVED
+    patterns cover, so the screen may only offer it once what is typed matches
+    what is saved - and it can only know that if it can read what is saved.
+    """
+    from handler.filesystem.exclusions import parse_patterns
+
+    platform = await rom_platform_handler.get_by_slug(slug)
+    if platform is None:
+        raise HTTPException(status_code=404, detail="Platform not found")
+    return {"patterns": parse_patterns(getattr(platform, "scan_exclude", None))}
+
+
+@protected_route(router.get, "/platforms/{slug}/exclusions/preview",
+                 scopes=[Scopes.PLATFORMS_WRITE])
+async def preview_platform_exclusions(request: Request, slug: str) -> dict:
+    """What applying the saved patterns would remove, listed before anything is.
+
+    The owner's condition for this feature: nothing already in the library
+    changes until it is asked for, and the list is shown first.
+    """
+    from handler.filesystem.exclusions import parse_patterns
+
+    platform = await rom_platform_handler.get_by_slug(slug)
+    if platform is None:
+        raise HTTPException(status_code=404, detail="Platform not found")
+    patterns = parse_patterns(getattr(platform, "scan_exclude", None))
+    matches = await _excluded_rows(platform, patterns)
+    return {"patterns": patterns, "count": len(matches), "roms": matches}
+
+
+@protected_route(router.post, "/platforms/{slug}/exclusions/apply", scopes=[Scopes.ROMS_WRITE])
+async def apply_platform_exclusions(
+    request: Request, slug: str, body: ExclusionsApplyBody,
+) -> dict:
+    """Remove the rows the saved patterns match. Files on disk are left alone.
+
+    Every route in this group is administrator-only - PLATFORMS_WRITE and
+    ROMS_WRITE both sit in ADMIN_SCOPES and nowhere else. This one still asks
+    for the scope that governs deleting ROM rows rather than the one that
+    governs platform settings, because that is what it does: saving a pattern
+    changes what a future scan adds and is undone by deleting a line, while this
+    deletes rows, and the saves and play history hanging off them go too.
+
+    The files stay where they are on purpose. The point of a pattern is that
+    something belongs in that folder and is not a game - removing the row is the
+    fix, removing the file would be destroying whatever it actually was.
+    """
+    from handler.filesystem.exclusions import parse_patterns
+
+    platform = await rom_platform_handler.get_by_slug(slug)
+    if platform is None:
+        raise HTTPException(status_code=404, detail="Platform not found")
+    patterns = parse_patterns(getattr(platform, "scan_exclude", None))
+    matches = await _excluded_rows(platform, patterns)
+
+    # THE LIST SHOWN IS AN UPPER BOUND. The patterns are still recomputed, so a
+    # row that has stopped matching is not removed; but a row that started
+    # matching after the list was drawn was confirmed by nobody, and is left
+    # alone. Only the intersection goes.
+    shown = set(body.ids)
+    still_matching = {row["id"] for row in matches}
+    to_remove = [row for row in matches if row["id"] in shown]
+    skipped = sorted(shown - still_matching)
+
+    # Each delete is its own committed transaction, so an exception partway
+    # leaves the earlier ones gone. Reporting that as total failure is the worst
+    # available answer, because the obvious response to it is to press the
+    # button again.
+    removed = 0
+    saves_gone = 0
+    failed: list[int] = []
+    for row in to_remove:
+        try:
+            saves_gone += await _take_the_bytes_too(row["id"], slug)
+            if await rom_handler.delete(row["id"]):
+                removed += 1
+            else:
+                failed.append(row["id"])
+        except Exception:  # noqa: BLE001 - one row must not decide the rest
+            logger.exception("Could not remove ROM row %s on %s", row["id"], slug)
+            failed.append(row["id"])
+    if failed:
+        logger.warning("%d row(s) on %s could not be removed", len(failed), slug)
+    if removed:
+        logger.info("Removed %d ROM row(s) on %s matching its scan exclusions "
+                    "(files left on disk)", removed, slug)
+    if skipped:
+        logger.info("Left %d row(s) on %s alone: they no longer match the saved "
+                    "patterns", len(skipped), slug)
+    return {"removed": removed, "roms": to_remove, "skipped": skipped,
+            "failed": failed}
 
 
 @protected_route(router.patch, "/platforms/{slug}", scopes=[Scopes.PLATFORMS_WRITE])
@@ -421,6 +736,61 @@ async def get_summary(request: Request) -> dict:
 
 # ── ROM metadata search ───────────────────────────────────────────────────────
 
+def _plugin_dir_for_provider(provider_id: str) -> str:
+    """Where a metadata provider's plugin lives, and so where its logo is.
+
+    Shared with the settings router, which answers the same question for the
+    list of providers the editor draws its header icons from. Two copies of the
+    guess disagreed about protondb, and one of them was on screen.
+    """
+    from plugins.manager import plugin_dir_for_provider
+
+    return plugin_dir_for_provider(provider_id)
+
+
+def _plugin_search_candidates(per_plugin: list) -> list[dict]:
+    """Plugin search answers, in the shape the candidate grid reads.
+
+    >>> BUILT FROM THE SEARCH ANSWER ALONE. `metadata_get_game` is one request
+    per candidate, and TheGamesDB's free allowance is about a thousand a month -
+    it had already spent a month of it in two days by asking too often. A year
+    and a cover appear here only when the provider's own search answer carried
+    them, which costs nothing; a provider that sends neither gets a plain tile,
+    which is what several built-in results look like already.
+    """
+    out: list[dict] = []
+    for provider_results in per_plugin or []:
+        if not isinstance(provider_results, list):
+            continue
+        for r in provider_results[:8]:
+            if not isinstance(r, dict):
+                continue
+            pid = str(r.get("provider_id") or "")
+            gid = str(r.get("provider_game_id") or "")
+            name = str(r.get("name") or "")
+            # A row with no id cannot be selected and a row with no name is an
+            # unlabelled tile. Neither belongs in the grid.
+            if not pid or not gid or not name:
+                continue
+            out.append({
+                "source":            "plugin",
+                "provider_id":       pid,
+                "provider_game_id":  gid,
+                "plugin_id":         _plugin_dir_for_provider(pid),
+                "ss_id":             None,
+                "igdb_id":           None,
+                "launchbox_id":      None,
+                "sgdb_id":           None,
+                "name":              name,
+                "year":              r.get("year"),
+                "developer":         r.get("developer"),
+                "cover_url":         r.get("cover_url") or None,
+                "regions":           [],
+                "_sourceIcon":       f"/api/plugins/{_plugin_dir_for_provider(pid)}/logo",
+            })
+    return out
+
+
 @protected_route(router.get, "/search", scopes=[Scopes.ROMS_READ])
 async def search_roms_metadata(
     request: Request,
@@ -559,12 +929,36 @@ async def search_roms_metadata(
     except Exception as _e:
         logger.warning("SGDB search error: %s", _e)
 
+    # ── Metadata plugins ──────────────────────────────────────────────────────
+    #
+    # The header above this list already draws every metadata plugin's logo
+    # beside the four built-in ones, and this route asked none of them: an
+    # installed, enabled, answering plugin could not appear among the results
+    # however well it answered. Reported by the owner with a ring drawn round
+    # that row of chips.
+    #
+    # Off the event loop. Plugin code is third-party and synchronous, and it
+    # goes to the network: called inline it would hold up the four built-in
+    # searches that are already running concurrently above.
+    plugin_results: list[dict] = []
+    try:
+        from plugins.manager import plugin_manager
+        _per_plugin = await asyncio.to_thread(
+            plugin_manager.hook.metadata_search_game, query=query.strip()
+        )
+        plugin_results = _plugin_search_candidates(_per_plugin)
+    except Exception as _e:
+        # A plugin that throws costs its own results and nothing else: the four
+        # built-in sources are what this editor is for.
+        logger.warning("Plugin metadata search failed: %s", _e)
+
     # ScreenScraper cover URLs carry the server's password; wrap them so the
     # browser only ever sees a credential-free proxy URL. Public covers pass
     # through unchanged.
     from utils.media_proxy import proxy_media_list
     return proxy_media_list(
-        ss_results + igdb_results + lb_results + sgdb_results, key="cover_url"
+        ss_results + igdb_results + lb_results + sgdb_results + plugin_results,
+        key="cover_url",
     )
 
 
@@ -614,9 +1008,32 @@ async def get_rom(request: Request, rom_id: int) -> dict:
         lambda: all(convertible_disc(Path(rom.fs_path) / n) for n in convert_names)
     )
 
+    # Who owns this ROM and who fetched it, looked up only when there is
+    # something to look up. Most ROMs were found on the disk by a scan and have
+    # neither, and the page simply leaves both rows out for those.
+    owner_name = uploader_name = None
+    if rom.published_by or rom.uploaded_by:
+        from handler.database.session import async_session_factory as _asf
+        from models.user import User as _U
+        from sqlalchemy import select as _sel
+        wanted = {i for i in (rom.published_by, rom.uploaded_by) if i}
+        async with _asf() as _s:
+            names = dict((await _s.execute(
+                _sel(_U.id, _U.username).where(_U.id.in_(wanted))
+            )).all())
+        owner_name = names.get(rom.published_by)
+        # Only when a claim has parted the two. Before that they are the same
+        # account and the page would be printing one person twice.
+        if rom.uploaded_by and rom.uploaded_by != rom.published_by:
+            uploader_name = names.get(rom.uploaded_by)
+
     return {
         "disks":           disks,
         "playlist":        playlist,
+        "published_by":      rom.published_by,
+        "owner_username":    owner_name,
+        "uploaded_by":       rom.uploaded_by,
+        "uploader_username": uploader_name,
         # Whether the page may offer to load the whole set. False for archived
         # discs and for sheets, which cannot reach the emulator that way and
         # would fail only after the entire set had downloaded.
@@ -670,6 +1087,7 @@ async def get_rom(request: Request, rom_id: int) -> dict:
         "screenshots":     rom.screenshots,
         "support_path":    rom.support_path,
         "wheel_path":      rom.wheel_path,
+        "metadata_locked": bool(getattr(rom, "metadata_locked", False)),
         "bezel_path":      rom.bezel_path,
         "steamgrid_path":  rom.steamgrid_path,
         "video_path":      rom.video_path,
@@ -733,6 +1151,7 @@ async def update_rom_metadata(
     rom = await rom_handler.get_with_platform(rom_id)
     if rom is None:
         raise HTTPException(status_code=404, detail="ROM not found")
+    assert_unlocked(request, rom)
 
     platform_slug = rom.platform.slug if rom.platform else "unknown"
     media_dir = _rom_media_dir(platform_slug, rom_id)
@@ -754,9 +1173,19 @@ async def update_rom_metadata(
         ("video_path", "video_url"),
     ):
         _pv = getattr(body, _pf, None)
-        if isinstance(_pv, str) and PROXY_PREFIX in _pv:
+        # A proxy token, or anything that is plainly somebody else's address.
+        # The second half was missing, and each of the editor's media tabs has a
+        # box inviting exactly that - its placeholder reads "https://..." - so a
+        # pasted address went into the column verbatim and was served from the
+        # far end forever after. That breaks the rule every other media path
+        # here keeps: fetch it, serve it ourselves. It also means the media
+        # disappears the day the far end moves it, and that every render hands
+        # the viewer's address to a third party nobody chose.
+        if isinstance(_pv, str) and (
+            PROXY_PREFIX in _pv or _pv.startswith(("http://", "https://"))
+        ):
             setattr(body, _uf, _pv)     # download it via the *_url branch below
-            setattr(body, _pf, None)    # never store the token as a path
+            setattr(body, _pf, None)    # never store a foreign address as a path
 
     data: dict = {}
     if body.name is not None:         data["name"] = body.name
@@ -866,6 +1295,7 @@ async def update_rom_metadata(
             _chosen.append("background_path")
 
     # Download extra media if URLs provided
+    _failed: list[str] = []
     _extra_media = [
         ("support_url",   "support"),
         ("wheel_url",     "wheel"),
@@ -885,6 +1315,13 @@ async def update_rom_metadata(
             if saved:
                 data[f"{fname}_path"] = _resource_url(platform_slug, rom_id, saved.name) + _bust
                 _chosen.append(f"{fname}_path")
+            else:
+                # It used to end here in silence: the editor reported a saved
+                # dialog and the media was exactly as before, which is the one
+                # answer nobody can act on.
+                _failed.append(fname)
+                logger.warning("ROM %s: could not fetch %s from %s",
+                               rom_id, fname, url_val[:120])
 
     if _chosen:
         from handler.metadata.rom_scrape_handler import with_manual
@@ -895,8 +1332,12 @@ async def update_rom_metadata(
 
     updated = await rom_handler.get_with_platform(rom_id)
     if updated is None:
-        return {"ok": True}
+        return {"ok": True, "media_failed": _failed}
     return {
+        # Which media could not be fetched, so the editor can say so instead of
+        # showing a saved dialog over an unchanged picture. Empty on the happy
+        # path, which is nearly always.
+        "media_failed":    _failed,
         "id":              updated.id,
         "name":            updated.name,
         "cover_path":      updated.cover_path,
@@ -941,6 +1382,7 @@ async def upload_rom_media(
     rom = await rom_handler.get_with_platform(rom_id)
     if rom is None:
         raise HTTPException(status_code=404, detail="ROM not found")
+    assert_unlocked(request, rom)
 
     from handler.metadata.rom_scrape_handler import _rom_media_dir, _resource_url
     import time as _time
@@ -1222,9 +1664,6 @@ async def get_rom_all_media(
             len(ss_media.get("screenshots",[])), len(ss_media.get("supports",[])),
             len(ss_media.get("wheels",[])), len(ss_media.get("bezels",[])),
             len(ss_media.get("steamgrids",[])), len(ss_media.get("videos",[])))
-        # Debug: log first 3 cover URLs to check format
-        for c in ss_media.get("covers", [])[:3]:
-            logger.info("[all-media] cover sample: type=%s region=%s url=%s", c.get("type"), c.get("region"), c.get("url","")[:120])
     else:
         logger.info("[all-media] SS returned no data (ss_id=%s ss_user=%s)", game_ss_id, bool(ss_user))
     if igdb_game:
@@ -1332,18 +1771,9 @@ async def get_rom_all_media(
     plugin_wheels:  list[dict] = []
     try:
         from plugins.manager import plugin_manager
-        from pathlib import Path as _Path
-        from config import PLUGINS_PATH as _PP
 
         _search_q = rom.name or rom.fs_name_no_ext or ""
-
-        def _resolve_plugin_id(pid: str) -> str:
-            if _Path(_PP, pid).is_dir():
-                return pid
-            for sfx in ["-metadata", "-scraper", "-plugin"]:
-                if _Path(_PP, pid + sfx).is_dir():
-                    return pid + sfx
-            return pid
+        _resolve_plugin_id = _plugin_dir_for_provider
 
         def _tag_plugin_results(items: list, target: list) -> None:
             for r in items:
@@ -1853,6 +2283,24 @@ def _safe_download_name(name: str) -> str:
 
 # ── Clear metadata ────────────────────────────────────────────────────────────
 
+class RomLockBody(BaseModel):
+    locked: bool
+
+
+@protected_route(router.post, "/{rom_id}/lock", scopes=[Scopes.ROMS_WRITE])
+async def set_rom_lock(request: Request, rom_id: int, body: RomLockBody) -> dict:
+    """Close a ROM's metadata to everyone but an administrator, or open it.
+
+    The same field and the same rule a library game carries, so one padlock
+    behaves the same wherever the editor is opened from.
+    """
+    rom = await rom_handler.get_with_platform(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    await rom_handler.update(rom, {"metadata_locked": bool(body.locked)})
+    return {"ok": True, "metadata_locked": bool(body.locked)}
+
+
 @protected_route(router.post, "/{rom_id}/clear-metadata", scopes=[Scopes.ROMS_WRITE])
 async def clear_rom_metadata(request: Request, rom_id: int) -> dict:
     """Clear all scraped metadata for a single ROM (keeps file info + hashes)."""
@@ -2165,13 +2613,33 @@ async def removable_tracks(members) -> list[Path]:
     candidates = await asyncio.to_thread(rom_removal.unrowed_tracks, members)
     if not candidates:
         return []
+    platform_id = members[0].platform_id
     owned = await rom_handler.fs_names_with_rows(
-        members[0].platform_id, [p.name for p in candidates]
+        platform_id, [p.name for p in candidates]
     )
-    return [p for p in candidates if p.name.lower() not in owned]
+    # And the files that can never hold a row of their own. A .sbi is not a ROM
+    # extension, so the name check above never protects one - which is what made
+    # a sheet naming somebody else's subchannel file enough to delete it. The
+    # stem says which disc a file belongs to; a disc outside this set keeps it.
+    # The set's own discs are excluded, or a disc would protect its own .sbi
+    # from going with it.
+    spoken_for = await rom_handler.stems_with_rows(
+        platform_id, [p.stem for p in candidates],
+        exclude_ids=[m.id for m in members],
+    )
+    return [
+        p for p in candidates
+        if p.name.lower() not in owned and p.stem.lower() not in spoken_for
+    ]
 
 
-@protected_route(router.get, "/{rom_id}/removal", scopes=[Scopes.ROMS_WRITE])
+# The same declaration as the delete below, and the same ownership question
+# inside it: you may see what a deletion would take exactly when you could
+# perform it. It used to be admin-only, so the one screen where an uploader
+# removes their own ROMs could not ask - and asked a one-sentence question
+# instead, for an act that takes every disc of the title and every account's
+# saves for all of them.
+@protected_route(router.get, "/{rom_id}/removal", scopes=[Scopes.ROMS_READ])
 async def rom_removal_preview(request: Request, rom_id: int) -> dict:
     """What deleting this ROM would take with it.
 
@@ -2180,9 +2648,13 @@ async def rom_removal_preview(request: Request, rom_id: int) -> dict:
     several rows that only mean anything together, and the saves that go with
     them may belong to people other than whoever is looking.
     """
+    named = await rom_handler.get_by_id(rom_id)
+    if named is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
     members = await rom_handler.disk_set(rom_id)
     if not members:
         raise HTTPException(status_code=404, detail="ROM not found")
+    assert_can_delete_rom_set(request, named, members)
     states, saves = 0, 0
     for member in members:
         states += len(await save_state_handler.list_states_for_rom(member.id))
@@ -2218,7 +2690,174 @@ async def rom_removal_preview(request: Request, rom_id: int) -> dict:
     }
 
 
-@protected_route(router.delete, "/{rom_id}", scopes=[Scopes.ROMS_WRITE])
+# ── Trailer: candidates, fetch, and how the fetch is going ───────────────────
+#
+# A library game has had these three since long before a ROM did, which is what
+# the report was about: a retro game could be given a video from ScreenScraper,
+# uploaded from a file or pasted as a URL, but never FETCHED from a provider the
+# way an ordinary game can. The work is the same on both sides and now literally
+# is: the yt-dlp call lives once, in media_handler, and only the directory the
+# file lands in differs.
+
+# Both borrowed from the game route rather than retyped: a second copy of the
+# id pattern or the quality ladder is a second thing to drift.
+from endpoints.library.library_router import _VIDEO_QUALITIES, _YT_ID_RE
+
+_rom_video_jobs: dict[int, dict] = {}
+_ROM_VIDEO_JOBS_KEEP = 200
+
+
+def _remember_rom_video_job(rom_id: int, **fields) -> None:
+    job = _rom_video_jobs.setdefault(rom_id, {"rom_id": rom_id})
+    job.update(fields)
+    # Oldest first: dicts keep insertion order and a re-run re-inserts, so this
+    # drops whatever has gone longest without anybody pressing it.
+    while len(_rom_video_jobs) > _ROM_VIDEO_JOBS_KEEP:
+        _rom_video_jobs.pop(next(iter(_rom_video_jobs)))
+
+
+class RomVideoDownloadBody(BaseModel):
+    video_id: str
+    quality: str | None = "1080"
+
+
+@protected_route(router.get, "/{rom_id}/videos", scopes=[Scopes.LIBRARY_WRITE, Scopes.ROMS_READ])
+async def rom_video_options(request: Request, rom_id: int, q: str = "") -> list:
+    """Trailer candidates for a ROM, searched live by title.
+
+    A library game reads these from a stored `videos` column that its metadata
+    providers filled. A ROM has no such column and does not need one: the game
+    route searches the provider by title anyway, so the same search works here
+    with the ROM's own name. `q` overrides it, because a ROM's filename is
+    often a better search than its scraped title, and sometimes far worse.
+    """
+    rom = await rom_handler.get_by_id(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    from endpoints.library.library_router import _igdb_video_options
+
+    return await _igdb_video_options(q or rom.name or rom.fs_name_no_ext)
+
+
+@protected_route(router.post, "/{rom_id}/video/download",
+                 scopes=[Scopes.LIBRARY_WRITE, Scopes.ROMS_READ])
+async def download_rom_video(
+    request: Request, rom_id: int, body: RomVideoDownloadBody, bg: BackgroundTasks,
+) -> dict:
+    """Fetch the chosen trailer onto the server, in the background.
+
+    Into the ROM's own media directory, beside its cover and screenshots, so
+    removing that folder removes all of it. The editor polls the status route
+    below; without that it would show a spinner that never resolves.
+    """
+    rom = await rom_handler.get_with_platform(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    # An admin closing a ROM's metadata closes all of it. A media route that
+    # skipped this would be the way around the padlock.
+    assert_unlocked(request, rom)
+    if not _YT_ID_RE.match(body.video_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid video id")
+
+    quality = body.quality if body.quality in _VIDEO_QUALITIES else "1080"
+    slug = rom.platform.slug if rom.platform else "unknown"
+
+    _rom_video_jobs.pop(rom_id, None)
+    _remember_rom_video_job(rom_id, state="running", video_id=body.video_id,
+                            quality=quality, error=None, url=None)
+
+    async def _task() -> None:
+        from handler.library.media_handler import download_youtube_to
+        from handler.metadata.rom_scrape_handler import _resource_url, _rom_media_dir
+        try:
+            name, error = await download_youtube_to(
+                _rom_media_dir(slug, rom_id), body.video_id, quality,
+            )
+        except Exception:
+            # download_youtube_to swallows yt-dlp's own failures, so reaching
+            # here means our side broke. It still has to reach the editor,
+            # otherwise we are back to the silent spinner.
+            logger.exception("ROM trailer task crashed rom_id=%s", rom_id)
+            _remember_rom_video_job(rom_id, state="failed", error="failed")
+            return
+        if name:
+            url = _resource_url(slug, rom_id, name)
+            await rom_handler.update_metadata(rom_id, {"video_path": url})
+            _remember_rom_video_job(rom_id, state="done", url=url, error=None)
+        else:
+            _remember_rom_video_job(rom_id, state="failed", error=error or "failed")
+
+    bg.add_task(_task)
+    return {"started": True}
+
+
+@protected_route(router.get, "/{rom_id}/video/status",
+                 scopes=[Scopes.LIBRARY_WRITE, Scopes.ROMS_READ])
+async def rom_video_status(request: Request, rom_id: int) -> dict:
+    """How the last trailer fetch for this ROM ended.
+
+    `state` is one of running, done, failed or idle. On failure `error` carries
+    a stable code the editor turns into a sentence, because yt-dlp's own text is
+    three lines of wiki links about exporting browser cookies.
+    """
+    job = _rom_video_jobs.get(rom_id)
+    if not job:
+        return {"state": "idle"}
+    return {
+        "state":    job.get("state", "idle"),
+        "error":    job.get("error"),
+        "url":      job.get("url"),
+        "video_id": job.get("video_id"),
+        "quality":  job.get("quality"),
+    }
+
+
+@protected_route(router.post, "/{rom_id}/claim", scopes=[Scopes.ROMS_WRITE])
+async def claim_rom(request: Request, rom_id: int, from_user_id: int | None = None) -> dict:
+    """Take a ROM over from the account that fetched it.
+
+    The same three effects as claiming a game, and the same two of them happen
+    without being written: the uploader loses the delete, because that rule
+    reads the owner, and the ROM leaves their quota, because the quota is a sum
+    rather than a counter. Only the owner is written, by the shared rule, so a
+    ROM keeps the name of whoever brought it in exactly as a game does.
+    """
+    rom = await rom_handler.get_by_id(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    # Whose ROM this was, when the caller says. The screen that sends these
+    # draws a list of one account's things and then acts on it a moment later;
+    # in between, another administrator can claim one, or an upload can change
+    # hands. Without this the click takes it from whoever holds it NOW and
+    # reports success, which is the same gap the game claim beside it closed.
+    if from_user_id is not None and getattr(rom, "published_by", None) != from_user_id:
+        return {"ok": True, "id": rom_id, "skipped": True,
+                "owner_username": getattr(getattr(request.state, "user", None),
+                                          "username", None)}
+    admin = getattr(request.state, "user", None)
+    fields = claim_writes(admin_id=getattr(admin, "id", None))
+    await rom_handler.set_published_by(rom_id, fields["published_by"])
+    return {
+        "ok": True,
+        "id": rom_id,
+        "owner_username": getattr(admin, "username", None),
+    }
+
+
+# Declared against the weaker permission on purpose. An uploader may remove a
+# ROM they fetched, to undo their own bad download, and that is not a rule
+# scopes can carry: protected_route requires every scope it is given, so
+# "an admin, or else the owner" has to be settled in the handler. The
+# assert_can_delete_rom below is the other half of this declaration and the
+# two belong together.
+#
+# ROMS_READ, and nothing else. It is an emulation route, so an account with
+# emulation switched off loses it. It used to name LIBRARY_UPLOAD as well, which
+# is a GAMES permission and is not what the rule inside asks for: can_delete_rom
+# says ROMS_WRITE, or the owner. An administrator with the Games chip off is
+# still drawn the delete button - that is decided by role - and both this and
+# the preview above it could then only answer 403.
+@protected_route(router.delete, "/{rom_id}", scopes=[Scopes.ROMS_READ])
 async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) -> dict:
     """Take a ROM out of the library, and its whole set when it has one.
 
@@ -2232,9 +2871,18 @@ async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) 
     scan. That is the honest behaviour of a library that reads a directory, and
     it is why the screen asks about the file rather than deciding alone.
     """
+    named = await rom_handler.get_by_id(rom_id)
+    if named is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
     disks = await rom_handler.disk_set(rom_id)
     if not disks:
         raise HTTPException(status_code=404, detail="ROM not found")
+    # Asked about every row this is going to take, not just the first of them.
+    # It used to read disks[0] with a comment calling that "the row the caller
+    # named" - but disk_set returns the group sorted by disc number, so it is
+    # the lowest disc whichever one was asked for. Fetching disc 1 was enough to
+    # delete disc 2, its files and every account's saves for it.
+    assert_can_delete_rom_set(request, named, disks)
 
     result = rom_removal.Removal()
     # Worked out while the sheets are still on disk. Once the .cue is unlinked
@@ -2282,7 +2930,241 @@ async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) 
     return {"ok": True, **result.as_dict()}
 
 
+
+async def _take_the_bytes_too(rom_id: int, slug: str | None) -> int:
+    """Remove the files a row is about to stop being able to name. Count saves.
+
+    `rom_handler.delete` drops the row and the database cascades the savestate,
+    battery-save and play-history ROWS with it - and that is all it does. The
+    bytes stay, and they stay UNREACHABLE: the save path is keyed by the ROM's
+    autoincrement id, so a file that comes back on the next scan gets a new id
+    and a new directory, and nothing in the interface can name the old one
+    again.
+
+    `delete_rom` has done this since it was written; the two mass buttons -
+    remove-missing and apply-exclusions - called `delete` on its own, while the
+    screen promised "saves, play history, collection membership" go too.
+
+    Called BEFORE the delete, because the lists that name these files are read
+    through the row.
+    """
+    saved = 0
+    try:
+        states = await save_state_handler.list_states_for_rom(rom_id)
+        saves = await save_state_handler.list_saves_for_rom(rom_id)
+        saved = await asyncio.to_thread(rom_removal.delete_save_files, states, saves)
+        if slug:
+            await asyncio.to_thread(rom_removal.delete_media_dir, slug, rom_id)
+    except Exception:  # noqa: BLE001 - one row's files must not stop the rest
+        logger.exception("Could not remove the files behind ROM row %s", rom_id)
+    return saved
+
+
 # ── ROM Upload ────────────────────────────────────────────────────────────────
+
+def _schedule_registration(background_tasks, fs_slug: str, names: list[str],
+                           owner_id: int | None, *,
+                           new_names: list[str] | None = None,
+                           newer_than: int | None = None) -> None:
+    """Have the files that landed scanned in and stamped, after the response.
+
+    Called on the way out AND on the way out through a refusal, because bytes
+    that reached the disk have to be counted whether or not the rest of the
+    request succeeded.
+    """
+    if not names:
+        return
+    landed = list(names)
+    # Every landed name is scanned in; only names that had no row before the
+    # request may be stamped. See _stamp_uploaded.
+    stampable = set(new_names) if new_names is not None else None
+
+    async def _run():
+        from handler.roms.rom_source_handler import scan_after_write
+
+        # Tried more than once, because the scan that registers these files can
+        # be stopped by an administrator halfway - and a stopped scan takes back
+        # the rows it created, so the stamp finds nothing and the ROM ends up
+        # owned by nobody FOR EVER: the scan is owner-blind by design, so no
+        # later scan repairs it, it counts against no quota, and the account
+        # that uploaded it cannot delete it.
+        #
+        # Each call to scan_after_write registers a fresh write and waits for a
+        # scan that covers it, so a second call really does run another scan
+        # rather than returning satisfied. Bounded, because an administrator who
+        # keeps pressing Stop must not have us starting scans for ever.
+        pending = list(landed)
+        for _attempt in range(3):
+            await scan_after_write()
+            pending = await _stamp_uploaded(fs_slug, pending, owner_id, only=stampable,
+                                            newer_than=newer_than)
+            if not pending:
+                return
+        logger.warning(
+            "Uploaded ROM(s) %s still have no row after three scans; they are "
+            "owned by nobody and count against no quota",
+            ", ".join(pending),
+        )
+
+    background_tasks.add_task(_run)
+
+
+async def _stamp_uploaded(fs_slug: str, names: list[str], owner_id: int | None,
+                          *, only: set[str] | None = None,
+                          newer_than: int | None = None) -> list[str]:
+    """Record who put these files here, once a scan has made rows for them.
+
+    The scan itself is owner-blind on purpose: it re-walks the whole tree, so
+    stamping there would hand one account every ROM on the disk. This is the one
+    place that knows a particular file was put here by a particular person, so
+    this is where it is recorded - the same shape, and the same reasoning, as
+    the download path in rom_source_handler.
+
+    Only onto a row that has no owner yet, which `set_owner` enforces as well:
+    uploading over an existing file must not move it from one account to another
+    and must not undo an admin's claim.
+    """
+    if not owner_id or not names:
+        return []
+    from handler.metadata.rom_platform_map import slug_from_fs_slug
+
+    platform = await rom_platform_handler.get_by_slug(slug_from_fs_slug(fs_slug))
+    if platform is None:
+        logger.warning("Uploaded ROMs into %s but no platform row to attach them to", fs_slug)
+        return list(names)
+    shelf_dir = (Path(await _get_roms_path()) / fs_slug).resolve()
+    missing: list[str] = []
+    for name in names:
+        rom = await rom_handler.get_by_fs_name(platform.id, name)
+        if rom is None:
+            # No row yet. Usually a scan that was stopped before it reached this
+            # platform, or one that took back what it had created. Returned to
+            # the caller rather than shrugged off, so it can ask for another.
+            missing.append(name)
+            continue
+        # Only a row this upload brought into being: a name that had no row when
+        # the request arrived, whose row now carries exactly that name in exactly
+        # the folder the file was written to. Anything else is a row the upload
+        # merely landed beside - a copy under roms/, the same name in other
+        # letter case - and owning it would let this account delete a file that
+        # is not the one it sent, along with every account's saves.
+        if only is not None and name not in only:
+            continue
+        if getattr(rom, "fs_name", None) != name:
+            continue
+        if Path(str(getattr(rom, "fs_path", "") or "")).resolve() != shelf_dir:
+            continue
+        # And made after the upload asked. The scanner's rename adoption moves a
+        # new file's name and folder onto the old row of a ROM whose file went
+        # missing, and that row keeps its id - with every account's saves.
+        if newer_than is not None and int(getattr(rom, "id", 0) or 0) <= newer_than:
+            continue
+        if getattr(rom, "published_by", None) is None:
+            await rom_handler.set_owner(rom.id, owner_id)
+    return missing
+
+
+
+
+def _is_shelf_slug(slug: str) -> bool:
+    """Whether this is one shelf name, and not a way out of the ROM tree.
+
+    The upload route builds its destination as `roms_base / slug` with the slug
+    taken straight from the URL, and a slug is a path segment like any other:
+    `..` walks up, a slash makes a subtree, an empty one lands on the root.
+    Asked BEFORE the directory is made, because `mkdir(parents=True)` on a bad
+    slug has already created it by the time anything else looks.
+    """
+    if not slug or slug in (".", ".."):
+        return False
+    if "/" in slug or "\\" in slug:
+        return False
+    return Path(slug).name == slug
+
+
+def _may_replace(request, existing) -> bool:
+    """Whether this caller may write over the file that is already here.
+
+    This route asked nothing at all, so a file name was enough to destroy
+    somebody else's ROM, while the row kept their name and the bytes stayed on
+    their quota.
+
+    Replacing your own is left working: swapping a bad dump for a good one is
+    the ordinary reason to send the same name twice. The rule is `can_delete_rom`
+    itself rather than a second opinion about ownership, so this and the delete
+    button can never disagree - and an unowned row (scanned in years ago,
+    carrying other people's saves) is nobody's to overwrite.
+
+    NO ROW IS NOT NOBODY. The first version answered True for `existing is None`
+    under the name "a name that is not there yet", but the only call site sits
+    inside `if dest_path.exists()`: by then the file IS there, and a missing row
+    says the library has not catalogued it, not that the shelf is empty. Reading
+    that as free left every uncatalogued file writable by anyone who knew its
+    name - permanently so for subchannel files, which are deliberately not ROM
+    extensions and therefore never get a row from any scan.
+
+    So it is refused, on the same terms an unowned row already was: an
+    administrator may, because somebody has to be able to tidy up a shelf the
+    library never catalogued, and ROMS_WRITE is what the rest of the ROM API
+    treats as administrative. `can_delete_rom` reads the owner off the object
+    with `getattr`, so None arrives at exactly that answer without a branch.
+    """
+    from handler.library.ownership import can_delete_rom
+
+    user = getattr(request.state, "user", None)
+    scopes = getattr(request.state, "scopes", set())
+    return can_delete_rom(scopes, getattr(user, "id", None), existing)
+
+
+#: How large a subchannel file is allowed to be.
+#:
+#: These are the one kind of file admitted here that can never hold a row, so
+#: they never reach `used_bytes` and every request finds the allowance full
+#: again. Nothing bounded the size, which made the exception free storage of any
+#: size for anybody able to put a file with a ROM extension on a shelf - and
+#: that neighbour may be zero bytes long, so the price of unlocking a pair was
+#: nothing at all.
+#:
+#: A real .sbi is 452 bytes. A .sub carries 96 bytes of subchannel data per
+#: sector, and an 80 minute disc holds 360,000 sectors, so a full one is about
+#: 33 MB. 64 MB leaves that most of a doubling of room and still says no to
+#: anything that is plainly not subchannel data.
+_MAX_SUBCHANNEL_BYTES = 64 * 1024 * 1024
+
+
+def _sidecar_disc(name: str, directory):
+    """The disc this subchannel file belongs to, or None if it names none.
+
+    Returns the disc rather than a yes/no, because both questions this route
+    asks about a .sbi are really questions about that disc: whether it may be
+    admitted at all, and - since a subchannel file can never have a row of its
+    own to carry an owner - who is allowed to write over it.
+
+    Bound to a real disc on purpose. Letting .sbi and .sub through on the
+    extension alone would reopen the hole this gate exists to close: they are
+    not ROM extensions, so the scan makes no row, so nothing owns them and
+    nothing counts them. Tied to a disc, the most anybody can leave behind is
+    one .sbi and one .sub per disc they already paid for.
+
+    Matched by stem, case-insensitively, against a file the scanner would
+    recognise - the same rule as `subchannel_files_for`, so a file admitted
+    here is a file the reader will actually pick up. The disc has to BE a ROM:
+    matching any stray neighbour would let two uploads bootstrap each other.
+    """
+    if Path(name).suffix.lower() not in _scanner.SUBCHANNEL_EXTENSIONS:
+        return None
+    stem = Path(name).stem.lower()
+    try:
+        entries = list(Path(directory).iterdir())
+    except OSError:
+        return None
+    for entry in sorted(entries):
+        if (entry.is_file()
+                and entry.stem.lower() == stem
+                and entry.suffix.lstrip(".").lower() in _scanner._ROM_EXTENSIONS):
+            return entry
+    return None
+
 
 @protected_route(router.post, "/platforms/{slug}/upload", scopes=[Scopes.LIBRARY_UPLOAD, Scopes.ROMS_READ])
 async def upload_roms(
@@ -2299,12 +3181,70 @@ async def upload_roms(
     without the user having to press "Scan" manually.  Returns the list
     of saved filenames.
     """
+    # Both questions before a single byte moves, and before the directory is
+    # made: the slug comes from the URL and is used as a path segment, so `..`
+    # reaches out of the ROM tree, and a slug that is merely unknown makes a
+    # folder no scan will ever read.
+    if not _is_shelf_slug(slug):
+        raise HTTPException(status_code=400, detail="That is not a platform.")
+    # Asked of the MAP of platforms GD knows, not of the `rom_platforms` table.
+    #
+    # Those rows are written in exactly one place - the scanner's upsert - and
+    # the scan skips a platform whose folder is empty and has no rows. Meanwhile
+    # `_init_rom_dirs()` makes a folder for every known platform on first boot.
+    # A fresh install therefore has a hundred folders and no rows at all, so
+    # asking the database refused an upload to EVERY platform: the one way a
+    # person puts their first ROM on a shelf, closed by a check meant to stop a
+    # slug reaching out of the ROM tree.
+    #
+    # The map is what `/roms/platforms/known` already hands the screen, so the
+    # list the interface offers and the list this route accepts are the same
+    # one. A platform with no row yet is exactly what the screen labels "New".
+    from handler.metadata.rom_platform_map import PLATFORM_MAP, canonical_fs_slug
+
+    if slug not in PLATFORM_MAP:
+        raise HTTPException(status_code=404, detail="Platform not found")
+
+    # The folder the platform actually keeps its ROMs in, which is not always
+    # the name that arrived. Eighteen platforms answer to two or three keys -
+    # `psx` and `playstation`, `snes` and `super-nintendo` - and this route used
+    # to make a directory out of whichever one was asked for. `_init_rom_dirs`
+    # makes only the canonical one and `/roms/platforms/known` offers only the
+    # canonical one, so the second folder could only ever be created here.
+    #
+    # It is not a cosmetic duplicate. The scan walks EVERY directory under the
+    # root and upserts the platform by URL slug, so both folders resolve to one
+    # platform row, and a ROM is identified by (platform, file name) with no
+    # uniqueness constraint. So the same name sent through the alias folder does
+    # not overwrite anybody's bytes - it repoints their row at this file on the
+    # next scan, and the ownership check below never fired, because in a folder
+    # of its own the name was not there yet.
+    fs_slug = canonical_fs_slug(slug)
     roms_base = await _get_roms_path()
-    dest_dir = Path(roms_base) / slug
+    dest_dir = Path(roms_base) / fs_slug
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     saved: list[str] = []
     rejected: list[dict] = []
+    # What goes on to be scanned in and stamped. Not the same list as `saved`:
+    # a subchannel file lands on the shelf and belongs in the answer, but it can
+    # never hold a row, so putting it in the registration queue only buys three
+    # full walks of the library and a warning about a state that is intended.
+    to_register: list[str] = []
+
+    # Subchannel files last, whatever order they arrived in.
+    #
+    # One is admitted only beside the disc it names, and that disc is looked for
+    # ON THE SHELF - so in a request carrying both, whether it worked depended on
+    # which one the browser listed first. Dropping `Game.sbi` and `Game.cue`
+    # together is one action to the person doing it, and the refusal is silent:
+    # `rejected` comes back in the JSON and no screen in this project shows it.
+    # A stable sort, so nothing else about the order changes.
+    files = sorted(
+        files,
+        key=lambda u: Path(u.filename or "").suffix.lower()
+        in _scanner.SUBCHANNEL_EXTENSIONS,
+    )
 
     # Pre-resolve once so per-file scanning is cheap when disabled
     try:
@@ -2313,27 +3253,199 @@ async def upload_roms(
     except Exception:
         scan_uploads = False
 
-    actor = (request.state.user.username
-             if getattr(request.state, "user", None) else None)
+    user = getattr(request.state, "user", None)
+    actor = user.username if user else None
+
+    # The body-size middleware lets this route through with no ceiling at all,
+    # on the stated grounds that routes streaming to disk "enforce their own
+    # limit as they go". This one did not: the loop below counted nothing, so
+    # between the exemption and the empty loop there was no limit anywhere and
+    # one account could fill the volume. The ceiling is the same one the library
+    # upload uses - the per-file maximum, brought down to whatever the account
+    # has left of its quota - and it is spent across the whole request rather
+    # than per file, because ten files of a gigabyte are a ten gigabyte upload.
+    from handler.library import quota
+
+    from handler.roms.rom_source_handler import max_rom_bytes
+
+    remaining = await quota.ceiling_for(user, max_rom_bytes())
+
+    # The platform row, once, before anything is written. A shelf that has never
+    # been scanned has no row - the ordinary state of every platform until its
+    # first ROM lands - and then no name on it belongs to anybody.
+    from handler.metadata.rom_platform_map import slug_from_fs_slug
+
+    _row = await rom_platform_handler.get_by_slug(slug_from_fs_slug(fs_slug))
+    # And the newest ROM row so far, asked at the same moment for the same reason.
+    # The scan can carry an upload onto an OLD row - a ROM whose file vanished,
+    # found again under the uploaded name by its hash - and that row keeps its
+    # id. Asked here, before anything is written, and not when registration
+    # runs: by then another upload's scan may already have registered this file,
+    # and its own row would count as older than the upload.
+    newest_before = await rom_handler.max_rom_id()
+    # Names that had no row on this platform when the request arrived. Only these
+    # can become this account's; see _stamp_uploaded.
+    brought_here: list[str] = []
 
     for upload in files:
         if not upload.filename:
             continue
         safe_name = Path(upload.filename).name          # strip any directory parts
+        # Refused here rather than written and forgotten. The scan only ever
+        # registers a file whose extension it recognises, and a file with no row
+        # has no owner, so it counts against nobody's quota and can be repeated
+        # for ever - the volume fills while My uploads reads zero. Asked of the
+        # scanner's own list, so the two cannot drift apart.
+        # `Path(...).suffix`, the same question the scanner asks. It used to
+        # read the letters after the last dot, and the comment below claimed the
+        # two could not drift apart - which was false for a name that is nothing
+        # but a dot and an extension. `.iso` gave "iso" here and passed, while
+        # the scanner sees a hidden file with no suffix and never makes a row:
+        # no row, no owner, no quota, repeatable for ever. Once per extension.
+        suffix = Path(safe_name).suffix.lower()
+        recognised = suffix.lstrip(".") in _scanner._ROM_EXTENSIONS
+        # ...and the files that belong TO a disc rather than being one. A .sbi is
+        # 452 bytes of subchannel data that a PAL PlayStation disc needs to boot
+        # past its LibCrypt check; the scanner deliberately keeps these out of
+        # _ROM_EXTENSIONS, so this gate refused them - and the download path
+        # applies the same rule, which left no way at all to put one on the
+        # shelf. Admitted here only beside the disc they name, which is the same
+        # question `subchannel_files_for` asks when it goes looking for them.
+        sidecar_disc = None if recognised else _sidecar_disc(safe_name, dest_dir)
+        if sidecar_disc is not None:
+            recognised = True
+        if not recognised:
+            rejected.append({
+                "filename": safe_name,
+                "threat": None,
+                "action": "extension_not_recognised",
+            })
+            continue
         dest_path = dest_dir / safe_name
+        # Asked before the open, because "wb" truncates on the first byte and
+        # there is no undoing that. A name nobody holds is free; one somebody
+        # else holds is refused rather than silently overwritten.
+        #
+        # >>> ASKED WHETHER OR NOT A FILE SITS AT THE DESTINATION. It used to be
+        # asked only `if dest_path.exists()`, and a ROM is identified by
+        # (platform, file name) with no uniqueness: a copy under `roms/`, or the
+        # same name in other letter case - the database compares names without
+        # regard to case - is the SAME row while `exists()` here saw nothing.
+        # The file was written, the scan folded it into that row, and the stamp
+        # made the uploader the owner of a ROM carrying other accounts' saves,
+        # which the delete button then removed together with the original.
+        existing = (
+            await rom_handler.get_by_fs_name(_row.id, safe_name)
+            if _row is not None else None
+        )
+        if existing is None and sidecar_disc is None:
+            brought_here.append(safe_name)
+        if dest_path.exists() or existing is not None:
+            # A subchannel file has no row of its own and never will, so asking
+            # the database about its name can only ever answer "nobody's". It is
+            # not nobody's: it belongs to the disc it is named after, the same
+            # disc that let it through the gate two dozen lines up. So the
+            # question about a .sbi is a question about that disc's owner, which
+            # keeps replacing one exactly as hard as replacing the disc itself.
+            if existing is None and sidecar_disc is not None and _row is not None:
+                existing = await rom_handler.get_by_fs_name(
+                    _row.id, sidecar_disc.name)
+            if not _may_replace(request, existing):
+                rejected.append({
+                    "filename": safe_name,
+                    "threat": None,
+                    "action": "already_here",
+                })
+                continue
+            # And give back what this file already costs the account, because it
+            # is about to stop existing.
+            #
+            # The library upload has done this since `room_left = quota - used +
+            # replacing`, and for the reason it states there: an account whose
+            # allowance is filled by the very file it is swapping is the
+            # ordinary reason to send the same name twice. This route counted
+            # the replacement on top of the original, so a bad dump could never
+            # be swapped for a good one by anybody near their limit.
+            #
+            # Only the row for THIS file, and only if the bytes are already
+            # charged to this account. A subchannel file is governed by its
+            # DISC's row, so crediting that would hand back a whole disc's worth
+            # of room for replacing 452 bytes.
+            if (existing is not None
+                    and getattr(existing, "fs_name", None) == safe_name
+                    and getattr(existing, "published_by", None)
+                    == getattr(user, "id", None)):
+                remaining += int(getattr(existing, "fs_size_bytes", 0) or 0)
+        # Into a .part, never straight onto the destination.
+        #
+        # `open(dest_path, "wb")` truncates on the first byte, and the length of
+        # a streamed body is not known until it ends - so a replacement that
+        # turns out not to fit was discovered with the old file already emptied,
+        # and the branch below then unlinked what was left of it. An account
+        # near its limit sending a better dump of a ROM it already has lost both
+        # copies: the refusal destroyed the thing it refused to replace. Every
+        # other failure caught here - a full volume, a name the filesystem will
+        # not take, a browser that goes away - left the wreckage wearing the
+        # name of something that used to work.
+        #
+        # Same shape and same reason as the library upload, which has done this
+        # correctly since `_part_path` was written; this route never got it.
+        part_path = dest_path.with_name(dest_path.name + ".part")
         try:
-            with open(dest_path, "wb") as fh:
+            written = 0
+            with open(part_path, "wb") as fh:
                 while chunk := await upload.read(256 * 1024):
+                    written += len(chunk)
+                    # Not `if remaining and ...`. `remaining` is a byte count,
+                    # and it was doubling as the flag saying a limit applies -
+                    # so a file that consumed the budget exactly (allowed, the
+                    # refusal being "greater than") left it at zero, which is
+                    # falsy, and every later file in the same request was
+                    # written with nothing checking it. `ceiling_for` never
+                    # answers zero: it returns the install-wide ceiling when no
+                    # account limit applies and raises when there is no room, so
+                    # there is no "no limit" state for this to stand for.
+                    if written > remaining:
+                        # Stop where the limit is, and take the partial file with
+                        # us. Leaving it would cost the disk exactly what the
+                        # refusal was meant to save. The .part is all there is to
+                        # take: whatever was already on the shelf under this name
+                        # has not been touched.
+                        fh.close()
+                        part_path.unlink(missing_ok=True)
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail=(f"{safe_name} exceeds the space left for this "
+                                    f"account ({remaining} bytes)."),
+                        )
                     fh.write(chunk)
+            # Refused rather than counted, because counting it would not hold:
+            # the row that carries a charge is the one thing this file can never
+            # have. Rejected like an unrecognised extension rather than ending
+            # the whole request - the other files in it are still the right
+            # thing to do, and one oversized .sbi is a mistake, not an attack on
+            # the rest of the upload.
+            if sidecar_disc is not None and written > _MAX_SUBCHANNEL_BYTES:
+                part_path.unlink(missing_ok=True)
+                rejected.append({
+                    "filename": safe_name,
+                    "threat": None,
+                    "action": "subchannel_too_large",
+                })
+                continue
+            remaining -= written
 
             if scan_uploads:
                 try:
-                    res = await _clam.scan_file(str(dest_path))
+                    # The .part, before it takes the name. A threat never wears
+                    # the name of a real ROM even for the moment between the
+                    # write and the verdict.
+                    res = await _clam.scan_file(str(part_path))
                     note_unscanned(res, "ROM upload", safe_name)
                     if res.get("status") == "FOUND":
                         threat = res.get("threat") or "unknown"
                         action_res = await _clam.quarantine_or_delete(
-                            str(dest_path), threat, triggered_by=actor
+                            str(part_path), threat, triggered_by=actor
                         )
                         logger.warning(
                             "ClamAV blocked ROM upload '%s' (threat=%s, action=%s)",
@@ -2344,30 +3456,81 @@ async def upload_roms(
                             "threat":   threat,
                             "action":   action_res.get("action"),
                         })
+                        part_path.unlink(missing_ok=True)
                         continue
                 except Exception:
-                    logger.exception("ClamAV scan failed for %s; allowing upload", dest_path)
+                    logger.exception("ClamAV scan failed for %s; allowing upload", part_path)
 
+            # Only here does the upload take the name, and this is the one
+            # moment the file that was already there stops existing. Everything
+            # above can fail without costing anybody a ROM.
+            os.replace(part_path, dest_path)
             saved.append(safe_name)
+            if sidecar_disc is None:
+                to_register.append(safe_name)
             logger.info("ROM uploaded: %s -> %s", safe_name, dest_dir)
+        except HTTPException as refusal:
+            part_path.unlink(missing_ok=True)
+            # Our own refusal, already the right answer. Re-wrapping it as a 500
+            # below would tell the caller the server broke rather than that they
+            # ran out of room.
+            #
+            # What already landed is registered anyway. Ten files in one request
+            # and a refusal on the ninth used to leave eight on the disk with no
+            # scan behind them: no rows, so no owner, so nothing counted against
+            # the quota that had just refused them.
+            _schedule_registration(background_tasks, fs_slug, to_register, getattr(user, "id", None),
+                                   new_names=brought_here, newer_than=newest_before)
+            # RETURNED, not raised, and that is the whole of this fix.
+            #
+            # FastAPI attaches the BackgroundTasks object to the response it
+            # builds from what the endpoint RETURNS. When the endpoint raises,
+            # Starlette's exception handling builds a fresh JSONResponse with no
+            # background at all, and the task scheduled one line above is
+            # dropped - so the registration this branch exists for never ran,
+            # on the one path it was written for.
+            #
+            # The test that was meant to hold this called `await tasks()` itself,
+            # which is exactly what the server does not do here, so it stayed
+            # green over a fix that did nothing. The framework's actual behaviour
+            # is pinned in test_a_refusal_still_runs_its_background_work.py.
+            return JSONResponse(
+                {"detail": refusal.detail},
+                status_code=refusal.status_code,
+                headers=getattr(refusal, "headers", None),
+            )
         except Exception as exc:
+            # The half-written .part goes; the file that was already on the
+            # shelf under this name was never opened and stays as it was.
+            part_path.unlink(missing_ok=True)
             logger.error("Failed to save ROM %s: %s", safe_name, exc)
-            raise HTTPException(status_code=500, detail=f"Failed to save {safe_name}: {exc}")
+            # Both halves of what the refusal branch above learned, because the
+            # files that landed before this failure are in exactly the state
+            # that branch exists to prevent: on the disk, with no row, so owned
+            # by nobody and counting against no quota. Registered, and RETURNED
+            # rather than raised - FastAPI attaches background tasks only to a
+            # response the endpoint returns, so raising here would schedule the
+            # work and then throw it away.
+            _schedule_registration(background_tasks, fs_slug, to_register,
+                                   getattr(user, "id", None), new_names=brought_here, newer_than=newest_before)
+            return JSONResponse(
+                {"detail": f"Failed to save {safe_name}: {exc}"},
+                status_code=500,
+            )
 
-    # Auto-trigger scan so freshly uploaded ROMs show up in the library
-    # without requiring a manual Scan click.  If a scan is already running
-    # skip — the in-flight scan will pick up the new files anyway.
-    if saved and not _scan_lock.locked():
-        async def _post_upload_scan():
-            global _scan_running
-            async with _scan_lock:
-                _scan_running = True
-                try:
-                    await scan_roms_path(roms_base)
-                finally:
-                    _scan_running = False
-
-        background_tasks.add_task(_post_upload_scan)
+    # Auto-trigger scan so freshly uploaded ROMs show up in the library without
+    # requiring a manual Scan click, and then record who put them there.
+    #
+    # This used to skip its own scan whenever one was already running, on the
+    # grounds that the scan in flight would pick the files up. That is true of
+    # the ROWS and was never true of the OWNER, which nothing else was recording
+    # - so an upload made during a scan, and in fact every upload, belonged to
+    # nobody: it counted against no quota, and the account that made it could
+    # not delete it, because that rule reads an owner. The coalescing helper the
+    # downloader uses handles both cases: it shares one scan across a burst and
+    # waits for one that is already under way, under the same scanner lock.
+    _schedule_registration(background_tasks, fs_slug, to_register, getattr(user, "id", None),
+                           new_names=brought_here, newer_than=newest_before)
 
     return {
         "ok": True,
@@ -2382,28 +3545,83 @@ async def upload_roms(
 
 @protected_route(router.post, "/scan", scopes=[Scopes.PLATFORMS_WRITE])
 async def trigger_scan(request: Request, background_tasks: BackgroundTasks) -> dict:
-    global _scan_running
-    if _scan_lock.locked():
+    if _scanner._scan_lock.locked():
         raise HTTPException(status_code=409, detail="Scan already running")
 
     roms_path = await _get_roms_path()
 
     async def _run():
-        global _scan_running
-        async with _scan_lock:
-            _scan_running = True
+        async with _scanner._scan_lock:
+            _scanner._scan_running = True
             try:
                 await scan_roms_path(roms_path)
             finally:
-                _scan_running = False
+                _scanner._scan_running = False
 
     background_tasks.add_task(_run)
     return {"ok": True, "message": "ROM scan started", "path": roms_path}
 
 
+# The permissions the two accounts that put things in the library hold, which is
+# exactly who the progress events go to (_SCAN_WATCHERS in the scanner). It was
+# ROMS_READ, which every account holds, while the identical dict went out over
+# the socket to administrators only - so an ordinary player was handed the
+# filesystem position the socket was written to keep from them, got a progress
+# bar no event would ever advance or clear, and a Stop button beside it that
+# answered "Missing scopes".
+#
+# Wider than the scan and the stop below on purpose, and it is the only one of
+# the three that is: an uploader cannot start a scan or stop one, but an upload
+# starts one by itself and watching it is how they know their file arrived.
+# ROMS_READ alone on the decorator, and the real question a few lines down.
+#
+# Who may watch a scan is "an account that puts things in the library, or an
+# account that can run one", and `protected_route` cannot say that: it requires
+# every scope it is given, so an OR has to be settled in the handler - the same
+# shape as the ownership rules in handler/library/ownership.py.
+#
+# It used to declare LIBRARY_UPLOAD, which is a GAMES permission. Switching the
+# Games chip off for an administrator revokes it and leaves every emulation
+# permission alone, so Start and Stop went on working while the bar between them
+# answered 403 - and the composable, which asks about the ROLE, went on drawing
+# the bar and quietly swallowing the refusal.
 @protected_route(router.get, "/scan/status", scopes=[Scopes.ROMS_READ])
 async def scan_status(request: Request) -> dict:
-    return {"running": _scan_lock.locked()}
+    """Where the scan is, in one call.
+
+    Progress arrives over the socket while a scan runs, but a client that opened
+    the page halfway through has missed every event so far. This is how it
+    catches up, and it is the same shape the events carry so a view can render
+    either without a second code path.
+
+    `running` still comes from the lock rather than from the progress state: the
+    lock is what actually decides whether another scan may start, and a status
+    that disagreed with it would be a status about nothing.
+    """
+    held = set(getattr(request.state, "scopes", ()) or ())
+    if not held & {Scopes.LIBRARY_UPLOAD, Scopes.PLATFORMS_WRITE}:
+        raise HTTPException(
+            status_code=403,
+            detail="Only an account that can add to the library, or run a scan, "
+                   "may follow one.",
+        )
+    snapshot = _scanner.scan_progress()
+    snapshot["running"] = _scanner._scan_lock.locked()
+    return snapshot
+
+
+@protected_route(router.post, "/scan/stop", scopes=[Scopes.PLATFORMS_WRITE])
+async def stop_scan(request: Request) -> dict:
+    """Ask the running scan to stop between files.
+
+    Cooperative, so it takes effect at the next file rather than instantly, and
+    the scan puts the library back exactly as it was before it started - a scan
+    that did not finish makes no claim about what is missing.
+    """
+    asked = _scanner.request_scan_stop()
+    if asked:
+        logger.info("ROM scan stop requested")
+    return {"stopping": asked}
 
 
 # ── Scrape metadata ───────────────────────────────────────────────────────────
@@ -2512,6 +3730,7 @@ async def scrape_rom(
     rom = await rom_handler.get_with_platform(rom_id)
     if rom is None:
         raise HTTPException(status_code=404, detail="ROM not found")
+    assert_unlocked(request, rom)
 
     from handler.metadata.rom_scrape_handler import scrape_rom as _scrape
     platform = rom.platform
@@ -2602,6 +3821,8 @@ async def announce_rom_added(request: Request, rom_id: int) -> dict:
     rom = await rom_handler.get_with_platform(rom_id)
     if rom is None:
         raise HTTPException(status_code=404, detail="ROM not found")
+    # The padlock covers the whole window, not only its Save button.
+    assert_unlocked(request, rom)
     from handler.notifications.recently_added import announce_rom
     sent = await announce_rom(rom_id, force=True)
     return {"ok": True, "sent": sent}
@@ -2610,6 +3831,5 @@ async def announce_rom_added(request: Request, rom_id: int) -> dict:
 # ── Helper ────────────────────────────────────────────────────────────────────
 
 async def _get_roms_path() -> str:
-    from config import config_manager
-    cfg = config_manager.get_section("roms")
-    return cfg.get("library_path") or ROMS_PATH
+    from handler.filesystem.rom_paths import roms_library_path
+    return roms_library_path()

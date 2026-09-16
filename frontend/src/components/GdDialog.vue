@@ -89,11 +89,17 @@ const ticked = ref(false)
 // to the box that has to be ticked first - the next thing to do, and reachable
 // with the space bar. Landing on a disabled button instead would leave the
 // keyboard with nowhere to go.
-watch(() => dialogState.visible, async (v) => {
-  if (!v) return
+// Keyed on `seq` rather than on `visible`, because a second question can arrive
+// while the first is still up: `visible` never changes, so this never ran, and
+// the tick somebody set for the question they were reading stayed set under the
+// question that replaced it - one click from confirming something they had not
+// read. `seq` moves on every open, whether or not anything was closed first.
+watch(() => dialogState.seq, async () => {
+  if (!dialogState.visible) return
   // Reset before anything is shown: the state behind this dialog is a singleton
   // and a tick left over from the last question would arm this one on sight.
   ticked.value = false
+  imageBroken.value = false
   await nextTick()
   if (guarded.value) tickRef.value?.focus()
   else confirmBtnRef.value?.focus()
@@ -125,12 +131,41 @@ function onBackdrop() {
 function onKeydown(e: KeyboardEvent) {
   if (!dialogState.visible) return
   if (e.key === 'Escape') { e.preventDefault(); cancel() }
-  if (e.key === 'Enter')  { e.preventDefault(); confirm() }
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    // A press belongs to the question that was on screen when the key went
+    // down. Four places ask a guarded question and then an unguarded one -
+    // "delete the entry and its saves?" followed by "the files on disk too?" -
+    // and held Enter repeats about thirty times a second, so one press answered
+    // both. The second question is the one that takes bytes off the disk, and
+    // it has no tick to stop it. The dialog also cross-fades for 0.18s, so
+    // there is a window where the second question cannot be read at all.
+    if (e.repeat) return
+    if (answeredSeq === dialogState.seq) return
+    answeredSeq = dialogState.seq
+    confirm()
+  }
+}
+
+// The question this keyboard has already answered. Not a ref: nothing renders
+// it, and it has to be readable inside the handler without waiting for a tick.
+let answeredSeq = -1
+
+// A question that opens while Enter is still held is disarmed until the key
+// comes back up, so the tail of a press cannot answer it either.
+function onKeyup(e: KeyboardEvent) {
+  if (e.key === 'Enter') answeredSeq = -1
 }
 
 import { onMounted, onUnmounted } from 'vue'
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+  window.addEventListener('keyup', onKeyup)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('keyup', onKeyup)
+})
 </script>
 
 <style scoped>

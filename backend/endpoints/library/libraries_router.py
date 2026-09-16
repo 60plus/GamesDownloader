@@ -13,6 +13,7 @@ import glob
 import logging
 import os
 import re
+from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
@@ -21,8 +22,15 @@ from utils.uploads import read_upload_capped
 from config import GAMES_PATH, RESOURCES_PATH
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope as Scopes
-from handler.database.library_registry_handler import ACL_KINDS, library_registry_handler
+from handler.database.library_registry_handler import (
+    ACL_KINDS,
+    is_folder_scanned,
+    library_registry_handler,
+)
+from handler.library.catalog_sync_handler import shelf_waiting_for_its_plugin
+from handler.library.metadata_lock import assert_unlocked
 from handler.database.session import async_session_factory
+from utils.errors import safe_detail
 from models.library_game import LibraryGame
 
 logger = logging.getLogger(__name__)
@@ -99,6 +107,17 @@ def _library_to_dict(lib) -> dict:
         # a plugin store from being hand-deleted (it comes and goes with the
         # plugin) and to route its page to the catalogue view.
         "catalog_id":     getattr(lib, "catalog_id", None),
+        # Whether a folder scan ever walks this library, answered by the same
+        # function the scan itself picks its targets with. Sent rather than left
+        # for the screen to work out again from storage_folder and kind: that
+        # second copy stopped matching the moment "a plugin's shelf whose plugin
+        # is off" became part of the answer, and the screen went on offering an
+        # exclusions box for a shelf nothing walks.
+        "folder_scanned": is_folder_scanned(lib),
+        # A plugin's shelf whose plugin is not in the runtime. The switch beside
+        # it is refused while this is true, so the screen is told rather than
+        # left to draw a control the server will turn down.
+        "waiting_for_plugin": shelf_waiting_for_its_plugin(lib),
     }
 
 
@@ -149,6 +168,19 @@ async def update_library(request: Request, slug: str, body: LibraryUpdateBody) -
     """
     existing = await library_registry_handler.get_by_slug(slug)
 
+    # A plugin's shelf comes and goes with its plugin, so this switch does not
+    # get to bring one back on its own. Disabling the plugin put the shelf away
+    # and one click here used to take it out again, into the navigation, with
+    # nothing behind it. Switching it OFF by hand stays allowed: that is already
+    # the direction the plugin would take it.
+    if (body.enabled is True and existing is not None
+            and shelf_waiting_for_its_plugin(existing)):
+        raise HTTPException(
+            status_code=400,
+            detail="This shelf belongs to a plugin that is switched off. Enable "
+                   "the plugin and the shelf comes back with it.",
+        )
+
     name = body.name
     if name is not None:
         if existing is not None and existing.is_builtin:
@@ -187,6 +219,262 @@ async def update_library(request: Request, slug: str, body: LibraryUpdateBody) -
                 moved, "to" if body.adds_to_default_library else "from",
             )
     return _library_to_dict(lib)
+
+
+class LibraryExclusionsBody(BaseModel):
+    patterns: str = ""
+
+
+class LibraryExclusionsApplyBody(BaseModel):
+    """The games the person was looking at. Required, and for the same reason
+    as on the ROM side: without it the server removes whatever matches at the
+    moment of the click rather than what was confirmed."""
+
+    ids: list[int]
+
+
+def _game_folders(paths: list[str], root: str) -> list[str]:
+    """The directories the scan would have called games, worked back from files.
+
+    The scan holds a game's folder; the database holds the files inside it. The
+    two sides have to reach the same folder or they answer differently about the
+    same game, so the rule here is the one `_pending_game_dirs` applies, read
+    backwards: the first segment under the library root is the game, unless it
+    is an OS or container name, in which case the game is the segment after it.
+
+    Paths are stored relative to BASE_PATH (`games/CUSTOM/Title/x.zip` on a real
+    install) while the root is absolute, so they are joined first. Anything that
+    lands outside this library - a GOG game carried into the default library by
+    its flag, which is what nearly every game on a real server looks like -
+    contributes no folder, and a game with no folder here is left alone.
+    """
+    from config import BASE_PATH
+    from endpoints.library.library_router import _STRUCTURAL_NAMES
+
+    base = str(BASE_PATH)
+    top = str(root).replace("\\", "/").rstrip("/")
+    out: list[str] = []
+    for raw in paths:
+        # normpath, because the stored path is relative to BASE_PATH and the
+        # root comes from GAMES_PATH - two settings that need not sit inside one
+        # another (utils/paths.py says so, and a test pins it). With the library
+        # on another volume, relpath produces `../mnt/...` and a plain join
+        # leaves `/data/../mnt/...`, which never starts with the root: every
+        # game answered "outside this library" and the whole preview went quiet.
+        absolute = os.path.normpath(os.path.join(base, str(raw))).replace("\\", "/")
+        if not absolute.startswith(top + "/"):
+            return []
+        segments = absolute[len(top) + 1:].split("/")
+        # A file directly in the library root is not in a game folder at all.
+        if len(segments) < 2:
+            return []
+        depth = 2 if segments[0].lower() in _STRUCTURAL_NAMES and len(segments) > 2 else 1
+        folder = "/".join([top, *segments[:depth]])
+        if folder not in out:
+            out.append(folder)
+    return out
+
+
+def _covered_here(game: dict, patterns: list[str], root: str | None = None) -> bool:
+    """Does this library's patterns cover this game, cautiously.
+
+    The question is the one the scan asks, about the thing the scan asks it
+    about: a game is a FOLDER, and a pattern covers the game when it covers that
+    folder. Asking it file by file instead - "every file it is made of is
+    excluded" - answered differently for every shape except a folder pattern,
+    and the disagreement ran the dangerous way: `*.zip` covered every custom
+    game, so the button offered to delete the library, and the next scan added
+    them all back blank because the folders matched nothing.
+
+    Three conditions, and every one of them is a reason to leave a game alone
+    rather than a reason to remove it:
+
+    - it has files at all, because a game with none says nothing about where it
+      sits;
+    - EVERY folder it occupies is covered, because a title present in two places
+      is one game and half of it is not an answer;
+    - and no other library holds it. A pattern says "this is not a game HERE",
+      and a game somebody deliberately put on a second shelf makes that sentence
+      stop being obvious. Removing it took it off every shelf at once.
+    """
+    from handler.filesystem.exclusions import is_excluded_dir
+
+    paths = game.get("paths") or []
+    if not paths or int(game.get("libraries") or 1) > 1:
+        return False
+    folders = _game_folders(paths, str(root or ""))
+    if not folders:
+        return False
+    return all(is_excluded_dir(f, patterns, root=root) for f in folders)
+
+
+
+def _shown_path(stored: str) -> str:
+    """The path this screen puts in front of somebody, as a full one.
+
+    `LibraryFile.file_path` is stored relative to BASE_PATH, so the list under
+    the exclusions box used to read `games/CUSTOM/Doom/doom.zip`. That is a
+    perfectly reasonable thing to copy into the box above it - and it matches
+    nothing: it is neither absolute, so nothing trims it, nor relative to the
+    LIBRARY, which is what the matcher compares against. It saved without a
+    word of complaint and covered nothing for ever.
+
+    Shown absolute instead, the way the platform side already shows ROM paths.
+    An absolute path pasted as a pattern IS handled: `_made_relative` cuts it
+    down to the library root when it is saved.
+    """
+    from config import BASE_PATH
+
+    text = str(stored or "")
+    if not text or os.path.isabs(text):
+        return text
+    return os.path.normpath(os.path.join(str(BASE_PATH), text)).replace("\\", "/")
+
+
+async def _library_excluded_games(library, patterns: list[str]) -> list[dict]:
+    """Games in this library that the patterns cover.
+
+    One rule, shared by the preview and the apply: two lists built two ways is
+    how somebody confirms one thing and loses another.
+
+    What counts as covered is `_covered_here` above, and it is deliberately
+    cautious in three separate ways.
+    """
+    if not patterns:
+        return []
+    from config import GAMES_PATH
+
+    root = str(Path(GAMES_PATH) / (library.storage_folder or ""))
+    out = []
+    for game in await library_registry_handler.games_with_paths(library):
+        paths = game.get("paths") or []
+        if _covered_here(game, patterns, root):
+            out.append({"id": game["id"], "title": game["title"],
+                        "files": len(paths), "path": _shown_path(paths[0])})
+    return out
+
+
+@protected_route(router.put, "/{slug}/exclusions", scopes=[Scopes.SETTINGS_WRITE])
+async def set_library_exclusions(request: Request, slug: str, body: LibraryExclusionsBody) -> dict:
+    """Paths this library's scan is told never to look at, one per line.
+
+    Saving changes nothing that is already here; it only stops a future scan
+    adding something, which is undone by deleting the line.
+    """
+    from handler.filesystem.exclusions import parse_patterns
+
+    library = await library_registry_handler.get_by_slug(slug)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    # The folder this library is scanned from. Passed so an absolute path typed
+    # off the screen is cut down HERE, before the guard judges it - the guard
+    # and the matcher have to be looking at the same text or `<root>/*` is
+    # saved as an ordinary path and then means everything.
+    root = str(Path(GAMES_PATH) / (library.storage_folder or ""))
+    kept = parse_patterns(body.patterns, root=root)
+    # Refusing to ADD a pattern nobody would read is not the same as refusing to
+    # take one away. A library can stop being scanned - its folder taken away,
+    # its kind changed - with patterns already saved on it, and a guard on every
+    # write would strand those where nothing could reach them.
+    if kept and not is_folder_scanned(library):
+        raise HTTPException(
+            status_code=400,
+            detail="This library is not walked by a folder scan, so an "
+                   "exclusion pattern would never be read.",
+        )
+    await library_registry_handler.set_scan_exclude(slug, "\n".join(kept) or None)
+    typed = [ln.strip() for ln in (body.patterns or "").splitlines()
+             if ln.strip() and not ln.strip().startswith("#")]
+    # Asked of the parser per line, not by comparing typed text with stored
+    # text. The parser rewrites an absolute path into a relative one on the way
+    # in, so those two stopped being equal for every pattern it cuts down - and
+    # a pattern that was stored AND WORKING came back under a message saying it
+    # would have swallowed the whole library. The screen then dropped the line
+    # from the box, and the next Save really did delete it.
+    return {"patterns": kept,
+            "ignored": [ln for ln in typed if not parse_patterns(ln, root=root)]}
+
+
+@protected_route(router.get, "/{slug}/exclusions", scopes=[Scopes.SETTINGS_WRITE])
+async def get_library_exclusions(request: Request, slug: str) -> dict:
+    """What is saved, without working out what it covers - see the ROM side."""
+    from handler.filesystem.exclusions import parse_patterns
+
+    library = await library_registry_handler.get_by_slug(slug)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    return {"patterns": parse_patterns(getattr(library, "scan_exclude", None))}
+
+
+@protected_route(router.get, "/{slug}/exclusions/preview", scopes=[Scopes.SETTINGS_WRITE])
+async def preview_library_exclusions(request: Request, slug: str) -> dict:
+    """What applying the saved patterns would remove, before anything is."""
+    from handler.filesystem.exclusions import parse_patterns
+
+    library = await library_registry_handler.get_by_slug(slug)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    patterns = parse_patterns(getattr(library, "scan_exclude", None))
+    matches = await _library_excluded_games(library, patterns)
+    return {"patterns": patterns, "count": len(matches), "games": matches}
+
+
+@protected_route(router.post, "/{slug}/exclusions/apply", scopes=[Scopes.LIBRARY_ADMIN])
+async def apply_library_exclusions(
+    request: Request, slug: str, body: LibraryExclusionsApplyBody,
+) -> dict:
+    """Remove the games the saved patterns cover. Files on disk are left alone.
+
+    A different permission from saving a pattern, not a wider audience: both
+    live only in ADMIN_SCOPES. It asks for the one that governs deleting games,
+    for the same reason as on the ROM side - saving a pattern changes what a
+    future scan adds, this deletes rows and everything hanging off them.
+    """
+    from handler.filesystem.exclusions import parse_patterns
+    # No module-level singleton here, unlike most handlers - the library
+    # router builds its own.
+    from handler.database.library_handler import LibraryHandler
+
+    _lib = LibraryHandler()
+
+    library = await library_registry_handler.get_by_slug(slug)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    patterns = parse_patterns(getattr(library, "scan_exclude", None))
+    matches = await _library_excluded_games(library, patterns)
+
+    # Same rule as the ROM side: the list that was shown is an upper bound on
+    # what may go. See ExclusionsApplyBody in roms_router for why.
+    shown = set(body.ids)
+    still_matching = {entry["id"] for entry in matches}
+    to_remove = [entry for entry in matches if entry["id"] in shown]
+    skipped = sorted(shown - still_matching)
+
+    # Per row, for the same reason as the ROM side: a failure partway must not
+    # report that nothing happened when part of it already has.
+    removed = 0
+    failed: list[int] = []
+    for entry in to_remove:
+        try:
+            game = await _lib.get_by_id(entry["id"])
+            if game is None:
+                failed.append(entry["id"])
+                continue
+            await _lib.delete(game)
+            removed += 1
+        except Exception:  # noqa: BLE001 - one game must not decide the rest
+            logger.exception("Could not remove game %s in %s", entry["id"], slug)
+            failed.append(entry["id"])
+    if failed:
+        logger.warning("%d game(s) in %s could not be removed", len(failed), slug)
+    if removed:
+        logger.info("Removed %d game(s) in %s matching its scan exclusions "
+                    "(files left on disk)", removed, slug)
+    if skipped:
+        logger.info("Left %d game(s) in %s alone: they no longer match the "
+                    "saved patterns", len(skipped), slug)
+    return {"removed": removed, "games": to_remove, "skipped": skipped,
+            "failed": failed}
 
 
 @protected_route(router.post, "/{slug}/icon", scopes=[Scopes.SETTINGS_WRITE])
@@ -244,7 +532,7 @@ async def create_library(request: Request, body: LibraryCreateBody) -> dict:
         try:
             os.makedirs(os.path.join(GAMES_PATH, slug), exist_ok=True)
         except OSError as e:
-            raise HTTPException(status_code=500, detail=f"Could not create folder: {e}")
+            raise HTTPException(status_code=500, detail=safe_detail(e, request, what="Could not create folder"))
 
     user = getattr(request.state, "user", None)
     lib = await library_registry_handler.create_user_library(
@@ -271,6 +559,27 @@ async def delete_library(request: Request, slug: str) -> dict:
     return {"ok": True}
 
 
+async def _assert_may_see_game(request, game) -> None:
+    """Whether this account may be told about this game at all.
+
+    These routes name the shelves a game sits on, which is a fact about a game
+    in a library, and they answered for games in libraries the caller may not
+    see. Answered as a 404 so neither the title nor the id leaks.
+
+    One function for both of them. The read grew this check and the WRITE beside
+    it did not, so an account refused the answer could still send the change -
+    and with an empty body that change takes the shortest path through the
+    route: no collections wanted, so the game is forced back into the default
+    library and every membership row it had is deleted. One request to move a
+    game out of a restricted or a switched-off library into the public one.
+    """
+    from handler.library.visibility import membership_map, visibility_for
+
+    vis = await visibility_for(request.state.user)
+    if not vis.allows(game, (await membership_map([game.id])).get(game.id)):
+        raise HTTPException(status_code=404, detail="Game not found")
+
+
 @protected_route(router.get, "/membership/{game_id}", scopes=[Scopes.LIBRARY_READ])
 async def get_game_membership(request: Request, game_id: int) -> dict:
     """A game's default-library flag and the collection slugs it belongs to."""
@@ -278,6 +587,7 @@ async def get_game_membership(request: Request, game_id: int) -> dict:
         game = await s.get(LibraryGame, game_id)
     if game is None:
         raise HTTPException(status_code=404, detail="Game not found")
+    await _assert_may_see_game(request, game)
     member_ids = set(await library_registry_handler.get_member_library_ids(game_id))
     libraries = [
         lib.slug for lib in await library_registry_handler.get_all()
@@ -303,6 +613,12 @@ async def set_game_membership(request: Request, game_id: int, body: MembershipBo
             game = await s.get(LibraryGame, game_id)
             if game is None:
                 raise HTTPException(status_code=404, detail="Game not found")
+            # The same question the read asks, and asked before anything moves.
+            await _assert_may_see_game(request, game)
+            # Inside the transaction, before the write: the shelves a game sits
+            # on are part of what the editor's Save changes, so a lock that let
+            # them through would look broken to the first person to try it.
+            assert_unlocked(request, game)
             game.in_default_library = in_default
 
     await library_registry_handler.set_memberships(game_id, wanted_ids)

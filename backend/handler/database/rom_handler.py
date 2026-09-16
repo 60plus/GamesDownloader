@@ -65,6 +65,28 @@ class RomPlatformHandler(DBBaseHandler):
         return result.scalars().first()
 
     @begin_session
+    async def rom_counts_by_fs_slug(self, *, session: AsyncSession = None) -> dict[str, int]:
+        """How many ROM rows each platform holds, keyed by its folder name.
+
+        One query for the whole tree, asked once before the walk. A scan touches
+        a platform only when there is something to do, and "is there anything in
+        the database for this folder" is the half of that question the disk
+        cannot answer. Asking it per platform would trade a hundred pointless
+        writes for a hundred pointless reads.
+
+        Keyed by `fs_slug` because that is what a directory on disk is called;
+        several alias folders can map to one platform row, and each of them
+        needs the same answer.
+        """
+        rows = (await session.execute(
+            select(RomPlatform.fs_slug, func.count(Rom.id))
+            .select_from(RomPlatform)
+            .outerjoin(Rom, Rom.platform_id == RomPlatform.id)
+            .group_by(RomPlatform.fs_slug)
+        )).all()
+        return {fs_slug: int(n or 0) for fs_slug, n in rows}
+
+    @begin_session
     async def get_all_simple(self, *, session: AsyncSession = None) -> list[RomPlatform]:
         """Return all platform rows (no join, no filter)."""
         result = await session.execute(select(RomPlatform))
@@ -435,13 +457,24 @@ class RomHandler(DBBaseHandler):
         return found
 
     @begin_session
-    async def mark_all_missing(self, platform_id: int, *, session: AsyncSession = None) -> None:
-        """Set missing_from_fs=True for all ROMs of a platform before re-scan."""
-        await session.execute(
-            update(Rom)
-            .where(Rom.platform_id == platform_id)
-            .values(missing_from_fs=True)
-        )
+    async def mark_all_missing(self, platform_id: int | None = None, *,
+                               session: AsyncSession = None) -> None:
+        """Set missing_from_fs=True before a re-scan un-sets what it finds.
+
+        Without a platform this is the whole table, which is what the pre-pass
+        of a scan wants: it used to run this once per platform, and GD makes a
+        folder for every platform it knows, so a real install issued a hundred
+        statements to say a thing that is one statement. Every ROM belongs to a
+        platform, so "every platform's rows" and "every row" are the same set.
+
+        With a platform it is one platform, which is what the cleanup for a
+        folder that has disappeared wants, and that one must not touch the rest
+        of the library.
+        """
+        stmt = update(Rom).values(missing_from_fs=True)
+        if platform_id is not None:
+            stmt = stmt.where(Rom.platform_id == platform_id)
+        await session.execute(stmt)
 
     @begin_session
     async def clear_container_hashes(self, platform_id: int, fs_name: str, *,
@@ -651,6 +684,52 @@ class RomHandler(DBBaseHandler):
         return rom
 
     @begin_session
+    async def max_rom_id(self, *, session: AsyncSession = None) -> int:
+        """The highest ROM id so far, or 0 for an empty library.
+
+        Ids only grow, so a row with a higher id than this was made after the
+        question was asked. That is how an upload or a download tells a row it
+        brought into being from an old one the scanner carried a renamed file
+        onto - the carried-over row keeps its id, because saves key on it.
+        """
+        from sqlalchemy import func
+
+        return int((await session.execute(select(func.max(Rom.id)))).scalar() or 0)
+
+    @begin_session
+    async def set_owner(
+        self, rom_id: int, user_id: int, *, session: AsyncSession = None,
+    ) -> None:
+        """Record who brought this ROM in, once.
+
+        Owner and uploader start out the same; only a claim parts them. Written
+        only onto a row that has none, so a re-download cannot move a ROM from
+        one account to another, and cannot undo an admin taking it over.
+        """
+        rom = await session.get(Rom, rom_id)
+        if rom is None or rom.published_by is not None:
+            return
+        rom.published_by = user_id
+        rom.uploaded_by = user_id
+        await session.flush()
+
+    @begin_session
+    async def set_published_by(
+        self, rom_id: int, user_id: int, *, session: AsyncSession = None,
+    ) -> None:
+        """Move ownership, and only ownership.
+
+        Unlike set_owner this overwrites what is there - that is the whole
+        point of a claim - but it still never touches uploaded_by, so the
+        account that fetched the ROM keeps its name on it.
+        """
+        rom = await session.get(Rom, rom_id)
+        if rom is None:
+            return
+        rom.published_by = user_id
+        await session.flush()
+
+    @begin_session
     async def update_metadata(
         self,
         rom_id: int,
@@ -702,6 +781,71 @@ class RomHandler(DBBaseHandler):
             select(Rom.fs_name).where(Rom.platform_id == platform_id, Rom.fs_name.in_(names))
         )
         return {name.lower() for name in result.scalars().all()}
+
+    @begin_session
+    async def stems_with_rows(
+        self, platform_id: int, stems, *, exclude_ids=(), session: AsyncSession = None
+    ) -> set[str]:
+        """Which of *stems* name an entry of this platform, lowercased.
+
+        The sibling above asks about whole file names, which is enough for a
+        data file that could have been a row. It is not enough for the files
+        that never can be: a .sbi is not a ROM extension, so it has no row and
+        never will, and a name check therefore never protects it.
+
+        What protects it is the disc it sits beside. `Victim (Disc 1).sbi`
+        shares a stem with `Victim (Disc 1).cue`, and that IS somebody's entry -
+        so the file belongs to that disc and a sheet from another set does not
+        get to name it. Without this, uploading a .cue whose text names somebody
+        else's subchannel file and then deleting it was enough to remove theirs.
+
+        *exclude_ids* is the set being deleted. Its own discs must not count, or
+        a disc would protect its own .sbi from going with it.
+
+        THE COLUMN IS NOT THE STEM, AND IT IS NOT ONE THING EITHER.
+
+        The stems asked about come from files on a shelf, brackets and all.
+        `fs_name_no_ext` holds something else, and MEASURED ON A LIVE LIBRARY it
+        holds two different things: of 48 rows, 26 carried the name with its
+        tags stripped (`MediEvil (USA).chd` -> `MediEvil`) and 6 carried the
+        full stem (`Final Fantasy IX (Europe) (Disc 3).chd` -> the whole thing).
+        The scanner strips; something on the multi-disc path does not.
+
+        So neither comparison is right on its own. Asking for the raw stem
+        missed every stripped row - which is what the audit found - and asking
+        for the stripped stem misses every raw one, which is what I broke by
+        fixing it that way and only the measurement caught.
+
+        The column can therefore only NARROW the query, in both spellings at
+        once, and the FILE NAME settles it: that is the one value with a single
+        meaning, and it is what the caller asked about.
+        """
+        from pathlib import Path
+
+        # A private name from the scanner on purpose. Writing the rule out a
+        # second time here is how the two spellings drifted apart to begin with.
+        from handler.filesystem.rom_scanner import _strip_tags
+
+        wanted = [s for s in stems if s]
+        if not wanted:
+            return set()
+        keys: set[str] = set()
+        for stem in wanted:
+            keys.add(stem)
+            keys.add(_strip_tags(stem))
+        query = select(Rom.fs_name).where(
+            Rom.platform_id == platform_id,
+            Rom.fs_name_no_ext.in_(sorted(k for k in keys if k)),
+        )
+        if exclude_ids:
+            query = query.where(Rom.id.notin_(list(exclude_ids)))
+        result = await session.execute(query)
+        asked = {s.lower() for s in wanted}
+        return {
+            Path(fs_name).stem.lower()
+            for fs_name in result.scalars().all()
+            if fs_name and Path(fs_name).stem.lower() in asked
+        }
 
     async def _tracks_of(self, platform_id: int, fs_names, session: AsyncSession) -> list[Rom]:
         if not fs_names:
@@ -759,6 +903,314 @@ class RomHandler(DBBaseHandler):
             return []
         rom = await self._sheet_of(rom, session)
         return [rom] + await self._tracks_of(rom.platform_id, [rom.fs_name], session)
+
+    @begin_session
+    async def all_for_platform(
+        self, platform_id: int, *, session: AsyncSession = None,
+    ) -> list[dict]:
+        """Every row of this platform, unpaginated and unfiltered.
+
+        `list_for_platform` next door is for a screen: it pages, and it hides
+        missing rows and extra discs. Deciding what a set of exclusion patterns
+        covers has to see all of them - a stray file that ended up marked as an
+        extra disc, or one whose file has since gone, is exactly the kind of
+        thing somebody writes a pattern to be rid of.
+        """
+        rows = (await session.execute(
+            select(Rom.id, Rom.fs_name, Rom.fs_path, Rom.name, Rom.fs_size_bytes)
+            .where(Rom.platform_id == platform_id)
+        )).all()
+        return [
+            {"id": r.id, "fs_name": r.fs_name, "fs_path": r.fs_path,
+             "name": r.name, "size_bytes": r.fs_size_bytes}
+            for r in rows
+        ]
+
+    @begin_session
+    async def restore_present(self, ids, *, session: AsyncSession = None) -> None:
+        """Put these rows back to present, in one statement.
+
+        For a scan that was stopped partway. A scan marks everything missing on
+        the way in and un-marks what the walk finds, so abandoning it halfway
+        would leave every platform it had not reached looking empty. A scan that
+        did not finish makes no claim about what is missing: this puts back
+        exactly the snapshot it took before it started, and the next complete
+        scan decides.
+
+        One statement, because the set is potentially every row in the library
+        and putting them back one at a time is the mistake the pre-pass made.
+        """
+        wanted = list(ids)
+        if not wanted:
+            return
+        await session.execute(
+            update(Rom).where(Rom.id.in_(wanted)).values(missing_from_fs=False)
+        )
+
+    @begin_session
+    async def all_missing(self, *, session: AsyncSession = None) -> list[dict]:
+        """Every row whose file is gone, with the platform it belongs to.
+
+        Nothing else in the application returns these: every listing, count and
+        search filters them out, so a row pointing into empty space is not just
+        unimportant, it is unreachable. This is the query behind the one screen
+        that shows them.
+
+        The platform comes back with the row because the screen groups by it,
+        and asking per row would be one query per orphan on a library that has
+        just lost a drive.
+        """
+        rows = (await session.execute(
+            select(Rom.id, Rom.name, Rom.fs_name, Rom.fs_path, Rom.fs_size_bytes,
+                   RomPlatform.slug, RomPlatform.name, RomPlatform.custom_name)
+            .select_from(Rom)
+            .join(RomPlatform, RomPlatform.id == Rom.platform_id)
+            .where(Rom.missing_from_fs.is_(True))
+            .order_by(RomPlatform.name, Rom.fs_name)
+        )).all()
+        return [
+            {"id": r[0], "name": r[1], "fs_name": r[2], "fs_path": r[3],
+             "size_bytes": r[4], "platform_slug": r[5],
+             "platform_name": r[7] or r[6]}
+            for r in rows
+        ]
+
+    @begin_session
+    async def present_ids(
+        self, platform_id: int | None = None, *, session: AsyncSession = None,
+    ) -> list[int]:
+        """Rows whose file was there a moment ago. One platform, or all of them.
+
+        Read immediately before a scan marks everything missing, which is the
+        only moment the answer exists. It is what lets "gone" mean "gone during
+        this scan" rather than "gone at some point since March": a row that was
+        already missing is not evidence of a rename, and treating it as one lets
+        a file deleted months ago donate its history to an unrelated newcomer.
+
+        Without a platform it is the whole table, which is what that pre-pass
+        wants and what stops it issuing one query per platform folder.
+        """
+        stmt = select(Rom.id).where(Rom.missing_from_fs.is_(False))
+        if platform_id is not None:
+            stmt = stmt.where(Rom.platform_id == platform_id)
+        rows = (await session.execute(stmt)).all()
+        return [r.id for r in rows]
+
+    @begin_session
+    async def missing_with_hashes(
+        self, platform_ids, *, session: AsyncSession = None,
+    ) -> list[dict]:
+        """Rows whose file was not found in this scan, and that carry a digest.
+
+        The donor side of a rename. Only what the matcher needs, as plain dicts,
+        so the rule that decides a rename can be a pure function with no session
+        in it - it is the part worth testing exhaustively.
+        """
+        if not platform_ids:
+            return []
+        rows = (await session.execute(
+            select(Rom.id, Rom.platform_id, Rom.sha1_hash, Rom.fs_size_bytes,
+                   Rom.fs_extension, Rom.track_of)
+            .where(
+                Rom.platform_id.in_(list(platform_ids)),
+                Rom.missing_from_fs.is_(True),
+                Rom.sha1_hash.is_not(None),
+            )
+        )).all()
+        return [
+            {"id": r.id, "platform_id": r.platform_id, "sha1": r.sha1_hash,
+             "size": r.fs_size_bytes, "ext": r.fs_extension, "track_of": r.track_of}
+            for r in rows
+        ]
+
+    @begin_session
+    async def rows_for_matching(
+        self, rom_ids, *, session: AsyncSession = None,
+    ) -> list[dict]:
+        """The same shape as missing_with_hashes, for rows named by id.
+
+        Read back rather than remembered: the disc grouping runs after the rows
+        are written, so whether one of them turned out to be a track of a sheet
+        is not knowable at the moment it is created.
+        """
+        if not rom_ids:
+            return []
+        rows = (await session.execute(
+            select(Rom.id, Rom.platform_id, Rom.sha1_hash, Rom.fs_size_bytes,
+                   Rom.fs_extension, Rom.track_of)
+            .where(Rom.id.in_(list(rom_ids)))
+        )).all()
+        return [
+            {"id": r.id, "platform_id": r.platform_id, "sha1": r.sha1_hash,
+             "size": r.fs_size_bytes, "ext": r.fs_extension, "track_of": r.track_of}
+            for r in rows
+        ]
+
+    @begin_session
+    async def adopt_renamed(
+        self, old_id: int, new_id: int, *, session: AsyncSession = None,
+    ) -> bool:
+        """Move a renamed file onto the row that already knew the game.
+
+        The OLD row survives and the new one goes. That direction is the whole
+        point: saves, play history and collection membership all key on the rom
+        id, so keeping the new row would preserve the cover and lose everything
+        somebody actually accumulated.
+
+        What crosses over is only what describes the file - its name, where it
+        sits, how big it is, and the disc facts the grouping pass worked out
+        from the filenames earlier in this scan. The metadata stays exactly as
+        it was on the old row, because that is what is being rescued.
+        """
+        old = await session.get(Rom, old_id)
+        new = await session.get(Rom, new_id)
+        if old is None or new is None or old.id == new.id:
+            return False
+
+        for field in ("fs_name", "fs_name_no_ext", "fs_extension", "fs_path",
+                      "fs_size_bytes", "disk_group", "disk_number", "extra_disk",
+                      "save_disk_name", "track_of"):
+            setattr(old, field, getattr(new, field))
+        # Only ever filled in. The two agreed on sha1 to get here; crc and md5
+        # may be present on one side and not the other.
+        for field in ("crc_hash", "md5_hash", "sha1_hash"):
+            value = getattr(new, field, None)
+            if value and not getattr(old, field, None):
+                setattr(old, field, value)
+        old.missing_from_fs = False
+
+        await session.delete(new)
+        await session.flush()
+        return True
+
+    @begin_session
+    async def move_player_data(
+        self, from_rom_id: int, to_rom_id: int, *, session: AsyncSession = None,
+    ) -> bool:
+        """Carry saves, savestates and play history from one ROM row to another.
+
+        For the merge at the end of a scan: a renamed file arrives as a new row
+        and is folded into the row it was renamed from, which is then the one
+        that survives. The new row is deleted by that merge and everything here
+        hangs off it by `ondelete="CASCADE"`, so anything a player did against
+        it while the scan was running has to come across first.
+
+        The alternative, and what this replaces, was to abandon the merge when
+        the new row had been touched. That protected one session and gave up
+        every save from before the rename: the old row keeps `missing_from_fs`,
+        which every listing filters out, no later scan can pair it again because
+        the new name is by then already in the database, and it lands on the
+        missing-entries screen where one click removes the save FILES too.
+
+        Returns False and moves NOTHING when it cannot be done without losing
+        something. Three tables, three rules, each forced by what the schema
+        allows:
+
+          rom_plays        one row per (user, rom), and it is an aggregate -
+                           launches, seconds, a last-played stamp. Two rows for
+                           one game are the same game played twice, so they add.
+          rom_save_states  one row per (user, rom, slot), and a slot is a
+                           number. A colliding state takes the first free one
+                           rather than displacing what is already there.
+          rom_saves        ONE memory card per (user, rom). Two cards cannot
+                           become one and choosing between them would delete a
+                           save nobody was asked about, so this refuses - and
+                           the caller keeps both rows, which is a mess a person
+                           can sort out rather than a loss they cannot.
+        """
+        from models.rom_play import RomPlay
+        from models.rom_save_state import RomSave, RomSaveState
+
+        if from_rom_id == to_rom_id:
+            return True
+
+        # The blocking question first, before anything has moved. Half a move
+        # would be worse than none: the row is deleted either way.
+        cards = (await session.execute(
+            select(RomSave).where(RomSave.rom_id == from_rom_id)
+        )).scalars().all()
+        held = {
+            int(user_id) for (user_id,) in await session.execute(
+                select(RomSave.user_id).where(RomSave.rom_id == to_rom_id))
+        }
+        if any(int(card.user_id) in held for card in cards):
+            return False
+        for card in cards:
+            card.rom_id = to_rom_id
+
+        # Savestates. Slots are per person, so somebody else's slot 0 is not in
+        # the way of mine.
+        taken: dict[int, set] = {}
+        for user_id, slot in await session.execute(
+                select(RomSaveState.user_id, RomSaveState.slot)
+                .where(RomSaveState.rom_id == to_rom_id)):
+            taken.setdefault(int(user_id), set()).add(slot)
+        states = (await session.execute(
+            select(RomSaveState).where(RomSaveState.rom_id == from_rom_id)
+        )).scalars().all()
+        for state in states:
+            slots = taken.setdefault(int(state.user_id), set())
+            if state.slot in slots:
+                # Also the path a legacy row with no slot at all takes when the
+                # destination already has one: it gets a number rather than
+                # sitting on top of something.
+                free = 0
+                while free in slots:
+                    free += 1
+                state.slot = free
+            slots.add(state.slot)
+            state.rom_id = to_rom_id
+
+        # Play history, which merges by arithmetic.
+        mine = {
+            int(row.user_id): row for row in (await session.execute(
+                select(RomPlay).where(RomPlay.rom_id == to_rom_id))).scalars().all()
+        }
+        for play in (await session.execute(
+                select(RomPlay).where(RomPlay.rom_id == from_rom_id))).scalars().all():
+            kept = mine.get(int(play.user_id))
+            if kept is None:
+                play.rom_id = to_rom_id
+                continue
+            kept.play_count = (kept.play_count or 0) + (play.play_count or 0)
+            kept.seconds_played = (kept.seconds_played or 0) + (play.seconds_played or 0)
+            if play.last_played_at and (
+                    kept.last_played_at is None
+                    or play.last_played_at > kept.last_played_at):
+                kept.last_played_at = play.last_played_at
+            await session.delete(play)
+
+        await session.flush()
+        return True
+
+    @begin_session
+    async def ids_with_player_data(
+        self, rom_ids, *, session: AsyncSession = None,
+    ) -> set[int]:
+        """Of these rows, the ones somebody has already played or saved against.
+
+        Deleting a ROM row takes its savestates, memory cards and play history
+        with it by cascade, and those are the one thing here that cannot be
+        rebuilt from the disk. So anything that undoes its own work has to ask
+        this first: a row a person has touched is no longer an untouched
+        addition, whatever created it.
+
+        One query per table rather than one per row - a stopped scan can be
+        asking about thousands.
+        """
+        ids = [int(i) for i in rom_ids]
+        if not ids:
+            return set()
+        from models.rom_play import RomPlay
+        from models.rom_save_state import RomSave, RomSaveState
+
+        touched: set[int] = set()
+        for model in (RomSaveState, RomSave, RomPlay):
+            rows = await session.execute(
+                select(model.rom_id).where(model.rom_id.in_(ids)).distinct()
+            )
+            touched.update(int(r[0]) for r in rows.all() if r[0] is not None)
+        return touched
 
     @begin_session
     async def delete(self, rom_id: int, *, session: AsyncSession = None) -> bool:

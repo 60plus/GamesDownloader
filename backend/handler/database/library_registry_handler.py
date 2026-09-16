@@ -16,6 +16,62 @@ from models.library import Library, LibraryMembership, UserLibraryAccess  # noqa
 # groupings - models/collection.py). Both are user content and restrictable.
 ACL_KINDS = frozenset({"gog", "custom", "custom_lib", "collections"})
 
+# Kinds whose games come out of a folder somebody walks. GOG has a storage
+# folder too but its own sync pipeline fills it, Emulation derives its games
+# from the ROM table, and a collections container holds groupings rather than
+# files - a scan never opens any of them.
+_SCANNED_KINDS = frozenset({"custom", "custom_lib"})
+
+
+def holds_games_by_flag(library) -> bool:
+    """Does this library hold its games by the flag rather than by membership.
+
+    The built-in Games library is the default one, so a game belongs to it by
+    carrying `in_default_library` rather than by having a membership row. Every
+    other library goes through `library_membership`. The listing that draws a
+    library page branches on exactly this, keyed on the slug, and anything that
+    asks "what is in this library" has to ask the same way or it gets a
+    different library.
+
+    Measured on a live install: 41 games, zero membership rows, all 41 carried
+    by the flag. Code that knows only about membership sees an empty library
+    there and reports it as a fact.
+    """
+    return getattr(library, "slug", None) == "games"
+
+
+def is_folder_scanned(library) -> bool:
+    """Does a folder scan ever walk this library.
+
+    One place, because three of them ask: the scan itself picks its targets with
+    it, the settings that only make sense for a scanned library are refused on
+    anything else, and the exclusions screen offers a box with it. Asking the
+    same question three ways is how one copy quietly stops matching the others,
+    and the cost here is a setting that saves cleanly and then does nothing.
+
+    Switched off does not mean the same thing twice over, which is why it only
+    appears in one of the two cases below.
+
+    An ADMIN switches a library off to prepare it - fix a scrape, swap some
+    files, switch it back on ready for everybody. The scan has to keep running
+    while that happens or there is nothing to prepare with, so a disabled
+    library is still walked.
+
+    A PLUGIN'S SHELF is off because the plugin is gone from the runtime. Nothing
+    can refresh its listings or download into it, nobody chose to stage it, and
+    walking its folder only adds rows to a shelf with nothing behind it. What
+    was downloaded from it already lives in the Games library and is untouched.
+    """
+    if not (getattr(library, "storage_folder", None)
+            and getattr(library, "kind", None) in _SCANNED_KINDS):
+        return False
+    # `catalog_id` as well as `plugin_id`, because the owner column came later:
+    # a store made before it and not yet backfilled is still a plugin's shelf.
+    belongs_to_a_plugin = bool(
+        getattr(library, "plugin_id", None) or getattr(library, "catalog_id", None)
+    )
+    return not (belongs_to_a_plugin and not getattr(library, "enabled", True))
+
 # Built-in libraries seeded on first startup. Order/visuals mirror the previous
 # hard-coded home cards so the UI looks identical until an admin changes things.
 _BUILTINS = [
@@ -243,6 +299,94 @@ class LibraryRegistryHandler(DBBaseHandler):
     # ── Per-game collection membership ──────────────────────────────────────────
 
     @begin_session
+    async def set_scan_exclude(
+        self, slug: str, patterns: str | None, *, session: AsyncSession = None,
+    ) -> bool:
+        """Store this library's exclusion patterns and nothing else.
+
+        Its own method rather than a field on the general update: that one
+        writes several columns at once, so a call carrying only this would need
+        to resend the rest and would silently clear whatever it forgot.
+        """
+        library = (await session.execute(
+            select(Library).where(Library.slug == slug)
+        )).scalar_one_or_none()
+        if library is None:
+            return False
+        library.scan_exclude = patterns
+        await session.flush()
+        return True
+
+    @begin_session
+    async def games_with_paths(
+        self, library, *, session: AsyncSession = None,
+    ) -> list[dict]:
+        """Games in this library, each with the paths of the files it is made of.
+
+        A game is not one file, so deciding whether an exclusion pattern covers
+        it means looking at where its files actually sit. A game whose files are
+        all under an excluded folder is covered; one with a file outside it is
+        not, and leaving that one alone is the cautious answer.
+
+        Takes the library rather than its id because WHICH GAMES ARE IN IT is
+        not one question: the built-in Games library holds them by a flag and
+        every other library by membership. Written knowing only about
+        membership, this returned nothing at all on a real install and the
+        screen reported that as "nothing matches".
+        """
+        from models.library_file import LibraryFile
+        from models.library_game import LibraryGame
+
+        stmt = (
+            select(LibraryGame.id, LibraryGame.title, LibraryFile.file_path,
+                   LibraryGame.in_default_library)
+            .select_from(LibraryGame)
+            .outerjoin(LibraryFile, LibraryFile.library_game_id == LibraryGame.id)
+            .where(LibraryGame.is_active == True)  # noqa: E712
+        )
+        if holds_games_by_flag(library):
+            stmt = stmt.where(LibraryGame.in_default_library == True)  # noqa: E712
+        else:
+            stmt = stmt.where(LibraryGame.id.in_(
+                select(LibraryMembership.library_game_id)
+                .where(LibraryMembership.library_id == library.id)
+            ))
+        rows = (await session.execute(stmt)).all()
+
+        # A library set up to feed the default one puts every game it scans on
+        # BOTH shelves - the flag and a membership row - and that is one
+        # decision expressed twice, not a game somebody deliberately shelved
+        # twice. Counting it as two made every game in such a library score 2,
+        # the cautious rule refused anything above 1, and the removal half of
+        # the exclusions was permanently dead there while the screen reported it
+        # as "nothing already in the library matches".
+        echoes_default = bool(getattr(library, "adds_to_default_library", False))
+
+        games: dict[int, dict] = {}
+        for row in rows:
+            entry = games.setdefault(row.id, {
+                "id": row.id, "title": row.title, "paths": [],
+                # How many libraries hold this game. Counted rather than
+                # guessed, because deleting a game that somebody deliberately
+                # put on a second shelf is not what "this is not a game here"
+                # means, and the caller cannot tell the two apart without it.
+                "libraries": 1 if (row.in_default_library and not echoes_default) else 0,
+            })
+            if row.file_path:
+                entry["paths"].append(row.file_path)
+
+        if games:
+            memberships = (await session.execute(
+                select(LibraryMembership.library_game_id,
+                       func.count(LibraryMembership.library_id))
+                .where(LibraryMembership.library_game_id.in_(list(games)))
+                .group_by(LibraryMembership.library_game_id)
+            )).all()
+            for game_id, held_by in memberships:
+                games[game_id]["libraries"] += int(held_by or 0)
+        return list(games.values())
+
+    @begin_session
     async def get_member_library_ids(self, game_id: int, *, session: AsyncSession = None) -> list[int]:
         rows = (await session.execute(
             select(LibraryMembership.library_id)
@@ -311,6 +455,17 @@ class LibraryRegistryHandler(DBBaseHandler):
         from models.user import Role
         if lib is None:
             return True
+        # BEFORE the administrator bypass, and it is the only rule in this
+        # codebase that sits there. The settings screen promises that disabling
+        # a library "hides it for everyone and blocks its pages", and the owner
+        # was explicit about what everyone means: no difference between an
+        # administrator, a user, or anybody else - off is off.
+        #
+        # The way back is not through here. Settings > Libraries reads
+        # /libraries/all, which does not go through this gate, so the switch can
+        # always be flipped again.
+        if not getattr(lib, "enabled", True):
+            return False
         if getattr(user, "role", None) == Role.ADMIN:
             return True
         # A plugin store follows the same visibility rules as any other library:

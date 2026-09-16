@@ -17,15 +17,24 @@ import hashlib
 import logging
 import os
 import re
+import time
 import zlib
 from pathlib import Path
 
 from handler.database.rom_handler import rom_handler, rom_platform_handler
+from handler.filesystem.exclusions import is_excluded, parse_patterns
 from handler.metadata.rom_platform_map import PLATFORM_MAP, slug_from_fs_slug
 from utils.disk_sets import group_disks
 from utils.rom_names import region_from_name
 
 logger = logging.getLogger(__name__)
+
+#: The scheduled scan waits this long after boot before its first look, so it
+#: never competes with the work of starting up.
+_SCAN_LOOP_START_DELAY_S = 120
+#: How often to re-read the setting while the feature is switched off. Short
+#: enough that turning it on is noticed within the hour, cheap enough to ignore.
+_SCAN_LOOP_IDLE_S = 900
 
 # Common ROM extensions - anything outside this list is silently skipped
 _ROM_EXTENSIONS = {
@@ -119,6 +128,178 @@ def tracks_referenced_by(sheet: Path) -> set[str]:
             # pointing outside its own directory is not somewhere we follow.
             names.add(Path(raw.replace("\\", "/")).name.lower())
     return names
+
+
+# ── Watching a scan, and asking it to stop ───────────────────────────────────
+#
+# The whole status of a running scan used to be one boolean, polled every two
+# seconds by three views. On a shelf of disc images that is a progress bar that
+# says "yes" for two hours, with no way to change your mind.
+#
+# The state lives here rather than in the router because the walk is what knows
+# where it is, and because the periodic loop starts scans nobody clicked.
+
+_progress: dict = {
+    "running": False,
+    "cancelling": False,
+    "platform": None,
+    "platform_index": 0,
+    "platform_total": 0,
+    "files_done": 0,
+    "files_total": 0,
+    "current": None,
+}
+
+
+def scan_progress() -> dict:
+    """Where the scan is now. A copy, so a watcher cannot change it or see it
+    move under them halfway through rendering."""
+    return dict(_progress)
+
+
+def reset_scan_progress() -> None:
+    _progress.update(running=False, cancelling=False, platform=None,
+                     platform_index=0, platform_total=0,
+                     files_done=0, files_total=0, current=None)
+
+
+def begin_scan_progress(*, platform_total: int) -> None:
+    """Start counting. Clears any stop left over from the previous scan, which
+    would otherwise end this one the moment it began."""
+    reset_scan_progress()
+    _progress.update(running=True, platform_total=platform_total)
+
+
+def note_scan_platform(name: str, *, index: int, files_total: int) -> None:
+    _progress.update(platform=name, platform_index=index,
+                     files_total=files_total, files_done=0, current=None)
+
+
+def note_scan_file(name: str, *, done: int) -> None:
+    _progress.update(current=name, files_done=done)
+
+
+def request_scan_stop() -> bool:
+    """Ask a running scan to stop. False if there was nothing to ask.
+
+    Returning False rather than setting the flag anyway matters: a flag left on
+    an idle scanner is a stop request the NEXT scan would trip over.
+    """
+    if not _progress["running"]:
+        return False
+    _progress["cancelling"] = True
+    return True
+
+
+def scan_cancelled() -> bool:
+    return bool(_progress["cancelling"])
+
+
+#: How often progress may go out over the socket. A twenty thousand ROM library
+#: would otherwise emit twenty thousand events, most of them into the same
+#: hundred milliseconds, and the browser would spend the scan re-rendering
+#: instead of showing it.
+_EMIT_EVERY_S = 0.4
+_last_emit = 0.0
+
+
+#: Who has a reason to watch a scan: the accounts that put things in the
+#: library. An uploader cannot START one - that is PLATFORMS_WRITE - but an
+#: upload kicks one off by itself, and watching it is the only way to know when
+#: what they just added has appeared. Everybody else is not merely uninterested:
+#: a client outside these rooms draws a bar from the status call and then sits
+#: on the same platform for the rest of the session, because no event will ever
+#: advance or clear it.
+#:
+#: The status route declares the permissions these two roles hold, and the
+#: composable draws for the same pair. All three have to agree.
+#: Who is sent scan progress. A ROOM named for a capability, not a pair of role
+#: names: `_PERM_REVOKE` can take the upload scope off an account without
+#: touching its role, so `role:uploader` held accounts the status route refuses
+#: - a bar drawn on screen that could never be filled. socket_handler works the
+#: room out from effective scopes, and the status route asks the same sentence.
+_SCAN_WATCHERS_ROOM = "scan:watchers"
+
+
+async def _announce_scan_finished(stats: dict) -> None:
+    """Tell the watchers the scan ended, whichever way it ended.
+
+    One place, because there are two exits and only one of them used to say
+    anything. The views hang their reload on this event and the Classic sidebar
+    clears its spinner here, so the silent exit left that spinner turning until
+    somebody reloaded the page.
+
+    `stats` carries `cancelled` when it was stopped, so a screen can say so
+    instead of reporting a count from a walk that never happened.
+    """
+    reset_scan_progress()
+    try:
+        from handler.socket_handler import emit_event
+
+        await emit_event("roms:scan_complete", dict(stats), room=_SCAN_WATCHERS_ROOM)
+    except Exception:  # noqa: BLE001 - the scan is done either way
+        logger.debug("Could not emit scan completion", exc_info=True)
+
+
+async def _emit_scan_progress(*, force: bool = False) -> None:
+    """Send the current progress, at most a couple of times a second.
+
+    Never lets an error here stop a scan: this is a progress bar, and the walk
+    it describes is the part that matters.
+    """
+    global _last_emit
+    now = time.monotonic()
+    if not force and now - _last_emit < _EMIT_EVERY_S:
+        return
+    _last_emit = now
+    try:
+        from handler.socket_handler import emit_event
+
+        await emit_event("roms:scan_progress", scan_progress(), room=_SCAN_WATCHERS_ROOM)
+    except Exception:  # noqa: BLE001 - a progress bar must not end a scan
+        logger.debug("Could not emit scan progress", exc_info=True)
+
+
+def platform_has_nothing(*, files, rows) -> bool:
+    """Is there anything for a scan to do on this platform.
+
+    GD creates a folder for every platform it knows on first boot, so a typical
+    install has a hundred of them and games in a handful. Every one of them was
+    upserted and had all of its ROMs marked missing on every scan, unconditional
+    and regardless of being empty - measured at roughly four fifths of the
+    database traffic of a real scan.
+
+    "No files on disk" is NOT the condition, and getting that wrong is how a
+    library keeps claiming games that were deleted: a platform emptied of its
+    files still has rows, and marking those missing is exactly the work this
+    scan exists to do. Both have to be nothing.
+    """
+    return not files and not (rows or 0)
+
+
+def scan_dirs_for(platform_dir: Path) -> list[Path]:
+    """The directories of this platform a scan reads, in order.
+
+    Two shapes are supported on disk: ROM files sitting directly in
+    `{platform}/`, and ROM files one level down in `{platform}/roms/`. They used
+    to be an either/or - if `roms/` existed the scan looked there AND NOWHERE
+    ELSE - and that turns an ordinary directory name into a way to lose a
+    platform. A game titled "roms", an archive unpacked one level too deep, any
+    tool that makes the directory: from then on the scan reads an empty platform
+    folder, and since a scan opens by marking every row missing and relies on
+    the walk to un-mark what it finds, the whole platform reads as missing.
+    Silently.
+
+    Both are read now, so the shapes stop being mutually exclusive and a library
+    that is half one and half the other stays entirely visible. The platform
+    directory itself is always in the list, which is what makes the trap
+    impossible rather than merely unlikely.
+    """
+    dirs = [platform_dir]
+    nested = platform_dir / "roms"
+    if nested.is_dir():
+        dirs.append(nested)
+    return dirs
 
 
 def scan_candidates(scan_dir: Path) -> list[Path]:
@@ -562,6 +743,204 @@ def _compute_hashes(path: Path, hash_ceiling: int = 0) -> tuple[str, str, str]:
         return "", "", ""
 
 
+#: Never adopted, whatever their digest says. A sheet is a few hundred bytes of
+#: text naming its tracks, and generated ones come out byte-identical across
+#: different games; it is also not the game, which the disc grouping decides
+#: separately from the filenames. An .m3u is the same argument again.
+_NOT_A_GAME = {"cue", "gdi", "m3u"}
+
+#: The digest of nothing. A truncated upload, an interrupted copy or a client
+#: that dropped before its first chunk each leave a 0-byte file, and the ceiling
+#: only declines files that are too BIG - so every empty file on a platform ends
+#: up carrying this digest and a size of zero, which is a pair the rule would
+#: otherwise call a rename.
+_SHA1_OF_NOTHING = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+
+
+def adopt_renamed_files(gone: list[dict], arrived: list[dict]) -> list[tuple[int, int]]:
+    """Which vanished row is which arrival, renamed. Pairs of (old_id, new_id).
+
+    Deliberately timid. A pair has to agree on platform, digest and size, be the
+    only candidate on either side, carry a digest at all, and not be a companion
+    file. Everything else is left as two rows, because two rows is a mess a
+    person can fix and two games merged into one is not.
+
+    Each of those conditions is there for a measured reason rather than for
+    tidiness. SHA-1 equality is not identity here: an archive's digest is the
+    digest of one picked member, so two different zips sharing their largest ROM
+    match on content alone - hence the size. Blank disk images are byte-identical
+    wherever they appear. And a digest is nullable, written as `sha1_hash or
+    None`, so grouping by raw value would make every unhashed row share a key
+    with every other one, and unhashed is routine for anything over the ceiling.
+    """
+    def key(row: dict):
+        sha1 = (row.get("sha1") or "").strip()
+        if not sha1 or sha1.lower() == _SHA1_OF_NOTHING:
+            return None                       # never a shared key
+        if not row.get("size"):
+            return None                       # no size to agree on
+        if row.get("track_of"):
+            return None                       # part of a disc, not a game
+        if (row.get("ext") or "").lower().lstrip(".") in _NOT_A_GAME:
+            return None
+        return (row.get("platform_id"), sha1, row.get("size"))
+
+    def index(rows: list[dict]) -> dict:
+        out: dict = {}
+        for row in rows:
+            k = key(row)
+            if k is not None:
+                out.setdefault(k, []).append(row["id"])
+        return out
+
+    donors, takers = index(gone), index(arrived)
+    pairs = [
+        (olds[0], takers[k][0])
+        for k, olds in donors.items()
+        if len(olds) == 1 and len(takers.get(k, ())) == 1
+    ]
+    return sorted(pairs)
+
+
+async def _renames_this_run(created_ids, present_before, seen_platform_ids) -> list[tuple[int, int]]:
+    """The (vanished row, new row) pairs this run would merge, and nothing else.
+
+    Two callers now, and they have to agree: the ordinary exit merges these, and
+    the failure exit takes back exactly the new rows in them - because a row
+    with a donor is the only kind a later scan cannot make again.
+
+    THE FILTER GOES ON THE RESULT, NOT ON THE INPUT. `adopt_renamed_files`
+    refuses a pair unless it is the only candidate on either side, and its
+    docstring says why: SHA-1 equality is not identity, so two arrivals sharing
+    a key are two rows a person can sort out and one merge that would be a
+    guess. Handing it a list already thinned of rows somebody had played turned
+    a two-candidate key into a one-candidate key the moment anyone touched one
+    of them, and the guess was then made. So the full list decides the match,
+    and the guard drops the pairs it lands on afterwards.
+    """
+    if not created_ids:
+        return []
+    donors = [
+        row for row in await rom_handler.missing_with_hashes(seen_platform_ids)
+        if row["id"] in present_before
+    ]
+    if not donors:
+        return []
+    pairs = adopt_renamed_files(
+        donors, await rom_handler.rows_for_matching(list(created_ids)),
+    )
+    return pairs
+
+
+async def _merge_renamed(pairs: list[tuple[int, int]], touched=frozenset()) -> int:
+    """Apply the pairs, oldest row kept. Returns how many were merged.
+
+    Adoption moves the file fields onto the donor and DELETES the row it took
+    them from, and rom_saves / rom_save_states / rom_plays hang off that row by
+    cascade. A scan of a large library runs for many minutes with every new row
+    visible and playable the moment it lands, so somebody can have played and
+    saved against one before the walk finished.
+
+    That used to abandon the merge, which reads as caution and is not: the old
+    row keeps `missing_from_fs` and is then invisible to every listing, no later
+    scan can pair it - the new name is already in the database, so it never
+    enters `created_ids` again - and it lands on the missing-entries screen,
+    where one click removes the save files as well. One session was protected by
+    giving up every save from before the rename.
+
+    So the data comes across first. `move_player_data` refuses, and moves
+    nothing, when carrying it over would mean choosing between two memory cards
+    for the same person; the pair is then left as two rows, which is a mess
+    somebody can sort out rather than a save nobody was asked about.
+    """
+    merged = 0
+    for old_id, new_id in pairs:
+        if new_id in touched and not await rom_handler.move_player_data(new_id, old_id):
+            logger.info(
+                "Row %d looks like row %d renamed, but both hold a memory card "
+                "for the same account, so they are left as two entries.",
+                new_id, old_id,
+            )
+            continue
+        if await rom_handler.adopt_renamed(old_id, new_id):
+            merged += 1
+            logger.info(
+                "A file was renamed rather than replaced: row %d keeps its "
+                "metadata, saves and play history, and row %d is dropped.",
+                old_id, new_id,
+            )
+    return merged
+
+
+# ── One scan at a time, and optionally on a timer ────────────────────────────
+#
+# The lock used to live in the ROM router, and a handler two directories away
+# reached across into it to borrow it. It guards scanning, so it lives with the
+# scanner and everybody shares the one. Two locks would be no lock: a timed scan
+# running beside a manual one gives two passes marking rows missing and clearing
+# them in each other's shadow, which is exactly the bug the comment above
+# mark_all_missing records having been fixed once already.
+_scan_lock = asyncio.Lock()
+_scan_running = False   # read-only status flag, set under the lock
+
+#: Key inside the "roms" config section - the same section the ROM settings
+#: screen writes, and NOT the database config table the other loops read. Those
+#: are two different stores, and putting the field on one while the loop reads
+#: the other is a switch that does nothing.
+SCAN_INTERVAL_KEY = "scan_interval_hours"
+
+
+def resolve_scan_interval_hours(raw) -> int:
+    """Hours between automatic scans, or 0 for off.
+
+    Off is the reading of anything that cannot be acted on, including a typo and
+    a negative number. A scan walks every platform directory and hashes what it
+    has not seen, so starting one because a setting was mistyped is worse than
+    doing nothing.
+    """
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+async def periodic_scan_loop() -> None:
+    """Re-scan the ROM tree on a timer, when somebody has asked for one.
+
+    Off unless configured, and the setting is read on every turn so switching it
+    on takes effect without a restart. A scan already in progress means this turn
+    is skipped rather than queued: a timer that fell behind should not spend the
+    night running the scans it missed, one after another.
+    """
+    from config import ROMS_PATH, config_manager
+
+    global _scan_running
+    await asyncio.sleep(_SCAN_LOOP_START_DELAY_S)
+    while True:
+        try:
+            hours = resolve_scan_interval_hours(
+                config_manager.get_section("roms").get(SCAN_INTERVAL_KEY)
+            )
+            if hours > 0 and not _scan_lock.locked():
+                async with _scan_lock:
+                    _scan_running = True
+                    try:
+                        logger.info("Starting the scheduled ROM scan")
+                        await scan_roms_path(ROMS_PATH)
+                    finally:
+                        _scan_running = False
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # One bad scan must not end the timer. Ending quietly would look
+            # exactly like the setting never having worked.
+            logger.exception("Scheduled ROM scan failed; the next one will try again")
+        # Off still means waiting rather than finishing, or turning it on later
+        # would do nothing until a restart and the setting would look broken.
+        await asyncio.sleep(_SCAN_LOOP_IDLE_S if hours <= 0 else hours * 3600)
+
+
 async def scan_roms_path(roms_path: str) -> dict:
     """
     Walk *roms_path*, detect platforms and ROMs, upsert into DB.
@@ -571,8 +950,17 @@ async def scan_roms_path(roms_path: str) -> dict:
     """
     root = Path(roms_path)
     if not root.exists():
+        # Announced like any other ending, and carrying why. This exit is the
+        # likeliest one on a real install - an unmounted drive, a typo in
+        # Settings > ROMs - and it used to return in silence: the request
+        # answered 200, no completion event was ever emitted, and the indicator
+        # sat on "Starting the scan..." for the life of the page with the only
+        # explanation in the server log.
         logger.warning("ROM path does not exist: %s", roms_path)
-        return {"platforms_found": 0, "roms_found": 0, "roms_new": 0, "roms_updated": 0}
+        stats = {"platforms_found": 0, "roms_found": 0, "roms_new": 0,
+                 "roms_updated": 0, "error": "path_missing"}
+        await _announce_scan_finished(stats)
+        return stats
 
     stats = {"platforms_found": 0, "roms_found": 0, "roms_new": 0, "roms_updated": 0}
 
@@ -588,183 +976,462 @@ async def scan_roms_path(roms_path: str) -> dict:
     # super-nintendo-entertainment-system).  Marking missing inside the loop
     # caused the last-processed empty alias dir to silently re-mark ROMs that
     # the earlier, populated alias had just found.
-    for p in await rom_platform_handler.get_all_simple():
-        await rom_handler.mark_all_missing(p.id)
+    # What was on disk when the scan began. Taken BEFORE everything is marked
+    # missing, because that is the only moment the distinction exists - and it
+    # is the distinction the whole rename rule rests on. Without it "missing at
+    # the end" also means "deleted last January", so a file gone for months is
+    # the only candidate on its side and the uniqueness rule waves through a
+    # brand new game that happens to share its content.
+    #
+    # Both questions are table-wide, and asking them table-wide is two
+    # statements whatever the platform count. Asked per platform they were two
+    # HUNDRED and fourteen on a real install, of which a hundred and ninety two
+    # were for platform folders holding nothing.
+    present_before: set[int] = set(await rom_handler.present_ids())
+    await rom_handler.mark_all_missing()
 
-    for platform_dir in sorted(root.iterdir()):
-        if not platform_dir.is_dir():
-            continue
+    # EVERYTHING BELOW RUNS WITH THE WHOLE LIBRARY MARKED MISSING, so any way
+    # out of it other than the walk finishing has to put that back. A restart,
+    # a mount that goes away, one database error among the thousands of
+    # independent per-row writes: without this the rows the walk had not
+    # reached stay flagged, every listing filters them out, and the library
+    # goes dark with nothing to say why. The cancelled path already knew this
+    # and did it; the exception path did not exist.
+    # Bound before the `try`, not inside it: the failure handler takes these rows
+    # back, and an exception raised between the `try` and the assignment would
+    # otherwise turn a scan failure into a NameError from the handler meant to
+    # clean up after it.
+    created_ids: list[int] = []
+    # Bound out here for the same reason, and it earned the move: the failure
+    # handler asks which of the created rows a rename would have taken, and that
+    # question is per platform. Left inside the `try` it would raise NameError
+    # from the handler for any failure that happened before the first platform.
+    seen_platform_ids: set[int] = set()
+    try:
 
-        fs_slug = platform_dir.name
-        slug = slug_from_fs_slug(fs_slug)
-        info = PLATFORM_MAP.get(fs_slug, {})
-        display_name = info.get("name", fs_slug.upper())
+        # Rows this scan itself created, and only those. The delete at the end of a
+        # rename is the first row deletion a scan has ever performed, so what it may
+        # reach has to be exact: the tempting substitute, "rows that are not
+        # missing", would put a row somebody has been playing for months inside it.
+        # Ids only. The disc grouping later in the loop decides which of these is a
+        # track of a sheet, so what a row IS cannot be known at the moment it is
+        # written - it is read back once the walk is over.
+        #: (platform_id, assignments) held back until the walk finishes. See the
+        #: comment where they are collected: grouping edits rows that were here
+        #: before this scan, so a run that does not finish must not have done it.
+        pending_groups: list[tuple] = []
 
-        # Upsert platform (aliased fs_slugs reuse the existing row by slug)
-        platform = await rom_platform_handler.upsert(fs_slug, slug, display_name)
-        stats["platforms_found"] += 1
+        # One query for the whole tree. It is the half of "is there anything to do
+        # here" that the disk cannot answer: a folder emptied of its files still has
+        # rows, and marking those missing is the work this scan exists to do.
+        known_counts = await rom_platform_handler.rom_counts_by_fs_slug()
 
-        # Support both structure A (roms directly) and B (roms/ subdir)
-        roms_subdir = platform_dir / "roms"
-        scan_dir = roms_subdir if roms_subdir.is_dir() else platform_dir
+        platform_dirs = [d for d in sorted(root.iterdir()) if d.is_dir()]
+        begin_scan_progress(platform_total=len(platform_dirs))
+        await _emit_scan_progress()
 
-        # Walk ROM files
-        try:
-            rom_files = scan_candidates(scan_dir)
-        except PermissionError as e:
-            logger.warning("Permission error reading %s: %s", scan_dir, e)
-            continue
+        for platform_index, platform_dir in enumerate(platform_dirs, start=1):
+            # Asked between platforms as well as between files, so a stop lands
+            # promptly even on a shelf of empty folders.
+            if scan_cancelled():
+                break
 
-        for rom_file in rom_files:
-            stats["roms_found"] += 1
-            fs_name = rom_file.name
-            fs_name_no_ext = _strip_tags(rom_file.stem)
-            fs_extension = rom_file.suffix.lstrip(".")
-            fs_path = str(rom_file.parent)
-            try:
-                fs_size = rom_file.stat().st_size
-            except OSError:
-                fs_size = 0
+            fs_slug = platform_dir.name
+            slug = slug_from_fs_slug(fs_slug)
+            info = PLATFORM_MAP.get(fs_slug, {})
+            display_name = info.get("name", fs_slug.upper())
 
-            existing = await rom_handler.get_by_fs_name(platform.id, fs_name)
-            loop = asyncio.get_running_loop()
-            # A CHD hashed under the old scheme carries a CRC of its compressed
-            # container, and this format no longer produces one at all. A CRC on
-            # a CHD therefore means the row predates the fix and holds digests
-            # that match nothing, so it is redone and the stale values cleared.
-            stale_chd = (
-                existing is not None
-                and fs_extension.lower() == "chd"
-                and bool(existing.crc_hash)
-            )
-            # Too large to read for a hash, if a ceiling is set at all. A CHD is
-            # exempt: its digest comes out of its own header, not out of the
-            # file. Whatever the row already has is kept - the ceiling declines
-            # to spend the read, it does not throw away an answer.
-            too_big = skip_hashing(fs_size, fs_extension, hash_ceiling)
-            drop_stale_hashes = False
-            if too_big and str(rom_file) not in _unhashed_by_ceiling:
-                _unhashed_by_ceiling.add(str(rom_file))
-                logger.info(
-                    "%s is larger than the %d byte hashing ceiling, so it was not "
-                    "read to hash it. Ask for its checksums from its own page if "
-                    "you want it identified by hash.", fs_name, hash_ceiling,
-                )
-
-            if existing is None:
-                stats["roms_new"] += 1
-                if too_big:
-                    crc_hash = md5_hash = sha1_hash = ""
-                else:
-                    crc_hash, md5_hash, sha1_hash = await loop.run_in_executor(
-                        None, _compute_hashes, rom_file, hash_ceiling
-                    )
-                    logger.debug("Hashed %s  CRC=%s  MD5=%s  SHA1=%s", fs_name, crc_hash, md5_hash, sha1_hash[:8])
-            else:
-                stats["roms_updated"] += 1
-                changed_on_disk = existing.fs_size_bytes != fs_size
-                needs_hashing = (
-                    changed_on_disk
-                    or not _has_hashes(existing)
-                    or stale_chd
-                )
-                if needs_hashing and not too_big:
-                    crc_hash, md5_hash, sha1_hash = await loop.run_in_executor(
-                        None, _compute_hashes, rom_file, hash_ceiling
-                    )
-                    logger.debug("Re-hashed %s  CRC=%s  MD5=%s  SHA1=%s", fs_name, crc_hash, md5_hash, sha1_hash[:8])
-                elif changed_on_disk:
-                    # Over the ceiling AND a different file from the one those
-                    # digests describe. Keeping them would be worse than having
-                    # none: the scraper stops matching on filename the moment a
-                    # hash exists, so the ROM would be confidently identified as
-                    # whatever used to sit here. And nothing would ever repair
-                    # it, because the size test that spotted the change only
-                    # fires once - the row is about to be written with the new
-                    # size. Drop them and let the page offer to compute them.
-                    crc_hash = md5_hash = sha1_hash = ""
-                    drop_stale_hashes = True
-                else:
-                    crc_hash = existing.crc_hash
-                    md5_hash = existing.md5_hash or ""
-                    sha1_hash = getattr(existing, "sha1_hash", None) or ""
-
-            await rom_handler.upsert(
-                platform_id=platform.id,
-                fs_name=fs_name,
-                fs_name_no_ext=fs_name_no_ext,
-                fs_extension=fs_extension,
-                fs_path=fs_path,
-                fs_size_bytes=fs_size,
-                crc_hash=crc_hash,
-                md5_hash=md5_hash,
-                sha1_hash=sha1_hash,
-                # The filename usually says. Until now only the remote-source
-                # browser read it, so a ROM the scraper did not recognise ended
-                # up with no region at all while it was written on the file.
-                region_hint=region_from_name(fs_name),
-            )
-
-            # The upsert above writes a hash only when it has one, so it cannot
-            # express "this format has no container digest" and the old values
-            # would survive to be offered to the scraper again. This runs once
-            # per affected row: afterwards there is no CRC and nothing is stale.
+            # Both supported shapes, read as a union rather than as an either/or -
+            # see scan_dirs_for for what the either/or cost. Kept per directory as
+            # well as flattened, because which files belong to one disc set is a
+            # question about ONE directory listing and must not be asked across two.
             #
-            # A CHD older than v5 leaves nothing to replace them with, so its
-            # container SHA-1 goes too. It described the compression, and the
-            # scraper is better told nothing than told that.
-            if drop_stale_hashes:
-                await rom_handler.clear_container_hashes(
-                    platform.id, fs_name, drop_sha1=True
-                )
-                logger.info(
-                    "%s changed on disk and is over the hashing ceiling, so its "
-                    "old checksums were dropped rather than left describing a "
-                    "file that is no longer there.", fs_name,
-                )
-            elif stale_chd and not crc_hash:
-                await rom_handler.clear_container_hashes(
-                    platform.id, fs_name, drop_sha1=not sha1_hash
-                )
-                logger.info(
-                    "Cleared container hashes on %s, %s", fs_name,
-                    "now identified by its header" if sha1_hash
-                    else "which carries no source hash to identify it by",
-                )
+            # Read BEFORE the platform is touched, so a folder with nothing in it and
+            # nothing in the database costs one directory listing instead of a row
+            # upsert and a bulk update. GD makes a folder for every platform it knows,
+            # so most installs walk a hundred of these and keep games in a handful.
+            rom_files: list[Path] = []
+            files_by_dir: list[list[Path]] = []
+            excluded_files: set[Path] = set()
+            for scan_dir in scan_dirs_for(platform_dir):
+                try:
+                    here = scan_candidates(scan_dir)
+                except PermissionError as e:
+                    logger.warning("Permission error reading %s: %s", scan_dir, e)
+                    continue
+                if here:
+                    files_by_dir.append(here)
+                    rom_files.extend(here)
 
-        # ── Multi-disk sets and disc tracks ──────────────────────────────────
-        # Which files belong together can only be decided once the whole
-        # directory has been seen: disk 1 is not part of a set until disk 2
-        # shows up beside it. The lowest-numbered disk stands for the game and
-        # the rest are marked extra, which is what the library listings filter
-        # on - the files stay, they simply stop appearing as separate games.
-        assignments = plan_disk_assignments(rom_files)
+            if platform_has_nothing(files=rom_files, rows=known_counts.get(fs_slug)):
+                continue
 
-        if rom_files:
-            await rom_handler.apply_disk_groups(platform.id, assignments)
+            # Upsert platform (aliased fs_slugs reuse the existing row by slug)
+            platform = await rom_platform_handler.upsert(fs_slug, slug, display_name)
+            stats["platforms_found"] += 1
+            seen_platform_ids.add(platform.id)
 
-        sets = len({group for group, _n, _e, _t in assignments.values() if group})
-        tracks = sum(1 for _g, _n, _e, sheet in assignments.values() if sheet)
+            # `display_name` rather than a field off the row: it is already worked
+            # out above, and reading more of the platform than the walk needs is how
+            # this function grows a dependency on whatever the row happens to carry.
+            note_scan_platform(display_name, index=platform_index,
+                               files_total=len(rom_files))
+            await _emit_scan_progress()
+
+            # What this platform was told never to look at. Read once per platform
+            # rather than per file, and only ever used to decline to ADD something.
+            excludes = parse_patterns(getattr(platform, "scan_exclude", None))
+
+            for file_index, rom_file in enumerate(rom_files, start=1):
+                if scan_cancelled():
+                    break
+                note_scan_file(rom_file.name, done=file_index)
+                await _emit_scan_progress()
+
+                stats["roms_found"] += 1
+                fs_name = rom_file.name
+                fs_name_no_ext = _strip_tags(rom_file.stem)
+                fs_extension = rom_file.suffix.lstrip(".")
+                fs_path = str(rom_file.parent)
+                try:
+                    fs_size = rom_file.stat().st_size
+                except OSError:
+                    fs_size = 0
+
+                existing = await rom_handler.get_by_fs_name(platform.id, fs_name)
+
+                # Deliberately AFTER the lookup, and only for something that is not
+                # here yet. Filtering the directory listing instead would mean an
+                # excluded file that already has a row is never seen by the scan, so
+                # the row would be left marked missing - a pattern quietly deleting
+                # part of the library, which is exactly what must not happen without
+                # somebody being asked. Removing what already slipped in is a
+                # separate and deliberate act.
+                if existing is None and excludes and is_excluded(
+                        str(rom_file), excludes, root=str(platform_dir)):
+                    stats["roms_excluded"] = stats.get("roms_excluded", 0) + 1
+                    # Remembered, because the disc grouping below is decided from
+                    # the directory listing and a file that is not in the library
+                    # must not shape the sets around it. Excluding
+                    # "Game (Disc 2).chd" otherwise left "Game (Disc 1).chd" filed
+                    # as disc one of a set whose second disc does not exist.
+                    excluded_files.add(rom_file)
+                    continue
+
+                loop = asyncio.get_running_loop()
+                # A CHD hashed under the old scheme carries a CRC of its compressed
+                # container, and this format no longer produces one at all. A CRC on
+                # a CHD therefore means the row predates the fix and holds digests
+                # that match nothing, so it is redone and the stale values cleared.
+                stale_chd = (
+                    existing is not None
+                    and fs_extension.lower() == "chd"
+                    and bool(existing.crc_hash)
+                )
+                # Too large to read for a hash, if a ceiling is set at all. A CHD is
+                # exempt: its digest comes out of its own header, not out of the
+                # file. Whatever the row already has is kept - the ceiling declines
+                # to spend the read, it does not throw away an answer.
+                too_big = skip_hashing(fs_size, fs_extension, hash_ceiling)
+                drop_stale_hashes = False
+                if too_big and str(rom_file) not in _unhashed_by_ceiling:
+                    _unhashed_by_ceiling.add(str(rom_file))
+                    logger.info(
+                        "%s is larger than the %d byte hashing ceiling, so it was not "
+                        "read to hash it. Ask for its checksums from its own page if "
+                        "you want it identified by hash.", fs_name, hash_ceiling,
+                    )
+
+                # A file of no size has nothing to hash, and the digest of nothing
+                # is the same for every one of them. Treated like a file over the
+                # ceiling: no digest rather than a meaningless one.
+                empty = fs_size == 0
+                if existing is None:
+                    stats["roms_new"] += 1
+                    if too_big or empty:
+                        crc_hash = md5_hash = sha1_hash = ""
+                    else:
+                        crc_hash, md5_hash, sha1_hash = await loop.run_in_executor(
+                            None, _compute_hashes, rom_file, hash_ceiling
+                        )
+                        logger.debug("Hashed %s  CRC=%s  MD5=%s  SHA1=%s", fs_name, crc_hash, md5_hash, sha1_hash[:8])
+                else:
+                    stats["roms_updated"] += 1
+                    changed_on_disk = existing.fs_size_bytes != fs_size
+                    needs_hashing = (
+                        changed_on_disk
+                        or not _has_hashes(existing)
+                        or stale_chd
+                    )
+                    if empty:
+                        # It shrank to nothing. Whatever digests the row holds
+                        # describe a file that is no longer there, so they go rather
+                        # than being replaced with the digest of nothing.
+                        crc_hash = md5_hash = sha1_hash = ""
+                        drop_stale_hashes = True
+                    elif needs_hashing and not too_big:
+                        crc_hash, md5_hash, sha1_hash = await loop.run_in_executor(
+                            None, _compute_hashes, rom_file, hash_ceiling
+                        )
+                        logger.debug("Re-hashed %s  CRC=%s  MD5=%s  SHA1=%s", fs_name, crc_hash, md5_hash, sha1_hash[:8])
+                    elif changed_on_disk:
+                        # Over the ceiling AND a different file from the one those
+                        # digests describe. Keeping them would be worse than having
+                        # none: the scraper stops matching on filename the moment a
+                        # hash exists, so the ROM would be confidently identified as
+                        # whatever used to sit here. And nothing would ever repair
+                        # it, because the size test that spotted the change only
+                        # fires once - the row is about to be written with the new
+                        # size. Drop them and let the page offer to compute them.
+                        crc_hash = md5_hash = sha1_hash = ""
+                        drop_stale_hashes = True
+                    else:
+                        crc_hash = existing.crc_hash
+                        md5_hash = existing.md5_hash or ""
+                        sha1_hash = getattr(existing, "sha1_hash", None) or ""
+
+                written = await rom_handler.upsert(
+                    platform_id=platform.id,
+                    fs_name=fs_name,
+                    fs_name_no_ext=fs_name_no_ext,
+                    fs_extension=fs_extension,
+                    fs_path=fs_path,
+                    fs_size_bytes=fs_size,
+                    crc_hash=crc_hash,
+                    md5_hash=md5_hash,
+                    sha1_hash=sha1_hash,
+                    # The filename usually says. Until now only the remote-source
+                    # browser read it, so a ROM the scraper did not recognise ended
+                    # up with no region at all while it was written on the file.
+                    region_hint=region_from_name(fs_name),
+                )
+                if existing is None and written is not None:
+                    created_ids.append(written.id)
+
+                # The upsert above writes a hash only when it has one, so it cannot
+                # express "this format has no container digest" and the old values
+                # would survive to be offered to the scraper again. This runs once
+                # per affected row: afterwards there is no CRC and nothing is stale.
+                #
+                # A CHD older than v5 leaves nothing to replace them with, so its
+                # container SHA-1 goes too. It described the compression, and the
+                # scraper is better told nothing than told that.
+                if drop_stale_hashes:
+                    await rom_handler.clear_container_hashes(
+                        platform.id, fs_name, drop_sha1=True
+                    )
+                    logger.info(
+                        "%s changed on disk and is over the hashing ceiling, so its "
+                        "old checksums were dropped rather than left describing a "
+                        "file that is no longer there.", fs_name,
+                    )
+                elif stale_chd and not crc_hash:
+                    await rom_handler.clear_container_hashes(
+                        platform.id, fs_name, drop_sha1=not sha1_hash
+                    )
+                    logger.info(
+                        "Cleared container hashes on %s, %s", fs_name,
+                        "now identified by its header" if sha1_hash
+                        else "which carries no source hash to identify it by",
+                    )
+
+            # ── Multi-disk sets and disc tracks ──────────────────────────────────
+            # Which files belong together can only be decided once the whole
+            # directory has been seen: disk 1 is not part of a set until disk 2
+            # shows up beside it. The lowest-numbered disk stands for the game and
+            # the rest are marked extra, which is what the library listings filter
+            # on - the files stay, they simply stop appearing as separate games.
+            # Per directory, then merged. A .cue in the platform folder must not
+            # claim a track file that lives in roms/ beside it: the two are separate
+            # layouts, and grouping across them would fold unrelated files into one
+            # disc set.
+            assignments: dict = {}
+            for here in files_by_dir:
+                kept = [f for f in here if f not in excluded_files]
+                assignments.update(plan_disk_assignments(kept))
+
+            # Held until the walk is over rather than written per platform. A
+            # stopped scan puts back what it changed, and grouping is a change
+            # to rows that were ALREADY HERE: a disc found now can mark a disc
+            # found last year as an extra, which the listings filter out. Undone
+            # halfway, that game is simply gone from the library with nothing
+            # deleted. Applied at the end, a stopped scan never touched it.
+            if rom_files:
+                pending_groups.append((platform.id, assignments))
+
+            sets = len({group for group, _n, _e, _t in assignments.values() if group})
+            tracks = sum(1 for _g, _n, _e, sheet in assignments.values() if sheet)
+            logger.info(
+                "Scanned platform %s - %d ROM(s) found%s%s",
+                fs_slug, len(rom_files),
+                f", {sets} multi-disk title(s)" if sets else "",
+                f", {tracks} track file(s) folded into their sheet" if tracks else "",
+            )
+
+        # ── Stopped partway ──────────────────────────────────────────────────────
+        # A scan that did not finish makes NO CLAIM about what is missing. It opened
+        # by marking everything missing and un-marks what the walk finds, so leaving
+        # now would report every platform it had not reached as empty - the library
+        # goes half dark and nothing says why. Put back exactly the snapshot taken
+        # before it started and let the next complete scan decide.
+        if scan_cancelled():
+            # And the rows this run created go with it, or "back as it was" is
+            # not what happens. They are also the half that cannot be repaired
+            # later: the rename adoption below can only pair a donor with a row
+            # THIS scan created, so a new row left behind by a stopped scan is a
+            # row no future scan will create again, and the old row holding the
+            # artwork, the saves and the play history goes missing for good.
+            # Rows only, never files - the files are what the next scan finds.
+            # ...except one a person has already touched. Deleting a ROM row
+            # takes its savestates, memory cards and play history by cascade,
+            # and a scan of a large library runs for many minutes with each row
+            # visible and playable the moment it lands. Somebody can have played
+            # and saved against a row this run created before Stop was pressed;
+            # taking that back is not undoing our own work, it is deleting
+            # theirs - and the line on screen says "nothing was marked missing"
+            # while it happens. Those rows stay, and the rename adoption gives
+            # up on them, which is the smaller loss by a wide margin.
+            touched = await rom_handler.ids_with_player_data(created_ids)
+            undone = 0
+            for rom_id in created_ids:
+                if rom_id in touched:
+                    continue
+                if await rom_handler.delete(rom_id):
+                    undone += 1
+            await rom_handler.restore_present(present_before)
+            logger.info(
+                "ROM scan stopped on request after %d platform(s); the library is "
+                "back as it was, %d row(s) this run had added were taken back, "
+                "%d kept because somebody had already played or saved against "
+                "them, and nothing was marked missing",
+                stats["platforms_found"], undone, len(touched),
+            )
+            stats["roms_new"] -= undone
+            stats["cancelled"] = True
+            # Announced on this exit too, and by the same function: the views hang
+            # "and now reload the list" on this event and the Classic sidebar clears
+            # its spinner there, so the silent exit left that spinner turning until
+            # somebody reloaded the page.
+            await _announce_scan_finished(stats)
+            return stats
+
+        # The walk finished, so the disc grouping worked out along the way is
+        # safe to write. Held until here because it edits rows that existed
+        # before this scan - see where it is collected.
+        for platform_id, assignments in pending_groups:
+            await rom_handler.apply_disk_groups(platform_id, assignments)
+
+        # Clean up platforms whose folder no longer exists
+        scanned_fs_slugs = {d.name for d in root.iterdir() if d.is_dir()}
+        all_platforms = await rom_platform_handler.get_all_simple()
+        for p in all_platforms:
+            # A platform the walk actually visited is not gone, whatever its
+            # folder is called. Several directory names map to one platform row
+            # (snes / snesna / super-nintendo, psx / playstation, dos / ms-dos)
+            # and upsert deliberately reuses the row by slug without touching
+            # the fs_slug it was created with. So consolidating an alias folder
+            # into the canonical one left this loop marking the whole platform
+            # missing immediately after the walk had found every one of its
+            # files - every scan, for ever, with no error anywhere.
+            if p.id in seen_platform_ids:
+                continue
+            if p.fs_slug not in scanned_fs_slugs:
+                logger.info("Platform folder gone for %s - marking all ROMs missing", p.fs_slug)
+                await rom_handler.mark_all_missing(p.id)
+
+        # ── Renames, once every directory has been walked ────────────────────────
+        # Only here, and not in the per-file loop, because only here is the question
+        # answerable. Halfway through a scan a row can look gone and turn up in the
+        # next folder: several alias directories feed one platform row, which is the
+        # bug the comment above mark_all_missing records having been fixed once
+        # already. And in the loop the answer would depend on the order the
+        # filesystem happened to list things in, which is not an answer.
+        pairs = await _renames_this_run(created_ids, present_before, seen_platform_ids)
+        if pairs:
+            touched = await rom_handler.ids_with_player_data([n for _o, n in pairs])
+            stats["roms_renamed"] = await _merge_renamed(pairs, touched)
+            stats["roms_new"] -= stats["roms_renamed"]
+
         logger.info(
-            "Scanned platform %s - %d ROM(s) found%s%s",
-            fs_slug, len(rom_files),
-            f", {sets} multi-disk title(s)" if sets else "",
-            f", {tracks} track file(s) folded into their sheet" if tracks else "",
+            "ROM scan complete: %d platforms, %d ROMs (%d new, %d updated%s)",
+            stats["platforms_found"],
+            stats["roms_found"],
+            stats["roms_new"],
+            stats["roms_updated"],
+            f", {stats['roms_renamed']} renamed" if stats.get("roms_renamed") else "",
         )
-
-    # Clean up platforms whose folder no longer exists
-    scanned_fs_slugs = {d.name for d in root.iterdir() if d.is_dir()}
-    all_platforms = await rom_platform_handler.get_all_simple()
-    for p in all_platforms:
-        if p.fs_slug not in scanned_fs_slugs:
-            logger.info("Platform folder gone for %s - marking all ROMs missing", p.fs_slug)
-            await rom_handler.mark_all_missing(p.id)
-
-    logger.info(
-        "ROM scan complete: %d platforms, %d ROMs (%d new, %d updated)",
-        stats["platforms_found"],
-        stats["roms_found"],
-        stats["roms_new"],
-        stats["roms_updated"],
-    )
-    return stats
+        await _announce_scan_finished(stats)
+        return stats
+    except asyncio.CancelledError:
+        # Shutting down, and shutting down is on a clock. This is how a container
+        # stop reaches a scan running as a background task, and the handler below
+        # would answer it with a delete per row, each in its own transaction. On
+        # a library of any size that does not finish inside the few seconds the
+        # process is given - so the run was undone PARTWAY, with nobody able to
+        # find out how far, and the second cancellation went straight through the
+        # inner `except Exception`, skipping the progress reset as well.
+        #
+        # So this exit does the cheap half and nothing else: one bulk UPDATE
+        # putting the missing flags back, which is the half that matters. The
+        # rows this run created stay, and the next scan will find their files and
+        # make the same decision with time to do it in. Nothing is announced
+        # either - the socket is going away with everything else, and the
+        # watchdog on the client covers the gap.
+        await rom_handler.restore_present(present_before)
+        reset_scan_progress()
+        logger.info(
+            "ROM scan cancelled while shutting down; the missing flags are back "
+            "as they were and the rows this run added were left for the next scan"
+        )
+        raise
+    except BaseException:
+        # Not swallowed - restored and re-raised. A scan that never works has
+        # to look like a scan that failed, not like one that keeps finding
+        # nothing.
+        # The flags first: it is the cheaper half and the more important one, so
+        # a failure while removing rows must not leave the library with half its
+        # shelf marked missing.
+        await rom_handler.restore_present(present_before)
+        # And the rows a rename would have absorbed, which is a much shorter list
+        # than "everything this run made" and is the whole of the argument for
+        # removing any of them: adoption can only ever pair a vanished row with a
+        # row the CURRENT run created, so one of those left behind is a row no
+        # future scan will make again - the old row holding the artwork, the
+        # saves and the play history stays missing for good and the shelf shows
+        # the title twice.
+        #
+        # A genuinely new ROM carries none of that. The next scan finds the file
+        # and makes the row again, so taking it back buys nothing and costs a
+        # full re-read and re-hash of everything the run had got through. One
+        # transient database error near the end of a long scan used to do exactly
+        # that to the whole library.
+        undone = 0
+        try:
+            pairs = await _renames_this_run(
+                created_ids, present_before, seen_platform_ids)
+            # And not the ones somebody has already played or saved against.
+            # Taking those back is not undoing our own work, it is deleting
+            # theirs - the ordinary exit carries that data across instead, but
+            # this exit has a failure in flight and is not the place to start
+            # moving rows about.
+            touched = await rom_handler.ids_with_player_data([n for _o, n in pairs])
+            for _old_id, new_id in pairs:
+                if new_id in touched:
+                    continue
+                if await rom_handler.delete(new_id):
+                    undone += 1
+        except Exception:  # noqa: BLE001 - the original failure is the one to raise
+            logger.exception("Could not take back the rows this scan had added")
+        logger.exception(
+            "ROM scan failed; the library is back as it was, %d row(s) this run "
+            "had added were taken back and nothing was left marked missing",
+            undone,
+        )
+        # Announced like the other two exits. The views hang their reload on this
+        # event and the Classic sidebar clears its spinner there, so the silent
+        # exit left the bar turning until the watchdog filled it in - as an
+        # ordinary finish, because nothing had said otherwise. `error` says which
+        # kind of ending this was; the screens read it and say so.
+        stats["error"] = "failed"
+        await _announce_scan_finished(stats)
+        raise

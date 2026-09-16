@@ -41,6 +41,25 @@
 
         <div class="sr-divider" />
 
+        <!-- Off unless somebody sets a number. A scan walks every platform and
+             hashes what it has not seen, so it is not something to start
+             happening to people who never asked for it. -->
+        <div class="sr-row"
+          @mouseenter="setHint(t('rhint.scan_interval_title'), t('rhint.scan_interval_body'))"
+          @mouseleave="clearHint"
+        >
+          <div class="sr-row-label">
+            <span class="sr-label">{{ t('roms.scan_interval') }}</span>
+            <span class="sr-sub">{{ t('roms.scan_interval_hint') }}</span>
+          </div>
+          <div class="sr-row-control sr-row-control--num">
+            <input v-model.number="form.scan_interval_hours" type="number" min="0" max="168" step="1" class="sr-input" />
+            <span class="sr-unit">h</span>
+          </div>
+        </div>
+
+        <div class="sr-divider" />
+
         <div class="sr-row"
           @mouseenter="setHint(t('rhint.max_rom_size_title'), t('rhint.max_rom_size_body'))"
           @mouseleave="clearHint"
@@ -76,6 +95,20 @@
         <button class="sr-btn sr-btn--primary btn-save-action" @click="save" :disabled="saving">{{ saving ? t('roms.saving') : t('common.save') }}</button>
         <span v-if="savedMsg" class="sr-saved-msg">{{ savedMsg }}</span>
       </div>
+    </section>
+
+    <!-- ── Scan exclusions ──────────────────────────────────────────────────── -->
+    <section class="sr-section">
+      <div class="sr-section-head">
+        <h2 class="sr-section-title">{{ t('xc.title', 'Scan exclusions') }}</h2>
+        <p class="sr-section-sub">
+          {{ t('xc.desc_platform', 'Files lying directly in a platform folder that are not games. Set per platform.') }}
+        </p>
+      </div>
+      <!-- Above the cards, not on each of them: the question is "what has gone
+           missing", not "has anything gone missing on the Amiga". -->
+      <SettingsMissingRoms />
+      <SettingsScanExclusions kind="platform" :items="exclusionPlatforms" />
     </section>
 
     <!-- ── Scrapers ─────────────────────────────────────────────────────────── -->
@@ -310,38 +343,6 @@
           </div>
         </div>
 
-        <div class="sr-row"
-          @mouseenter="setHint(t('roms.auto_sync_saves', 'Cloud auto-sync saves'), t('rhint.auto_sync_saves', 'When enabled, the in-browser emulator periodically uploads the battery save (.srm) to the server while you play. The server deduplicates by content hash so unchanged saves do not waste storage.'))"
-          @mouseleave="clearHint"
-        >
-          <div class="sr-row-label">
-            <span class="sr-label">{{ t('roms.auto_sync_saves', 'Cloud auto-sync saves') }}</span>
-            <span class="sr-sub">{{ t('roms.auto_sync_saves_hint', 'Periodically upload battery saves while you play, so a tab crash never loses progress') }}</span>
-          </div>
-          <div class="sr-row-control">
-            <button class="sr-toggle" :class="{ 'sr-toggle--on': autoSyncSaves }" @click="toggleAutoSyncSaves">
-              <span class="sr-toggle-thumb" />
-            </button>
-          </div>
-        </div>
-
-        <div v-if="autoSyncSaves" class="sr-row"
-          @mouseenter="setHint(t('roms.auto_sync_interval', 'Sync interval'), t('rhint.auto_sync_interval', 'Lower values protect against crashes more aggressively but make more network requests. Most games are fine with 60s.'))"
-          @mouseleave="clearHint"
-        >
-          <div class="sr-row-label">
-            <span class="sr-label">{{ t('roms.auto_sync_interval', 'Sync interval') }}</span>
-            <span class="sr-sub">{{ t('roms.auto_sync_interval_hint', 'How often to check for save changes') }}</span>
-          </div>
-          <div class="sr-row-control">
-            <select class="sr-preset-select" v-model.number="autoSyncInterval" @change="saveAutoSyncInterval">
-              <option :value="30">30s</option>
-              <option :value="60">60s</option>
-              <option :value="120">2m</option>
-              <option :value="300">5m</option>
-            </select>
-          </div>
-        </div>
       </div>
     </section>
 
@@ -373,6 +374,8 @@ import client from '@/services/api/client'
 import { useSettingsHint } from '@/composables/useSettingsHint'
 import { useI18n } from '@/i18n'
 import SettingsFirmware from './SettingsFirmware.vue'
+import SettingsScanExclusions from './SettingsScanExclusions.vue'
+import SettingsMissingRoms from './SettingsMissingRoms.vue'
 
 const { t } = useI18n()
 const { setHint, clearHint } = useSettingsHint()
@@ -396,38 +399,6 @@ const ejsDebug = ref(localStorage.getItem('gd_ejs_debug') === '1')
 function toggleEjsDebug() {
   ejsDebug.value = !ejsDebug.value
   localStorage.setItem('gd_ejs_debug', ejsDebug.value ? '1' : '0')
-}
-
-// ── Save auto-sync (per account) ─────────────────────────────────────────────
-// Persists battery saves to the server every N seconds while a game is running,
-// so closing the tab does not lose progress. Default ON, and stored on the
-// account rather than in this browser: it used to live in localStorage, which
-// meant a save made in one browser was invisible in the next.
-//
-// The interval stays local on purpose - how often to poll is a property of the
-// machine you are playing on, not of who you are.
-const autoSyncSaves = ref(true)
-const autoSyncInterval = ref(parseInt(localStorage.getItem('gd_auto_sync_interval') || '60', 10))
-
-onMounted(async () => {
-  try {
-    const { data } = await client.get('/users/me/preferences')
-    autoSyncSaves.value = data?.autoSyncSaves !== false
-  } catch { /* offline: leave the default on */ }
-})
-
-async function toggleAutoSyncSaves() {
-  autoSyncSaves.value = !autoSyncSaves.value
-  try {
-    // Only this key is sent; the server merges it over what is already stored.
-    await client.put('/users/me/preferences', { autoSyncSaves: autoSyncSaves.value })
-  } catch {
-    autoSyncSaves.value = !autoSyncSaves.value   // put the switch back
-  }
-}
-function saveAutoSyncInterval() {
-  if (![30, 60, 120, 300].includes(autoSyncInterval.value)) autoSyncInterval.value = 60
-  localStorage.setItem('gd_auto_sync_interval', String(autoSyncInterval.value))
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -478,6 +449,9 @@ const form = ref({
   // 0 means no ceiling: hash every file, however large. That is the default
   // and what every library did before this setting existed.
   hash_max_bytes:     0,
+  // 0 means the scheduled scan is off, which is how it ships. Anything else is
+  // hours between passes.
+  scan_interval_hours: 0,
 })
 const saving   = ref(false)
 const savedMsg = ref('')
@@ -544,6 +518,12 @@ const savedPresetsMsg  = ref('')
 const presetOpen       = reactive<Record<string, boolean>>({})
 
 const DEFAULT_PRESET: ScrapePreset = { cover_type: 'box-2D', region: 'wor', extras: [] }
+
+// The exclusion cards key on `slug`, which is what the routes look a platform up
+// by. `fs_slug` is shown underneath because it is the folder name somebody sees
+// on disk, and a pattern is written against paths.
+const exclusionPlatforms = computed(() =>
+  platforms.value.map(p => ({ slug: p.slug, name: p.name, sub: p.fs_slug })))
 
 function togglePresetOpen(fsSlug: string) {
   presetOpen[fsSlug] = !presetOpen[fsSlug]

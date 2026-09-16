@@ -252,6 +252,50 @@
       </button>
     </div>
 
+    <!-- Starting, then scanning, then the result. -->
+    <div v-if="scan.visible.value" class="emu-scan-prog">
+      <div class="emu-scan-bar">
+        <div class="emu-scan-fill"
+             :class="{ 'emu-scan-fill--idle': scan.phase.value === 'starting' }"
+             :style="{ width: scan.phase.value === 'done' ? '100%'
+                            : scan.phase.value === 'starting' ? '100%'
+                            : (scan.percent.value ?? 0) + '%' }" />
+      </div>
+
+      <div v-if="scan.phase.value === 'starting'" class="emu-scan-line">
+        <span class="emu-scan-where">{{ t('scan.starting', 'Starting the scan…') }}</span>
+      </div>
+
+      <div v-else-if="scan.phase.value === 'done'" class="emu-scan-line">
+        <span class="emu-scan-where">
+          {{ scan.summary.value?.error === 'path_missing'
+             ? t('scan.path_missing', 'The ROM folder is not there. Check Settings > ROMs.')
+             : scan.summary.value?.error
+             ? t('scan.failed', 'The scan stopped with an error. See the server log.')
+             : scan.summary.value?.unknown
+             ? t('scan.finished', 'Scan finished.')
+             : scan.summary.value?.cancelled
+             ? t('scan.stopped', 'Scan stopped.')
+             : t('scan.found', { n: scan.summary.value?.roms_found ?? 0 }) }}
+        </span>
+      </div>
+
+      <div v-else class="emu-scan-line">
+        <span class="emu-scan-where">
+          {{ scan.state.value.platform || t('roms.scanning') }}
+          <template v-if="scan.state.value.platform_total">
+            ({{ scan.state.value.platform_index }}/{{ scan.state.value.platform_total }})
+          </template>
+        </span>
+        <span class="emu-scan-file">{{ scan.state.value.current }}</span>
+        <button v-if="scan.canStop.value" class="emu-scan-stop"
+                :disabled="scan.stopping.value || scan.state.value.cancelling"
+                @click="stopScan">
+          {{ scan.state.value.cancelling ? t('scan.stopping', 'Stopping…') : t('scan.stop', 'Stop') }}
+        </button>
+      </div>
+    </div>
+
     <div v-if="actionMsg" class="emu-action-msg">{{ actionMsg }}</div>
 
   </div>
@@ -269,6 +313,7 @@ import { useRoute, useRouter } from 'vue-router'
 import client from '@/services/api/client'
 import { useDialog } from '@/composables/useDialog'
 import { useAuthStore } from '@/stores/auth'
+import { useRomScan } from '@/composables/useRomScan'
 import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
@@ -317,7 +362,6 @@ const loading    = ref(true)
 const total     = ref(0)
 const limit     = ref(100)
 const offset    = ref(0)
-const scanning     = ref(false)
 const scraping     = ref(false)
 const fetchingInfo = ref(false)
 const clearingAll  = ref(false)
@@ -450,45 +494,28 @@ function prevPage() {
 
 // ── Admin actions ─────────────────────────────────────────────────────────────
 
-let scanPoll: ReturnType<typeof setInterval> | null = null
-function stopScanPoll() {
-  if (scanPoll) clearInterval(scanPoll)
-  scanPoll = null
-}
-
-onUnmounted(stopScanPoll)
+// Watched over the socket rather than polled every two seconds. The composable
+// also asks the server once on mount, so arriving mid-scan shows where it is.
+const scan = useRomScan(() => { fetchPlatform(); fetchRoms(); actionMsg.value = '' })
+const scanning = scan.running
 
 async function triggerScan() {
-  scanning.value = true; actionMsg.value = ''
+  // See EmulationHome: no "scanning..." line here either, the indicator says it
+  // and a line set here was never cleared once the poll that used to clear it
+  // was gone.
+  actionMsg.value = ''
   try {
-    await client.post('/roms/scan')
-    actionMsg.value = t('roms.scanning')
-    // See EmulationHome: a local handle cleared only on success left a poll
-    // running after the component was gone, and an endpoint that kept failing
-    // left the button stuck on "Scanning...".
-    stopScanPoll()
-    let misses = 0
-    scanPoll = setInterval(async () => {
-      try {
-        const { data } = await client.get('/roms/scan/status')
-        misses = 0
-        if (!data.running) {
-          stopScanPoll()
-          await fetchPlatform(); await fetchRoms()
-          actionMsg.value = ''
-          scanning.value = false
-        }
-      } catch {
-        if (++misses >= 5) {
-          stopScanPoll()
-          actionMsg.value = t('common.scan_failed')
-          scanning.value = false
-        }
-      }
-    }, 2000)
+    await scan.start()
   } catch (e: any) {
     actionMsg.value = e?.response?.data?.detail || t('common.scan_failed')
-    scanning.value = false
+  }
+}
+
+async function stopScan() {
+  try {
+    await scan.stop()
+  } catch (e: any) {
+    actionMsg.value = e?.response?.data?.detail || t('common.scan_failed')
   }
 }
 
@@ -931,6 +958,59 @@ onMounted(async () => {
 .emu-page-info { font-size: var(--fs-sm, 12px); color: var(--muted); }
 
 .emu-action-msg { font-size: var(--fs-sm, 12px); color: var(--muted); text-align: center; padding: var(--space-1, 4px); }
+
+/* ── Scan progress. Same shape as the Retro home, deliberately: it is the same
+      scan, and two views describing it differently would read as two things. */
+.emu-scan-prog {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+}
+.emu-scan-bar {
+  height: 4px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in srgb, var(--pl) 15%, transparent);
+}
+.emu-scan-fill {
+  height: 100%; border-radius: 999px; background: var(--pl-light);
+  transition: width .25s linear;
+}
+/* Nothing honest to fill to before the first number arrives, so it sweeps. */
+.emu-scan-fill--idle {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--pl) 20%, transparent) 0%,
+    var(--pl-light) 50%,
+    color-mix(in srgb, var(--pl) 20%, transparent) 100%);
+  background-size: 200% 100%;
+  animation: emu-scan-sweep 1.1s linear infinite;
+}
+@keyframes emu-scan-sweep {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+.emu-scan-line {
+  display: flex; align-items: center; gap: 10px;
+  font-size: var(--fs-sm, 12px); color: var(--muted);
+}
+.emu-scan-where { font-weight: 600; color: var(--text); flex-shrink: 0; }
+.emu-scan-file {
+  flex: 1; min-width: 0; font-family: var(--font-mono, monospace);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.emu-scan-stop {
+  flex-shrink: 0; padding: 3px 10px; border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, #f87171 45%, transparent);
+  background: color-mix(in srgb, #f87171 18%, transparent);
+  color: #f87171; font-size: 11px; font-weight: 600;
+  font-family: inherit; cursor: pointer; transition: all var(--transition);
+}
+.emu-scan-stop:hover:not(:disabled) {
+  background: color-mix(in srgb, #f87171 30%, transparent); color: #fff;
+}
+.emu-scan-stop:disabled { opacity: .5; cursor: default; }
+
+@media (prefers-reduced-motion: reduce) {
+  .emu-scan-fill { transition: none; }
+  .emu-scan-fill--idle { animation: none; }
+}
 
 .spinner {
   width: 20px; height: 20px; border-radius: 50%;

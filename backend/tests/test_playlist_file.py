@@ -299,7 +299,7 @@ def test_removing_a_playlist_goes_through_the_same_path_guard_as_a_rom(
 
     library = tmp_path / "roms"
     library.mkdir()
-    monkeypatch.setattr(rom_removal, "ROMS_PATH", str(library))
+    monkeypatch.setattr(rom_removal, "roms_library_path", lambda _cm=None: str(library))
 
     inside = library / "Game.m3u"
     inside.write_text("Game (Disc 1).chd\nGame (Disc 2).chd\n", encoding="utf-8")

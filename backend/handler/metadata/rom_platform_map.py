@@ -179,6 +179,35 @@ def slug_from_fs_slug(fs_slug: str) -> str:
     return slug
 
 
+#: The one fs_slug per platform that names a directory. Several keys above
+#: describe the same machine - `psx` and `playstation`, `snes` and
+#: `super-nintendo`, eighteen such groups - and the first declaration wins,
+#: which is the rule `_init_rom_dirs` already applied when it made the folders
+#: and `/roms/platforms/known` already applied when it offered them.
+_CANONICAL_FS_SLUG: dict[str, str] = {}
+for _fs_slug in PLATFORM_MAP:
+    _CANONICAL_FS_SLUG.setdefault(slug_from_fs_slug(_fs_slug), _fs_slug)
+
+
+def canonical_fs_slug(fs_slug: str) -> str:
+    """The directory a platform's ROMs live in, whichever of its names you have.
+
+    Said once, here, because two places used to know it and a third did not.
+    `_init_rom_dirs` makes only the canonical folder and the known-platforms
+    list offers only the canonical slug, but the upload route built its
+    destination from whatever arrived in the URL - so an alias created a second
+    folder for the same platform. The scan walks every directory under the root
+    and upserts the platform by URL slug, so both folders resolve to one row,
+    and a ROM's identity is (platform, file name): the same name arriving
+    through the alias folder repoints the existing row at the new file without
+    the ownership check ever seeing a name that was already taken.
+
+    An unknown slug is handed back unchanged. This answers "which of these names
+    is the real one", not "is this a platform" - the caller asks that first.
+    """
+    return _CANONICAL_FS_SLUG.get(slug_from_fs_slug(fs_slug), fs_slug)
+
+
 def get_igdb_id(fs_slug: str) -> int | None:
     return PLATFORM_MAP.get(fs_slug, {}).get("igdb_id")
 

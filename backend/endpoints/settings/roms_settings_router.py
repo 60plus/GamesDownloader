@@ -26,6 +26,7 @@ class RomSettingsBody(BaseModel):
     launchbox_enabled: bool = True
     max_rom_bytes: int = 0
     hash_max_bytes: int = 0
+    scan_interval_hours: int = 0
 
 
 @protected_route(router.get, "", scopes=[Scopes.SETTINGS_READ])
@@ -41,6 +42,9 @@ async def get_rom_settings(request: Request) -> dict:
         "max_rom_bytes":      rom_source_handler.max_rom_bytes(),
         # Same reasoning: report the ceiling the scan actually obeys.
         "hash_max_bytes":     rom_scanner.hash_ceiling_bytes(),
+        # 0 means the scheduled scan is off, which is the default.
+        "scan_interval_hours": rom_scanner.resolve_scan_interval_hours(
+            cfg.get("scan_interval_hours")),
     }
 
 
@@ -59,6 +63,11 @@ async def save_rom_settings(request: Request, body: RomSettingsBody) -> dict:
         "max_rom_bytes":      max(body.max_rom_bytes, 0),
         # 0 here means something else: no ceiling at all, hash everything.
         "hash_max_bytes":     max(body.hash_max_bytes, 0),
+        # Anything that is not a whole positive number of hours is
+        # read as off: a scan started by a typo is a scan nobody asked
+        # for, and it walks every platform.
+        "scan_interval_hours": rom_scanner.resolve_scan_interval_hours(
+            body.scan_interval_hours),
     })
     config_manager.save_section("roms", cfg)
     return {"ok": True}

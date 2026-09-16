@@ -19,7 +19,7 @@ lists those collections.
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from models.base import Base
@@ -41,6 +41,12 @@ class Library(Base):
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     # Relative folder under GAMES_PATH for folder-backed collections (e.g. "CUSTOM").
     storage_folder: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Paths this library's scan is told never to look at, one pattern per line.
+    # Kept here rather than in one list for the server because the case it
+    # exists for is local: a folder that belongs beside these files and nowhere
+    # else. A pattern only stops something being ADDED - see the exclusions
+    # module for why touching what is already here is a separate decision.
+    scan_exclude: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
     )

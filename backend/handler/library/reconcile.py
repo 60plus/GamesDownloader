@@ -197,12 +197,70 @@ async def reconcile_library_state() -> dict:
     return summary
 
 
+#: Hours between passes when nothing is configured. Everything this corrects can
+#: happen at any moment, and none of it is urgent, so the figure is a compromise
+#: between noticing within a working day and not walking the library all night.
+_DEFAULT_INTERVAL_H = 6
+#: Config key, so the interval can be changed without a restart.
+INTERVAL_KEY = "reconcile_interval_hours"
+
+
+def resolve_interval_hours(raw, default: int = _DEFAULT_INTERVAL_H) -> int:
+    """Hours between passes. Zero means once at startup and no more.
+
+    Zero is kept reachable deliberately: it is exactly what this did before, and
+    somebody who wants that shape back should not have to disable anything to
+    get it. Anything else that is not a whole positive number of hours is a typo
+    rather than an instruction - a negative interval especially - so it falls
+    back rather than being honoured or crashing.
+    """
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    if value == 0:
+        return 0
+    return value if value > 0 else default
+
+
 async def reconcile_loop() -> None:
-    """Run the pass once, shortly after startup."""
+    """Run the pass shortly after startup, and again every interval.
+
+    It used to run exactly once and the process then sat there for weeks.
+    Everything this corrects - a crash mid-write, a detached hook that never
+    landed, a file removed from outside the app - can happen at any moment, so on
+    a server nobody restarts the correction simply never happened.
+
+    The interval is read on every turn rather than once at the top: reading it
+    once would mean a change in settings did nothing until the next restart,
+    which is the shape being fixed here.
+    """
+    from handler.config.config_handler import config_handler
+
     try:
         await asyncio.sleep(_START_DELAY_S)
-        await reconcile_library_state()
+        while True:
+            try:
+                await reconcile_library_state()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # One bad pass must not end the loop. Ending quietly and never
+                # running again is indistinguishable from the bug this replaces.
+                logger.exception(
+                    "Library reconciliation failed; state stays as it was and "
+                    "the next pass will try again"
+                )
+
+            interval = resolve_interval_hours(await config_handler.get(INTERVAL_KEY))
+            if interval <= 0:
+                logger.info(
+                    "Reconciliation is set to run once per start, so this task "
+                    "is finished until the next restart."
+                )
+                return
+            await asyncio.sleep(interval * 3600)
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("Library reconciliation failed; state stays as it was")
+        logger.exception("Library reconciliation loop stopped unexpectedly")

@@ -25,7 +25,7 @@ def roots(tmp_path, monkeypatch):
     outside = tmp_path / "somebody-elses"
     for d in (roms, saves, resources, outside):
         d.mkdir()
-    monkeypatch.setattr(rr, "ROMS_PATH", str(roms))
+    monkeypatch.setattr(rr, "roms_library_path", lambda _cm=None: str(roms))
     monkeypatch.setattr(rr, "SAVES_PATH", str(saves))
     monkeypatch.setattr(rr, "RESOURCES_PATH", str(resources))
     return SimpleNamespace(roms=roms, saves=saves, resources=resources, outside=outside)

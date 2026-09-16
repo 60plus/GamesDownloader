@@ -104,9 +104,22 @@ async def test_a_real_scan_skips_the_large_file_and_hashes_the_small_one(
     async def _upsert_rom(**kwargs):
         written[kwargs["fs_name"]] = kwargs
 
+    async def _no_present(*a, **k):
+        # The pre-pass snapshot, now one table-wide query instead of one per
+        # platform, so it is reached even when no platforms are stubbed in.
+        return []
+
+    async def _no_counts(*a, **k):
+        # Asked once before the walk, to skip platforms with no files and no
+        # rows. Empty means "no rows anywhere", and the folders here have files,
+        # so nothing is skipped.
+        return {}
+
     monkeypatch.setattr(scanner.rom_platform_handler, "get_all_simple", _no_platforms)
+    monkeypatch.setattr(scanner.rom_platform_handler, "rom_counts_by_fs_slug", _no_counts)
     monkeypatch.setattr(scanner.rom_platform_handler, "upsert", _upsert_platform)
     monkeypatch.setattr(scanner.rom_handler, "mark_all_missing", _nothing)
+    monkeypatch.setattr(scanner.rom_handler, "present_ids", _no_present)
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name", _nothing)
     monkeypatch.setattr(scanner.rom_handler, "apply_disk_groups", _nothing)
     monkeypatch.setattr(scanner.rom_handler, "clear_container_hashes", _nothing)
@@ -413,10 +426,20 @@ async def test_a_file_that_grew_past_the_ceiling_loses_its_old_checksums(
     async def _no_platforms(*a, **k):
         return []
 
+    async def _no_present(*a, **k):
+        # The pre-pass snapshot, now one table-wide query instead of one per
+        # platform, so it is reached even when no platforms are stubbed in.
+        return []
+
+    async def _no_counts(*a, **k):
+        return {}
+
     monkeypatch.setattr(scanner.rom_platform_handler, "get_all_simple", _no_platforms)
+    monkeypatch.setattr(scanner.rom_platform_handler, "rom_counts_by_fs_slug", _no_counts)
     monkeypatch.setattr(scanner.rom_platform_handler, "upsert",
                         lambda *a, **k: _as_awaitable(_Platform()))
     monkeypatch.setattr(scanner.rom_handler, "mark_all_missing", _nothing)
+    monkeypatch.setattr(scanner.rom_handler, "present_ids", _no_present)
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name",
                         lambda *a, **k: _as_awaitable(_Existing()))
     monkeypatch.setattr(scanner.rom_handler, "apply_disk_groups", _nothing)

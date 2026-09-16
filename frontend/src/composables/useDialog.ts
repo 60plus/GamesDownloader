@@ -50,6 +50,11 @@ interface DialogState {
   image:       string
   requireTick: boolean
   resolve:     ((value: boolean) => void) | null
+  // Bumped every time a dialog is opened, so the component can tell "the same
+  // question is still up" from "a different one took its place". `visible` says
+  // neither: it is already true when a second question arrives, so the watcher
+  // hanging off it never fires and a tick meant for the first arms the second.
+  seq:         number
 }
 
 // Singleton - shared across the whole app
@@ -64,11 +69,26 @@ export const dialogState = reactive<DialogState>({
   image:       '',
   requireTick: false,
   resolve:     null,
+  seq:         0,
 })
 
 export function useDialog() {
+  /** Settle whatever question is still on screen before a new one replaces it.
+   *
+   *  The state is a singleton, so opening a second dialog overwrites the first
+   *  and its `resolve` with it - the caller waiting on that promise waits for
+   *  ever, and its "did they agree" branch simply never runs. Answered `false`,
+   *  which is what actually happened: nobody confirmed it. */
+  function _displace() {
+    const pending = dialogState.resolve
+    dialogState.resolve = null
+    pending?.(false)
+  }
+
   function gdConfirm(message: string, opts: DialogOptions = {}): Promise<boolean> {
+    _displace()
     return new Promise(resolve => {
+      dialogState.seq        += 1
       dialogState.visible     = true
       dialogState.type        = 'confirm'
       dialogState.title       = opts.title       ?? t('common.confirm')
@@ -88,7 +108,9 @@ export function useDialog() {
   }
 
   function gdAlert(message: string, opts: DialogOptions = {}): Promise<void> {
+    _displace()
     return new Promise(resolve => {
+      dialogState.seq        += 1
       dialogState.visible     = true
       dialogState.type        = 'alert'
       dialogState.title       = opts.title       ?? t('common.notice')

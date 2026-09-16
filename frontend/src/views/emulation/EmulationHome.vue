@@ -20,7 +20,7 @@
       </div>
       <div class="emu-title-right">
         <!-- Add ROMs (admin only) -->
-        <button v-if="isAdmin" class="emu-add-btn" @click="openAddModal">
+        <button v-if="isUploader" class="emu-add-btn" @click="openAddModal">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
@@ -149,6 +149,50 @@
       </div>
     </div>
 
+    <!-- Starting, then scanning, then the result. Three phases rather than an
+         on/off, because on a small library an on/off is a flash. -->
+    <div v-if="scan.visible.value" class="emu-scan-prog">
+      <div class="emu-scan-bar">
+        <div class="emu-scan-fill"
+             :class="{ 'emu-scan-fill--idle': scan.phase.value === 'starting' }"
+             :style="{ width: scan.phase.value === 'done' ? '100%'
+                            : scan.phase.value === 'starting' ? '100%'
+                            : (scan.percent.value ?? 0) + '%' }" />
+      </div>
+
+      <div v-if="scan.phase.value === 'starting'" class="emu-scan-line">
+        <span class="emu-scan-where">{{ t('scan.starting', 'Starting the scan…') }}</span>
+      </div>
+
+      <div v-else-if="scan.phase.value === 'done'" class="emu-scan-line">
+        <span class="emu-scan-where">
+          {{ scan.summary.value?.error === 'path_missing'
+             ? t('scan.path_missing', 'The ROM folder is not there. Check Settings > ROMs.')
+             : scan.summary.value?.error
+             ? t('scan.failed', 'The scan stopped with an error. See the server log.')
+             : scan.summary.value?.unknown
+             ? t('scan.finished', 'Scan finished.')
+             : scan.summary.value?.cancelled
+             ? t('scan.stopped', 'Scan stopped.')
+             : t('scan.found', { n: scan.summary.value?.roms_found ?? 0 }) }}
+        </span>
+      </div>
+
+      <div v-else class="emu-scan-line">
+        <span class="emu-scan-where">
+          {{ scan.state.value.platform || t('roms.scanning') }}
+          <template v-if="scan.state.value.platform_total">
+            ({{ scan.state.value.platform_index }}/{{ scan.state.value.platform_total }})
+          </template>
+        </span>
+        <span class="emu-scan-file">{{ scan.state.value.current }}</span>
+        <button v-if="scan.canStop.value" class="emu-scan-stop"
+                :disabled="scan.stopping.value || scan.state.value.cancelling"
+                @click="stopScan">
+          {{ scan.state.value.cancelling ? t('scan.stopping', 'Stopping…') : t('scan.stop', 'Stop') }}
+        </button>
+      </div>
+    </div>
     <div v-if="scanMsg" class="emu-scan-msg">{{ scanMsg }}</div>
 
     <!-- ══ ADD ROMs MODAL ══════════════════════════════════════════════════════ -->
@@ -245,8 +289,9 @@
             <!-- Actions -->
             <div class="gd-modal-footer">
               <span class="emu-upload-status" v-if="addModal.uploadError" style="color:var(--error)">{{ addModal.uploadError }}</span>
-              <span class="emu-upload-status" v-else-if="addModal.uploadDone" style="color:#22c55e">
-                {{ t('library.uploaded_ok', { count: addModal.savedCount }) }}
+              <span class="emu-upload-status" v-else-if="addModal.uploadDone"
+                    :style="{ color: addModal.refused ? 'var(--error)' : '#22c55e' }">
+                {{ addModal.result }}
               </span>
               <div style="display:flex;gap: var(--space-2, 8px);margin-left:auto">
                 <button class="gd-btn gd-btn--ghost" @click="closeAddModal" :disabled="addModal.uploading">{{ t('common.cancel') }}</button>
@@ -275,10 +320,12 @@ import { useRouter } from 'vue-router'
 import client from '@/services/api/client'
 import romSourceActions, { type RomSource } from '@/lib/romSourceActions'
 import { useAuthStore } from '@/stores/auth'
+import { useRomScan } from '@/composables/useRomScan'
 import { useThemeStore } from '@/stores/theme'
 import { usePlatformMetaStore } from '@/stores/platformMeta'
 import { useI18n } from '@/i18n'
 import { formatBytes as formatSize } from '@/utils/format'
+import { describeUpload, uploadHadRefusals } from '@/lib/uploadResult'
 
 const { t } = useI18n()
 
@@ -288,6 +335,9 @@ const themeStore = useThemeStore()
 const platformMeta = usePlatformMetaStore()
 
 const isAdmin = computed(() => auth.user?.role === 'admin')
+// Uploading a ROM asks for LIBRARY_UPLOAD, which the uploader has, so hiding
+// this behind admin took away something the server was willing to allow.
+const isUploader = computed(() => ['admin', 'uploader'].includes(auth.user?.role as string))
 
 const heroAnimClass = computed(() => {
   if (!themeStore.heroAnim || !themeStore.animations) return ''
@@ -305,7 +355,6 @@ interface Platform {
 
 const platforms = ref<Platform[]>([])
 const loading   = ref(true)
-const scanning  = ref(false)
 const scanMsg   = ref('')
 
 // ── ROM sources (RomDownloader tiles) ──────────────────────────────────────
@@ -313,7 +362,9 @@ const scanMsg   = ref('')
 const sourceTiles = ref<RomSource[]>([])
 
 async function fetchRomSources() {
-  if (!isAdmin.value) { sourceTiles.value = []; return }
+  // Was admin-only, from when the store routes were. They now ask for the
+  // upload permission plus the store one, so a granted uploader belongs here.
+  if (!auth.canUseStores) { sourceTiles.value = []; return }
   try {
     sourceTiles.value = await romSourceActions.list()
   } catch {
@@ -373,43 +424,30 @@ async function fetchPlatforms() {
   }
 }
 
-// ── Scan ──────────────────────────────────────────────────────────────────────
+// ── Scan ────────────────────────────────────────────────────────────
+// Watched over the socket rather than polled. The composable also asks the
+// server once on mount, so opening this page halfway through a scan shows where
+// it is instead of nothing.
+const scan = useRomScan(() => { fetchPlatforms(); scanMsg.value = '' })
+const scanning = scan.running
+
 async function triggerScan() {
-  scanning.value = true
+  // No "scanning..." line: the indicator above says that, with a platform and a
+  // file. Setting one here left it on screen for ever after the bar had gone -
+  // the old poll used to clear it, and nothing replaced that.
   scanMsg.value = ''
   try {
-    await client.post('/roms/scan')
-    scanMsg.value = t('roms.scanning')
-    // Module-scope handle, cleared before re-arming and on unmount. It used to
-    // be a local one cleared only in the success branch, so navigating away
-    // during a scan left a poll running for ever against a component that no
-    // longer exists, and a failing status endpoint left the button saying
-    // "Scanning..." until the page was reloaded.
-    stopScanPoll()
-    let misses = 0
-    scanPoll = setInterval(async () => {
-      try {
-        const { data } = await client.get('/roms/scan/status')
-        misses = 0
-        if (!data.running) {
-          stopScanPoll()
-          await fetchPlatforms()
-          scanMsg.value = ''
-          scanning.value = false
-        }
-      } catch {
-        // A blip is not an answer, but five in a row is: stop claiming to be
-        // scanning something nobody can confirm is still running.
-        if (++misses >= 5) {
-          stopScanPoll()
-          scanMsg.value = t('common.scan_failed')
-          scanning.value = false
-        }
-      }
-    }, 2000)
+    await scan.start()
   } catch (e: any) {
     scanMsg.value = e?.response?.data?.detail || t('common.scan_failed')
-    scanning.value = false
+  }
+}
+
+async function stopScan() {
+  try {
+    await scan.stop()
+  } catch (e: any) {
+    scanMsg.value = e?.response?.data?.detail || t('common.scan_failed')
   }
 }
 
@@ -459,7 +497,8 @@ const addModal = reactive({
   progress:         [] as number[],
   uploadError:      '',
   uploadDone:       false,
-  savedCount:       0,
+  result:           '',
+  refused:          false,
 })
 
 const filteredAllPlatforms = computed(() => {
@@ -481,7 +520,8 @@ function openAddModal() {
   addModal.progress         = []
   addModal.uploadError      = ''
   addModal.uploadDone       = false
-  addModal.savedCount       = 0
+  addModal.result           = ''
+  addModal.refused          = false
 }
 
 function closeAddModal() {
@@ -529,7 +569,8 @@ async function uploadFiles() {
   addModal.uploading    = true
   addModal.uploadError  = ''
   addModal.uploadDone   = false
-  addModal.savedCount   = 0
+  addModal.result       = ''
+  addModal.refused      = false
   addModal.progress     = addModal.files.map(() => 0)
 
   const slug     = addModal.selectedPlatform.fs_slug
@@ -544,7 +585,8 @@ async function uploadFiles() {
         addModal.progress = addModal.files.map(() => pct)
       },
     })
-    addModal.savedCount = data.saved?.length ?? addModal.files.length
+    addModal.result = describeUpload(data, t)
+    addModal.refused = uploadHadRefusals(data)
     addModal.uploadDone = true
     addModal.uploading  = false
     // Refresh platform list so ROM count is updated after next scan
@@ -562,13 +604,6 @@ function platformCardStyle(fsSlug: string): Record<string, string> {
 
 // The scan poller lives here rather than inside the function that starts it, so
 // it can be stopped from anywhere - including on unmount.
-let scanPoll: ReturnType<typeof setInterval> | null = null
-function stopScanPoll() {
-  if (scanPoll) clearInterval(scanPoll)
-  scanPoll = null
-}
-
-onUnmounted(stopScanPoll)
 
 onMounted(() => {
   fetchPlatforms()
@@ -819,6 +854,61 @@ onMounted(() => {
   background: color-mix(in srgb, #f59e0b 22%, rgba(0,0,0,.55));
   border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
   backdrop-filter: blur(3px);
+}
+
+/* ── Scan progress ──────────────────────────────────────────────────────── */
+.emu-scan-prog {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+}
+.emu-scan-bar {
+  height: 4px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in srgb, var(--pl) 15%, transparent);
+}
+.emu-scan-fill {
+  height: 100%; border-radius: 999px; background: var(--pl-light);
+  transition: width .25s linear;
+}
+/* Before the first number arrives there is nothing honest to fill to, so the
+   bar sweeps instead of claiming a percentage it does not have. */
+.emu-scan-fill--idle {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--pl) 20%, transparent) 0%,
+    var(--pl-light) 50%,
+    color-mix(in srgb, var(--pl) 20%, transparent) 100%);
+  background-size: 200% 100%;
+  animation: emu-scan-sweep 1.1s linear infinite;
+}
+@keyframes emu-scan-sweep {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .emu-scan-fill--idle { animation: none; }
+}
+.emu-scan-line {
+  display: flex; align-items: center; gap: 10px;
+  font-size: var(--fs-sm, 12px); color: var(--muted);
+}
+.emu-scan-where { font-weight: 600; color: var(--text); flex-shrink: 0; }
+.emu-scan-file {
+  flex: 1; min-width: 0; font-family: var(--font-mono, monospace);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.emu-scan-stop {
+  flex-shrink: 0; padding: 3px 10px; border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, #f87171 45%, transparent);
+  background: color-mix(in srgb, #f87171 18%, transparent);
+  color: #f87171; font-size: 11px; font-weight: 600;
+  font-family: inherit; cursor: pointer; transition: all var(--transition);
+}
+.emu-scan-stop:hover:not(:disabled) {
+  background: color-mix(in srgb, #f87171 30%, transparent); color: #fff;
+}
+.emu-scan-stop:disabled { opacity: .5; cursor: default; }
+
+@media (prefers-reduced-motion: reduce) {
+  .emu-scan-fill { transition: none; }
 }
 
 /* ── Misc ───────────────────────────────────────────────────────────────── */

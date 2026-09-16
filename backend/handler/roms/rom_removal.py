@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from config import RESOURCES_PATH, ROMS_PATH, SAVES_PATH
+from handler.filesystem.rom_paths import roms_library_path
 
 logger = logging.getLogger(__name__)
 
@@ -130,12 +131,12 @@ def delete_rom_file(rom, *, spoken_for: set[str] = frozenset()) -> bool:
     """
     if rom.fs_name.lower() in spoken_for:
         return False
-    target = _within(os.path.join(rom.fs_path, rom.fs_name), ROMS_PATH)
+    target = _within(os.path.join(rom.fs_path, rom.fs_name), roms_library_path())
     if not target or not target.is_file():
         return False
     if not _unlink(target):
         return False
-    _prune_empty(target.parent, ROMS_PATH)
+    _prune_empty(target.parent, roms_library_path())
     return True
 
 
@@ -223,12 +224,12 @@ def delete_paths(paths) -> int:
     removed = 0
     touched: set[Path] = set()
     for path in paths:
-        target = _within(str(path), ROMS_PATH)
+        target = _within(str(path), roms_library_path())
         if target and target.is_file() and _unlink(target):
             removed += 1
             touched.add(target.parent)
     for directory in touched:
-        _prune_empty(directory, ROMS_PATH)
+        _prune_empty(directory, roms_library_path())
     return removed
 
 

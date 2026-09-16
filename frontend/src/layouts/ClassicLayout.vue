@@ -40,6 +40,39 @@
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
           </button>
+          <!-- Where a ROM scan is, and the way out of it. Compact, because this
+               is a sidebar header and the scan runs behind whatever you are
+               doing. -->
+          <div v-if="romScan.visible.value" class="lib-scan">
+            <span v-if="romScan.phase.value === 'starting'" class="lib-scan-where">
+              {{ t('scan.starting', 'Starting the scan…') }}
+            </span>
+            <span v-else-if="romScan.phase.value === 'done'" class="lib-scan-where">
+              {{ romScan.summary.value?.error === 'path_missing'
+                 ? t('scan.path_missing', 'The ROM folder is not there. Check Settings > ROMs.')
+                 : romScan.summary.value?.error
+                 ? t('scan.failed', 'The scan stopped with an error. See the server log.')
+                 : romScan.summary.value?.unknown
+                 ? t('scan.finished', 'Scan finished.')
+                 : romScan.summary.value?.cancelled
+                 ? t('scan.stopped', 'Scan stopped.')
+                 : t('scan.found', { n: romScan.summary.value?.roms_found ?? 0 }) }}
+            </span>
+            <template v-else>
+              <span class="lib-scan-where">
+                {{ romScan.state.value.platform || t('roms.scanning') }}
+                <template v-if="romScan.state.value.platform_total">
+                  {{ romScan.state.value.platform_index }}/{{ romScan.state.value.platform_total }}
+                </template>
+              </span>
+              <button v-if="romScan.canStop.value" class="lib-scan-stop"
+                      :disabled="romScan.stopping.value || romScan.state.value.cancelling"
+                      @click="stopRomScan">
+                {{ romScan.state.value.cancelling ? t('scan.stopping', 'Stopping…') : t('scan.stop', 'Stop') }}
+              </button>
+            </template>
+          </div>
+
           <!-- Quick library jump (handy with many libraries + collection containers) -->
           <div v-if="libDropdownOpen" class="lib-drop">
             <button
@@ -100,7 +133,7 @@
       </div>
 
       <!-- ROM Downloader entry (admin, Emulation only) -->
-      <div v-if="activeLib === 'roms' && isAdmin && classicRomSources.length" class="rd-entry">
+      <div v-if="activeLib === 'roms' && authStore.canUseStores && classicRomSources.length" class="rd-entry">
         <button
           v-for="s in classicRomSources"
           :key="s.id"
@@ -186,7 +219,7 @@
 
       <!-- Bottom: download manager + user menu -->
       <div class="panel-bottom">
-        <DownloadManager v-if="isAdmin" :inline="true" />
+        <DownloadManager v-if="canSeeTransfers" :inline="true" />
         <div class="user-area" ref="userAreaRef">
           <button class="user-btn" @click.stop="menuOpen = !menuOpen" :class="{ open: menuOpen }">
             <div class="user-avatar" style="position:relative">
@@ -677,7 +710,7 @@
               </div>
             </div>
             <div v-if="addRomsError"  class="cl-msg cl-msg--error">{{ addRomsError }}</div>
-            <div v-if="addRomsDone"   class="cl-msg cl-msg--ok">{{ t('library.uploaded_ok', { count: addRomsSavedCount }) }}</div>
+            <div v-if="addRomsDone" class="cl-msg" :class="addRomsRefused ? 'cl-msg--error' : 'cl-msg--ok'">{{ addRomsResult }}</div>
           </div>
           <div class="cl-modal-footer">
             <button class="cl-btn cl-btn--ghost" @click="!addRomsUploading && (addRomsModal = false)" :disabled="addRomsUploading">{{ t('common.cancel') }}</button>
@@ -702,10 +735,12 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useLibrariesStore } from '@/stores/libraries'
 import { useSocketStore } from '@/stores/socket'
+import { useRomScan } from '@/composables/useRomScan'
 import client from '@/services/api/client'
 import * as libActions from '@/lib/libraryActions'
 import catalogActions from '@/lib/catalogActions'
 import romSourceActions, { type RomSource } from '@/lib/romSourceActions'
+import { describeUpload, uploadHadRefusals } from '@/lib/uploadResult'
 import AmbientBackground from '@/components/common/AmbientBackground.vue'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import ClassicGameDetail from './ClassicGameDetail.vue'
@@ -718,9 +753,11 @@ import { useNotifications } from '@/composables/useNotifications'
 import { useI18n } from '@/i18n'
 import { useNotificationStore } from '@/stores/notifications'
 import { openAbout } from '@/lib/about'
+import { useDialog } from '@/composables/useDialog'
 
 const { success: notifySuccess, error: notifyError } = useNotifications()
 const { t } = useI18n()
+const { gdConfirm } = useDialog()
 const notifStore = useNotificationStore()
 
 interface Game {
@@ -818,7 +855,11 @@ const addRomsUploading = ref(false)
 const addRomsProgress  = ref<number[]>([])
 const addRomsError     = ref('')
 const addRomsDone      = ref(false)
-const addRomsSavedCount = ref(0)
+// The whole answer, not only how many landed. A refusal comes back in
+// `rejected` with its reason, and reading only `saved` rendered every one of
+// them as "0 ROM(s) uploaded successfully!".
+const addRomsResult    = ref('')
+const addRomsRefused   = ref(false)
 const addRomsFileInput = ref<HTMLInputElement>()
 
 const allPickerPlatforms = computed<PickerPlatform[]>(() => {
@@ -921,6 +962,10 @@ const userRole = computed(() => {
 })
 
 const isAdmin    = computed(() => authStore.user?.role === 'admin')
+// Not the role. The transfer tray shows an uploader their own downloads,
+// which is what the route behind it already answers - see the rule in the
+// auth store.
+const canSeeTransfers = computed(() => authStore.canSeeTransfers)
 const isUploader = computed(() => ['admin', 'uploader'].includes(authStore.user?.role as string))
 
 // ── ROM sources (RomDownloader) ─────────────────────────────────────────────
@@ -1143,29 +1188,40 @@ function openSyncDialog() {
   showSyncDialog.value = true
 }
 
+// Watched over the socket rather than polled. The completion callback does what
+// the old poll's success branch did, and it fires whether the scan finished on
+// its own or was stopped.
+const romScan = useRomScan(async () => {
+  await fetchRomPlatforms()
+  await fetchGames()
+  detailRefreshTick.value++
+  // Not on every ending. This line is the operator's record of what the server
+  // did, and it said "complete." after a scan that fell over partway - which is
+  // the one case where somebody reading the log needs to know otherwise.
+  pushLog(romScan.summary.value?.error ? 'ROM scan failed.' : 'ROM scan complete.')
+  const after = new Set(syncing.value); after.delete('roms'); syncing.value = after
+})
+
 async function scanRomLibrary() {
   const id = 'roms'
   if (syncing.value.has(id)) return
   const next = new Set(syncing.value); next.add(id); syncing.value = next
   pushLog('Scanning ROM library…')
   try {
-    await client.post('/roms/scan')
-    const poll = setInterval(async () => {
-      try {
-        const { data } = await client.get('/roms/scan/status')
-        if (!data.running) {
-          clearInterval(poll)
-          await fetchRomPlatforms()
-          await fetchGames()
-          detailRefreshTick.value++
-          pushLog('ROM scan complete.')
-          const after = new Set(syncing.value); after.delete(id); syncing.value = after
-        }
-      } catch { clearInterval(poll); const after = new Set(syncing.value); after.delete(id); syncing.value = after }
-    }, 2000)
+    await romScan.start()
   } catch (e) {
     pushLog(`ROM scan error: ${e}`)
     const after = new Set(syncing.value); after.delete(id); syncing.value = after
+  }
+}
+
+/** Ask the running scan to stop. The library is put back as it was; a scan that
+ *  did not finish makes no claim about what is missing. */
+async function stopRomScan() {
+  try {
+    await romScan.stop()
+  } catch (e) {
+    pushLog(`ROM scan stop error: ${e}`)
   }
 }
 
@@ -1405,7 +1461,8 @@ async function openAddRomsModal() {
   addRomsProgress.value = []
   addRomsError.value = ''
   addRomsDone.value = false
-  addRomsSavedCount.value = 0
+  addRomsResult.value = ''
+  addRomsRefused.value = false
   addRomsModal.value = true
 }
 
@@ -1448,7 +1505,8 @@ async function submitAddRoms() {
         addRomsProgress.value = addRomsFiles.value.map(() => pct)
       },
     })
-    addRomsSavedCount.value = data.saved?.length ?? addRomsFiles.value.length
+    addRomsResult.value = describeUpload(data, t)
+    addRomsRefused.value = uploadHadRefusals(data)
     addRomsDone.value = true
     addRomsUploading.value = false
     await fetchRomPlatforms()
@@ -1529,11 +1587,27 @@ function onUploadFileChange(e: Event) {
 async function submitUpload() {
   uError.value = ''; uSuccess.value = ''; uProgress.value = 0; uUploading.value = true
   try {
-    // Target the active custom library so the game and its files land there.
-    const game = await libActions.createGame({
-      title:   uForm.value.title.trim(),
-      library: activeLib.value,
-    })
+    // A second file for a game already on this shelf joins it, rather than
+    // making a second entry. The owner hit this uploading Ion Fury and then its
+    // DLC under the same title: the file landed in the right folder and the
+    // library grew a duplicate. Asked rather than assumed - two different games
+    // can share a title, and unpicking a merge is hand work in the database.
+    const existing = await libActions.findGameByTitle(
+      uForm.value.title.trim(), activeLib.value)
+    let game = existing
+    if (existing) {
+      const ok = await gdConfirm(
+        t('upload.game_exists', { title: existing.title }),
+        { title: t('upload.add_to_existing'), confirmText: t('upload.add_to_existing') },
+      )
+      if (!ok) { uUploading.value = false; return }
+    } else {
+      // Target the active custom library so the game and its files land there.
+      game = await libActions.createGame({
+        title:   uForm.value.title.trim(),
+        library: activeLib.value,
+      })
+    }
     if (uTab.value === 'url') {
       // Server downloads in the background - follow progress over the socket.
       const res = await libActions.uploadFromUrl(game.id, {
@@ -1927,6 +2001,28 @@ onUnmounted(() => { _unregHomeSections?.() })
   text-transform: uppercase;
   color: var(--muted);
 }
+/* A running ROM scan, in a sidebar header: which platform, and Stop. */
+.lib-scan {
+  display: flex; align-items: center; gap: 6px;
+  margin-left: 6px; min-width: 0;
+  font-size: 10px; color: var(--muted);
+}
+.lib-scan-where {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.lib-scan-stop {
+  flex-shrink: 0; padding: 1px 6px; border-radius: var(--radius-xs, 4px);
+  border: 1px solid color-mix(in srgb, #f87171 45%, transparent);
+  background: color-mix(in srgb, #f87171 18%, transparent);
+  color: #f87171; font-size: 10px; font-weight: 600;
+  font-family: inherit; cursor: pointer;
+}
+.lib-scan-stop:hover:not(:disabled) {
+  background: color-mix(in srgb, #f87171 32%, transparent); color: #fff;
+}
+.lib-scan-stop:disabled { opacity: .5; cursor: default; }
+
 .lib-sw-sync {
   background: none;
   border: none;

@@ -416,7 +416,7 @@ def test_the_archive_carries_the_playlist_beside_the_discs(tmp_path):
 
 
 def test_deleting_a_disc_takes_the_files_that_have_no_row(tmp_path, monkeypatch):
-    monkeypatch.setattr(rom_removal, "ROMS_PATH", str(tmp_path))
+    monkeypatch.setattr(rom_removal, "roms_library_path", lambda _cm=None: str(tmp_path))
     _write(tmp_path, "Game.gdi",
            "2\n1 0 4 2352 track01.bin 0\n2 756 0 2352 track02.raw 0\n")
     _write(tmp_path, "track01.bin")
@@ -434,7 +434,7 @@ def test_deleting_a_disc_takes_the_files_that_have_no_row(tmp_path, monkeypatch)
 def test_a_file_outside_the_rom_directory_is_not_unlinked(tmp_path, monkeypatch):
     roms = tmp_path / "roms"
     roms.mkdir()
-    monkeypatch.setattr(rom_removal, "ROMS_PATH", str(roms))
+    monkeypatch.setattr(rom_removal, "roms_library_path", lambda _cm=None: str(roms))
     elsewhere = _write(tmp_path, "important.bin", b"keep me")
 
     assert rom_removal.delete_paths([elsewhere]) == 0
@@ -470,7 +470,7 @@ def test_the_scan_still_gives_the_file_to_one_sheet(tmp_path):
 def test_deleting_the_sheet_that_won_the_file_leaves_it_for_the_other(tmp_path, monkeypatch):
     """Route one: the file became a row of A's set, so the ordinary member loop
     deleted it along with A."""
-    monkeypatch.setattr(rom_removal, "ROMS_PATH", str(tmp_path))
+    monkeypatch.setattr(rom_removal, "roms_library_path", lambda _cm=None: str(tmp_path))
     _shared_bin(tmp_path)
     members = _rows(tmp_path, "A.cue", "data.bin")
 
@@ -487,7 +487,7 @@ def test_deleting_the_sheet_that_won_the_file_leaves_it_for_the_other(tmp_path, 
 def test_deleting_the_sheet_that_lost_the_file_leaves_it_too(tmp_path, monkeypatch):
     """Route two, and the one that reads as harmless: B has no row for the file,
     so it looked like an orphan nothing would miss."""
-    monkeypatch.setattr(rom_removal, "ROMS_PATH", str(tmp_path))
+    monkeypatch.setattr(rom_removal, "roms_library_path", lambda _cm=None: str(tmp_path))
     _shared_bin(tmp_path)
 
     orphans = rom_removal.unrowed_tracks(_rows(tmp_path, "B.cue"))
@@ -500,7 +500,7 @@ def test_deleting_the_sheet_that_lost_the_file_leaves_it_too(tmp_path, monkeypat
 def test_a_lone_sheet_still_takes_its_data_with_it(tmp_path, monkeypatch):
     """The guard must not turn the ordinary case into a leak: with nobody else
     naming the file, it is an orphan the moment the sheet goes."""
-    monkeypatch.setattr(rom_removal, "ROMS_PATH", str(tmp_path))
+    monkeypatch.setattr(rom_removal, "roms_library_path", lambda _cm=None: str(tmp_path))
     _write(tmp_path, "Only.cue", 'FILE "only.bin" BINARY\n')
     _write(tmp_path, "only.bin", b"nothing else points here")
 
@@ -513,7 +513,7 @@ def test_a_lone_sheet_still_takes_its_data_with_it(tmp_path, monkeypatch):
 def test_the_sheets_of_one_multi_disc_set_do_not_shield_each_other(tmp_path, monkeypatch):
     """Both sheets are going, so neither is "somebody else" - otherwise a
     two-disc game would leave all of its data behind."""
-    monkeypatch.setattr(rom_removal, "ROMS_PATH", str(tmp_path))
+    monkeypatch.setattr(rom_removal, "roms_library_path", lambda _cm=None: str(tmp_path))
     _two_discs(tmp_path)
     members = _rows(tmp_path, "Game (Disc 1).cue", "Game (Disc 1).bin",
                     "Game (Disc 2).cue", "Game (Disc 2).bin")

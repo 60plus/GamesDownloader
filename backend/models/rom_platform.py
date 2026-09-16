@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Integer, String
+from sqlalchemy import Boolean, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import Base
@@ -22,6 +22,10 @@ class RomPlatform(Base):
 
     # User override for display name
     custom_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Paths this platform's scan is told never to look at, one per line. The
+    # motivating case is exactly this granular: a modding folder that belongs
+    # beside the Amiga ROMs and nowhere else.
+    scan_exclude: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # ── External scraper IDs ───────────────────────────────────────────────────
     igdb_id:      Mapped[int | None] = mapped_column(Integer,     nullable=True)
