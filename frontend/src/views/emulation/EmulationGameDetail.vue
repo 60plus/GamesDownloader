@@ -69,12 +69,28 @@
 
             <!-- Action buttons below the cover -->
             <div class="gd-cover-actions">
-              <button v-if="ejsCore" class="gd-btn-play gd-btn-play--cover" @click="requestPlay()">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                  <polygon points="5,3 19,12 5,21"/>
-                </svg>
-                {{ t('detail.play') }}
-              </button>
+              <!-- Play starts the game the way it was last told to. The caret
+                   beside it reopens the question, which is the only way back
+                   once "remember my choice" has been ticked, and the only way
+                   to reach the bezel toggle that lives in the same dialog. -->
+              <div v-if="ejsCore" class="gd-play-split">
+                <button class="gd-btn-play gd-btn-play--cover" @click="requestPlay()">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <polygon points="5,3 19,12 5,21"/>
+                  </svg>
+                  {{ t('detail.play') }}
+                </button>
+                <button
+                  class="gd-btn-play gd-btn-play--more"
+                  :title="t('detail.choose_display')"
+                  :aria-label="t('detail.choose_display')"
+                  @click="openDisplayOptions()"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </button>
+              </div>
               <button class="gd-btn-dl gd-btn-dl--cover" @click="downloadRom()">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -190,7 +206,8 @@
 
             <!-- Actions (edit controls only - Play/Download are under the cover) -->
             <div class="gd-actions">
-              <button v-if="canEdit" class="gd-btn-ghost" @click="showEditPanel = true" :title="t('detail.edit_metadata')">
+              <button v-if="canEdit"
+              :disabled="metaLocked" class="gd-btn-ghost" :class="{ 'gd-btn--locked': metaLocked }" @click="showEditPanel = true" :title="metaLocked ? t('meta.locked_by_admin') : t('detail.edit_metadata')">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -217,7 +234,10 @@
                 {{ hashing ? t('detail.computing_hashes') : t('detail.compute_hashes') }}
               </button>
 
-              <button v-if="canEdit" class="gd-btn-danger" :disabled="clearing" @click="onClearMetadata" :title="t('detail.clear_metadata')">
+              <!-- Clearing asks the API for ROMS_WRITE, which the admin alone
+                   has, unlike editing and scraping beside it. Under canEdit an
+                   editor was shown a button that could only answer 403. -->
+              <button v-if="isAdmin" class="gd-btn-danger" :disabled="clearing" @click="onClearMetadata" :title="t('detail.clear_metadata')">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
                   <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
@@ -397,6 +417,28 @@
                 <span class="gd-di"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg></span>
                 <span class="gd-dk">{{ t('detail.publisher') }}</span>
                 <span class="gd-dv">{{ rom.publisher }}</span>
+              </template>
+              <!-- Who owns this ROM and, once an admin has claimed it, who
+                   fetched it. Most ROMs were found on the disk by a scan and
+                   have neither, so both rows simply stay away for those. -->
+              <template v-if="rom.owner_username">
+                <span class="gd-di"><svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm0 2h14v2H5v-2z"/></svg></span>
+                <span class="gd-dk">{{ t('detail.owner') }}</span>
+                <span class="gd-dv gd-owner-cell">
+                  {{ rom.owner_username }}
+                  <button
+                    v-if="isAdmin && rom.published_by && rom.published_by !== auth.user?.id"
+                    class="gd-claim"
+                    :disabled="claiming"
+                    :title="t('detail.claim_hint')"
+                    @click="claimRom"
+                  >{{ t('detail.claim') }}</button>
+                </span>
+              </template>
+              <template v-if="rom.uploader_username">
+                <span class="gd-di"><i class="mdi mdi-tray-arrow-up"></i></span>
+                <span class="gd-dk">{{ t('detail.uploader') }}</span>
+                <span class="gd-dv">{{ rom.uploader_username }}</span>
               </template>
               <template v-if="rom.release_year">
                 <span class="gd-di"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
@@ -664,6 +706,11 @@ const themeStore = useThemeStore()
 
 const isAdmin  = computed(() => auth.user?.role === 'admin')
 const canEdit  = computed(() => ['admin', 'uploader', 'editor'].includes(auth.user?.role as string))
+// A locked entry is the admin's alone, so there is nothing here for anyone
+// else to open. Refusing at the button matters beyond tidiness: opening the
+// editor fires searches at the metadata providers, and some of them charge
+// for the request.
+const metaLocked = computed(() => !isAdmin.value && !!(rom.value as any)?.metadata_locked)
 
 // Only a ROM that belongs to a disk set is ever listed here, and the scanner
 // assigns the group and the number together - so a disk always has both.
@@ -679,6 +726,13 @@ interface RomDisk {
 
 interface RomDetail {
   id: number
+  // Who owns this ROM, and who fetched it. Both absent for anything the disk
+  // scanner merely found, which is most of them; the uploader is sent only once
+  // a claim has parted the two.
+  published_by?: number | null
+  owner_username?: string | null
+  uploaded_by?: number | null
+  uploader_username?: string | null
   disks?: RomDisk[]
   platform_slug: string
   platform_fs_slug: string | null
@@ -844,10 +898,13 @@ function requestPlay(diskId?: number, wholeSet?: boolean) {
     diskId === undefined && diskSet.value.length > 1 && !!rom.value?.set_loads_whole
   )
   const saved = localStorage.getItem(PREF_KEY) as 'full' | 'window' | 'tab' | null
-  // Load bezel pref for this specific game (default on)
+  // This game's answer about the bezel, and shown when there is none. Reading
+  // it as "not switched off" rather than "switched on" is what makes the art a
+  // game was scraped with actually appear: the key is written the first time
+  // somebody answers, so === '1' hid every bezel nobody had found the toggle
+  // for yet.
   if (rom.value?.bezel_path && rom.value.id) {
-    const bSaved = localStorage.getItem(bezelKey(rom.value.id))
-    bezelEnabled.value = bSaved === '1'
+    bezelEnabled.value = localStorage.getItem(bezelKey(rom.value.id)) !== '0'
   }
   if (saved) {
     // Use saved preference directly, skip dialog
@@ -863,9 +920,33 @@ function requestPlay(diskId?: number, wholeSet?: boolean) {
   }
 }
 
+// Reopening the question, which pressing Play no longer does once an answer was
+// remembered. It is not enough to raise the dialog: Play also records which disc
+// was asked for and reads this game's bezel setting, and a dialog opened without
+// both would offer the previous game's answers and then save them over this one.
+function openDisplayOptions() {
+  pendingDisk.value = null
+  pendingWholeSet.value = diskSet.value.length > 1 && !!rom.value?.set_loads_whole
+  if (rom.value?.bezel_path && rom.value.id) {
+    bezelEnabled.value = localStorage.getItem(bezelKey(rom.value.id)) !== '0'
+  }
+  const saved = localStorage.getItem(PREF_KEY) as 'full' | 'window' | 'tab' | null
+  pendingMode.value = saved ?? 'full'
+  // Ticked because it is true: a mode is remembered. Unticking it here is how
+  // the user asks to be given the choice again, which is what launchPlayer acts
+  // on below.
+  rememberMode.value = !!saved
+  showPlayerDialog.value = true
+}
+
 function launchPlayer() {
   if (rememberMode.value) {
     localStorage.setItem(PREF_KEY, pendingMode.value)
+  } else {
+    // The half that was missing. Storing on tick but never clearing on untick
+    // is what made the choice permanent: the box could be emptied and the
+    // preference stayed, so the dialog never came back on its own.
+    localStorage.removeItem(PREF_KEY)
   }
   showPlayerDialog.value = false
 
@@ -971,6 +1052,25 @@ function slideTo(idx: number) {
 }
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
+// Taking a ROM over from the account that fetched it. Worth a confirmation
+// because two of its three effects land on somebody else's account rather than
+// on this page: their quota frees up and their delete goes away.
+const claiming = ref(false)
+async function claimRom() {
+  if (!rom.value || claiming.value) return
+  if (!await gdConfirm(
+    t('detail.claim_body').replace('{name}', (rom.value as any).owner_username || '?'),
+    { title: t('detail.claim') },
+  )) return
+  claiming.value = true
+  try {
+    await client.post(`/roms/${rom.value.id}/claim`)
+    await fetchRom()
+  } catch {
+    await gdAlert(t('detail.claim_failed'))
+  } finally { claiming.value = false }
+}
+
 async function fetchRom() {
   const id = route.params.id
   if (!id || id === 'undefined') return
@@ -1278,6 +1378,20 @@ onUnmounted(() => {
 .gd-btn-play--cover {
   width: 100%; justify-content: center; font-size: var(--fs-md, 14px); padding: 10px 0;
 }
+/* Play and the caret read as one control, so they sit in one row with a hairline
+   between them and only the outer corners rounded. The gap is the separator:
+   the column behind it is dark, so nothing has to be drawn. */
+.gd-play-split { display: flex; gap: 1px; width: 100%; }
+.gd-play-split .gd-btn-play--cover {
+  flex: 1; min-width: 0;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+.gd-btn-play--more {
+  flex: none; width: 38px; padding: 10px 0; justify-content: center;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  /* The pair would otherwise cast two overlapping glows along the seam. */
+  box-shadow: none;
+}
 .gd-btn-dl--cover {
   width: 100%; justify-content: center; font-size: 13px; padding: 9px 0;
 }
@@ -1456,7 +1570,13 @@ onUnmounted(() => {
   display: flex; align-items: center; justify-content: center;
 }
 .gd-player-window {
-  width: min(96vw, 1200px); height: min(90vh, 760px);
+  /* 16:9 on the picture, not on the window: the bezel inside the iframe is
+     16:9 and object-fit:cover crops whatever does not match, so a window that
+     were itself 16:9 would leave the picture a title bar short of it and clip
+     the bezel sides anyway. Height stays what it was; the width is what 16:9
+     asks for underneath the bar, so the picture widens instead of shrinking. */
+  --gd-player-bar: 38px;
+  width: min(96vw, calc((min(90vh, 760px) - var(--gd-player-bar)) * 16 / 9));
   border-radius: var(--radius, 12px); overflow: hidden;
   border: 1px solid #2e2e4a;
   display: flex; flex-direction: column;
@@ -1465,7 +1585,7 @@ onUnmounted(() => {
 .gd-player-window-bar {
   display: flex; align-items: center;
   background: #12121e; border-bottom: 1px solid #2e2e4a;
-  padding: 0 14px; height: 38px; gap: 10px; flex-shrink: 0;
+  padding: 0 14px; height: var(--gd-player-bar); gap: 10px; flex-shrink: 0;
 }
 .gd-player-window-title {
   flex: 1; font-size: var(--fs-sm, 12px); font-weight: 600; color: #9d9db8;
@@ -1478,7 +1598,7 @@ onUnmounted(() => {
 }
 .gd-player-window-close:hover { color: #f87171; }
 .gd-player-window .gd-player-iframe {
-  flex: 1; width: 100%; border: none; display: block;
+  width: 100%; aspect-ratio: 16 / 9; border: none; display: block;
 }
 
 .gd-btn-dl {
@@ -1628,6 +1748,21 @@ onUnmounted(() => {
   background: rgba(255,255,255,.02); color: var(--muted);
 }
 .gd-dk, .gd-dv { padding: 10px 14px; font-size: 13px; }
+.gd-owner-cell { display: flex; align-items: center; gap: 6px; }
+.gd-claim {
+  margin-left: 2px; padding: 0 8px;
+  font: inherit; font-size: 11px; line-height: 17px;
+  color: var(--pl); cursor: pointer;
+  background: color-mix(in srgb, var(--pl) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl) 30%, transparent);
+  border-radius: 999px;
+  transition: border-color .15s, background .15s;
+}
+.gd-claim:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pl) 20%, transparent);
+  border-color: color-mix(in srgb, var(--pl) 50%, transparent);
+}
+.gd-claim:disabled { opacity: .5; cursor: default; }
 .gd-dk {
   color: var(--muted); font-weight: 700; font-size: 11px;
   text-transform: uppercase; letter-spacing: .6px;
@@ -1698,4 +1833,12 @@ onUnmounted(() => {
   .gd-dlist { grid-template-columns: 30px auto 1fr; font-size: var(--fs-sm, 12px); }
 }
 
+
+/* Shut rather than broken: amber says somebody else holds this, which is not
+   the same as something having gone wrong. */
+.gd-btn--locked, .gd-btn--locked:hover {
+  background: rgba(245,158,11,.14) !important;
+  border-color: rgba(245,158,11,.4) !important;
+  color: #f59e0b; cursor: not-allowed;
+}
 </style>

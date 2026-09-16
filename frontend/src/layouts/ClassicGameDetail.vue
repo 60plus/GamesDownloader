@@ -54,6 +54,21 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5,3 19,12 5,21"/></svg>
             </button>
             <!-- ROM download -->
+            <!-- Reopens the display mode dialog, which Play stopped raising
+                 once it started honouring a remembered answer. It is also the
+                 only way to the bezel toggle, which lives in that dialog. -->
+            <button
+              v-if="activeLib === 'roms' && ejsCore"
+              class="cov-btn"
+              :title="t('detail.choose_display')"
+              :aria-label="t('detail.choose_display')"
+              @click="openDisplayOptions()"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <rect x="2" y="3" width="20" height="14" rx="2"/>
+                <line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+              </svg>
+            </button>
             <button v-if="activeLib === 'roms'" class="cov-btn" :title="t('detail.download_rom')" @click="downloadRom()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
@@ -65,10 +80,11 @@
             <button v-else-if="libAvailableFiles.length" class="cov-btn" :title="t('common.download')" @click="showLibDownload = true">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
-            <button v-if="isAdmin" class="cov-btn" @click="metaOpen = true" :title="t('detail.edit_metadata')">
+            <button v-if="canEdit"
+              :disabled="metaLocked" class="cov-btn" :class="{ 'cov-btn--locked': metaLocked }" @click="metaOpen = true" :title="metaLocked ? t('meta.locked_by_admin') : t('detail.edit_metadata')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             </button>
-            <button v-if="activeLib !== 'games'" class="cov-btn" :class="{ 'cov-btn--spin': scraping }" :disabled="scraping" @click="onScrapeClick" :title="activeLib === 'roms' ? 'Scrape ROM metadata' : 'Refresh data from GOG'">
+            <button v-if="activeLib !== 'games' && (activeLib === 'roms' ? canEdit : isAdmin)" class="cov-btn" :class="{ 'cov-btn--spin': scraping }" :disabled="scraping" @click="onScrapeClick" :title="activeLib === 'roms' ? 'Scrape ROM metadata' : 'Refresh data from GOG'">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             </button>
             <!-- Only for a ROM that is not identified by hash: the scan skipped
@@ -204,6 +220,32 @@
           </div>
           <div class="icard-row"><span class="icard-label">{{ t('detail.developer') }}: </span><span class="icard-val">{{ game.developer || '-' }}</span></div>
           <div class="icard-row"><span class="icard-label">{{ t('detail.publisher') }}: </span><span class="icard-val">{{ game.publisher || '-' }}</span></div>
+          <!-- Who owns the game and, once an admin has claimed it, who brought it
+               in. A ROM has both of these too now that one counts against the
+               same quota; only the GOG page keeps its own shape, because a GOG
+               game arrives from somebody's linked account rather than being
+               brought in. Before a claim the two are the same account and the second
+               row stays away rather than printing one person twice. -->
+          <template v-if="activeLib !== 'gog' && game.owner_username">
+            <div class="icard-row">
+              <span class="icard-label">{{ t('detail.owner') }}: </span>
+              <span class="icard-val cd-owner">
+                <svg class="cd-owner-crown" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm0 2h14v2H5v-2z"/></svg>
+                {{ game.owner_username }}
+                <button
+                  v-if="isAdmin && game.published_by && game.published_by !== authStore.user?.id"
+                  class="cd-claim"
+                  :disabled="claiming"
+                  :title="t('detail.claim_hint')"
+                  @click="claimGame"
+                >{{ t('detail.claim') }}</button>
+              </span>
+            </div>
+            <div v-if="game.uploader_username" class="icard-row">
+              <span class="icard-label">{{ t('detail.uploader') }}: </span>
+              <span class="icard-val">{{ game.uploader_username }}</span>
+            </div>
+          </template>
           <template v-if="game.genres?.length">
             <div class="icard-head" style="margin-top:10px">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
@@ -699,6 +741,18 @@ const { gdConfirm, gdAlert } = useDialog()
 const authStore = useAuthStore()
 const { t } = useI18n()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
+// Editing one game's metadata, by hand or by scraping it, asks the API for
+// LIBRARY_WRITE, which these three roles have. Deleting, clearing and hashing
+// ask for ROMS_WRITE, which is the admin alone, so those keep isAdmin. Without
+// this distinction the skin could only say admin or everybody, and it said
+// both in the wrong places.
+const canEdit = computed(() =>
+  ['admin', 'uploader', 'editor'].includes(authStore.user?.role as string))
+// A locked entry is the admin's alone, so there is nothing here for anyone
+// else to open. Refusing at the button matters beyond tidiness: opening the
+// editor fires searches at the metadata providers, and some of them charge
+// for the request.
+const metaLocked = computed(() => !isAdmin.value && !!(game.value as any)?.metadata_locked)
 
 const router = useRouter()
 /** Jump from a GOG listing to the game it became. The route watcher in the
@@ -752,6 +806,10 @@ interface GameData {
   hltb_main_s?: number; hltb_complete_s?: number
   summary?: string; wheel_path?: string; video_path?: string
   support_path?: string; bezel_path?: string; steamgrid_path?: string
+  // Library games only. published_by is what a claim moves; uploader_username
+  // is sent only once a claim has parted the two.
+  published_by?: number | null; owner_username?: string | null
+  uploaded_by?: number | null; uploader_username?: string | null
 }
 
 const game        = ref<GameData | null>(null)
@@ -1281,6 +1339,27 @@ ${t('detail.convert_chd_keep')}`,
   }
 }
 
+// Taking a game over from whoever uploaded it. Worth a confirmation because two
+// of its three effects land on somebody else's account rather than on this page:
+// their quota frees up and their delete button goes away.
+const claiming = ref(false)
+async function claimGame() {
+  if (!game.value || claiming.value) return
+  if (!await gdConfirm(
+    t('detail.claim_body').replace('{name}', game.value.owner_username || '?'),
+    { title: t('detail.claim') },
+  )) return
+  claiming.value = true
+  try {
+    await client.post(props.activeLib === 'roms'
+      ? `/roms/${game.value.id}/claim`
+      : `/library/games/${game.value.id}/claim`)
+    await loadGame(game.value.id)
+  } catch {
+    await gdAlert(t('detail.claim_failed'))
+  } finally { claiming.value = false }
+}
+
 // Reading a file the scan declined to read, because this time somebody asked.
 // Large images take a while, hence the spinning state; the button disappears
 // on reload, once the ROM has its checksums.
@@ -1417,7 +1496,7 @@ const rememberMode       = ref(false)
 const playerOpen         = ref(false)
 const playerMode         = ref<'full' | 'window'>('full')
 const playerIframe       = ref<HTMLIFrameElement | null>(null)
-const bezelEnabled       = ref(false)
+const bezelEnabled       = ref(true)
 
 const bezelKey = (id: number | string) => `gd3_bezel_${id}`
 
@@ -1480,14 +1559,21 @@ function requestPlay(diskId?: number, wholeSet?: boolean) {
     !!(game.value as any)?.set_loads_whole
   )
   const saved = localStorage.getItem(PREF_KEY_EMU) as 'full' | 'window' | 'tab' | null
-  // Load bezel pref for this specific game (default off)
+  // This game's answer about the bezel, and shown when there is none. Reading
+  // it as "not switched off" rather than "switched on" is what makes the art a
+  // game was scraped with actually appear: the key is written the first time
+  // somebody answers, so === '1' hid every bezel nobody had found the toggle
+  // for yet.
   if (game.value?.bezel_path && game.value.id) {
-    const bSaved = localStorage.getItem(bezelKey(game.value.id))
-    bezelEnabled.value = bSaved === '1'
+    bezelEnabled.value = localStorage.getItem(bezelKey(game.value.id)) !== '0'
   }
   if (saved) {
+    // This used to raise the dialog anyway, so that the bezel toggle inside it
+    // stayed reachable, which made "remember my choice" a promise this skin
+    // never kept. The toggle now has a button of its own over the cover, so
+    // Play can do what the user asked it to do.
     pendingMode.value = saved
-    showPlayerDialog.value = true  // always show so bezel toggle is visible
+    launchPlayer()
   } else {
     pendingMode.value = 'full'
     rememberMode.value = false
@@ -1495,8 +1581,31 @@ function requestPlay(diskId?: number, wholeSet?: boolean) {
   }
 }
 
+// Reopening the question, which pressing Play no longer does once an answer was
+// remembered. It is not enough to raise the dialog: Play also records which disc
+// was asked for and reads this game's bezel setting, and a dialog opened without
+// both would offer the previous game's answers and then save them over this one.
+function openDisplayOptions() {
+  pendingDisk.value = null
+  pendingWholeSet.value = diskSet.value.length > 1 && !!(game.value as any)?.set_loads_whole
+  if (game.value?.bezel_path && game.value.id) {
+    bezelEnabled.value = localStorage.getItem(bezelKey(game.value.id)) !== '0'
+  }
+  const saved = localStorage.getItem(PREF_KEY_EMU) as 'full' | 'window' | 'tab' | null
+  pendingMode.value = saved ?? 'full'
+  // Ticked because it is true: a mode is remembered. Unticking it here is how
+  // the user asks to be given the choice again, which is what launchPlayer acts
+  // on below.
+  rememberMode.value = !!saved
+  showPlayerDialog.value = true
+}
+
 function launchPlayer() {
   if (rememberMode.value) localStorage.setItem(PREF_KEY_EMU, pendingMode.value)
+  // The half that was missing. Storing on tick but never clearing on untick is
+  // what made the choice permanent: the box could be emptied and the preference
+  // stayed, so the dialog never came back on its own.
+  else localStorage.removeItem(PREF_KEY_EMU)
   if (game.value?.id) localStorage.setItem(bezelKey(game.value.id), bezelEnabled.value ? '1' : '0')
   showPlayerDialog.value = false
   if (pendingMode.value === 'tab') {
@@ -1847,6 +1956,22 @@ onUnmounted(() => window.removeEventListener('message', onPlayerMessage))
 .icard-row { font-size: 13px; margin-bottom: 5px; line-height: 1.5; }
 .icard-label { color: var(--muted); }
 .icard-val { color: var(--text); }
+.cd-owner { display: inline-flex; align-items: center; gap: 5px; }
+.cd-owner-crown { color: #f59e0b; flex-shrink: 0; filter: drop-shadow(0 0 4px rgba(245,158,11,.4)); }
+.cd-claim {
+  margin-left: 4px; padding: 0 8px;
+  font: inherit; font-size: 11px; line-height: 17px;
+  color: var(--pl); cursor: pointer;
+  background: color-mix(in srgb, var(--pl) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl) 30%, transparent);
+  border-radius: 999px;
+  transition: border-color .15s, background .15s;
+}
+.cd-claim:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--pl) 20%, transparent);
+  border-color: color-mix(in srgb, var(--pl) 50%, transparent);
+}
+.cd-claim:disabled { opacity: .5; cursor: default; }
 
 /* Genre tags */
 .genre-tags { display: flex; flex-wrap: wrap; gap: var(--space-1, 4px); padding: 2px 0; }
@@ -2087,7 +2212,14 @@ span.cdisk-btn:hover { background: none; color: var(--pl-light, #a78bfa); }
 .cd-player--full  { inset: 0; }
 .cd-player--window {
   top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: min(90vw, 1200px); height: min(85vh, 800px);
+  /* 16:9, because the bezel is 16:9 and the player lays it over the whole
+     frame with object-fit:cover. Cover crops rather than squashes, so a frame
+     of any other shape loses the outer edges of the bezel while the game,
+     which sits in the 4:3 hole in the middle, still looks right. The height is
+     the one this window always had; the width is what 16:9 asks for at that
+     height, so the picture gets wider rather than smaller. */
+  width: min(90vw, calc(min(85vh, 800px) * 16 / 9));
+  aspect-ratio: 16 / 9;   /* no height: an explicit one would win over this */
   border-radius: 10px; overflow: hidden;
   box-shadow: 0 24px 80px rgba(0,0,0,.8);
 }
@@ -2171,4 +2303,12 @@ span.cdisk-btn:hover { background: none; color: var(--pl-light, #a78bfa); }
 }
 .gd-play-confirm:hover { background: linear-gradient(135deg, #4ade80, #22c55e); }
 
+
+/* Shut rather than broken: amber says somebody else holds this, which is not
+   the same as something having gone wrong. */
+.cov-btn--locked, .cov-btn--locked:hover {
+  background: rgba(245,158,11,.18) !important;
+  border-color: rgba(245,158,11,.45) !important;
+  color: #f59e0b; cursor: not-allowed; transform: none;
+}
 </style>
