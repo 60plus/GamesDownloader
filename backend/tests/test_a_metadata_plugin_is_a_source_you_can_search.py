@@ -105,11 +105,29 @@ def route(monkeypatch):
     def _with_plugins(per_plugin, on_get_game=None):
         import plugins.manager as pm_mod
         hook = _Hook(per_plugin, on_get_game)
-        # The manager as the route meets it: the hook relay AND the pairing of
-        # an instance back to the directory it was loaded from, which is where
-        # a plugin's logo is served from.
+
+        async def _call_each(hook_name, timeout=None, **kwargs):
+            # The contract of the real `call_each`, which has its own test with
+            # real pluggy (test_one_slow_or_broken_plugin_costs_only_its_own_
+            # answer): each plugin asked on its own, one that raises left out.
+            if hook_name != "metadata_search_game":
+                return list(getattr(hook, hook_name)(**kwargs))
+            answers = []
+            for res in per_plugin:
+                try:
+                    answer = res(kwargs["query"]) if callable(res) else res
+                except Exception:
+                    continue
+                if answer is not None:
+                    answers.append(answer)
+            return answers
+
+        # The manager as the route meets it: the calls AND the pairing of an
+        # instance back to the directory it was loaded from, which is where a
+        # plugin's logo is served from.
         monkeypatch.setattr(pm_mod, "plugin_manager", SimpleNamespace(
             hook=hook,
+            call_each=_call_each,
             get_plugin_instances=lambda: [],
             id_for_instance=lambda inst: None,
         ))
@@ -213,11 +231,9 @@ async def test_a_plugin_that_throws_does_not_take_the_built_in_sources_with_it(r
     built-in sources are what this editor is for, and a plugin that raises must
     cost plugin results and nothing else.
 
-    Plugin results and not "its own": pluggy's relay aborts on the first
-    implementation that raises, so the answers already collected from the others
-    are lost with it. That is the behaviour everywhere this hook is called in
-    this codebase, and pretending otherwise here would be a test passing for a
-    reason the product does not have.
+    Its OWN results since 1.0.35. Pluggy's relay aborts on the first
+    implementation that raises and loses what the others answered, which is why
+    this route asks each plugin separately now (`call_each`, 1.0.34 audit #15).
     """
     def _zly(query):
         raise RuntimeError("wtyczka padla")
@@ -228,6 +244,9 @@ async def test_a_plugin_that_throws_does_not_take_the_built_in_sources_with_it(r
 
     assert [r for r in out if r.get("source") == "launchbox"], (
         "padajaca wtyczka zabrala wyniki wbudowanych zrodel - albo wysadzila cala trase"
+    )
+    assert [r for r in out if r.get("source") == "plugin"], (
+        "padajaca wtyczka zabrala wyniki innej wtyczki"
     )
 
 
@@ -425,10 +444,15 @@ async def test_art_from_a_plugin_carries_a_logo_that_exists(monkeypatch):
             return "PPE.pl"
 
     inst = _P()
+    covers = [[{"url": "http://x/1.jpg", "thumb": "http://x/1.jpg", "_source": "PPE.pl"}]]
+
+    async def _call_each(hook_name, timeout=None, **kwargs):
+        # Asked through `call_each` since 1.0.35; this test is about the logo.
+        return covers if hook_name == "metadata_get_covers" else []
+
     monkeypatch.setattr(pm_mod, "plugin_manager", SimpleNamespace(
-        hook=SimpleNamespace(metadata_get_covers=lambda query: [[
-            {"url": "http://x/1.jpg", "thumb": "http://x/1.jpg", "_source": "PPE.pl"},
-        ]]),
+        hook=SimpleNamespace(metadata_get_covers=lambda query: covers),
+        call_each=_call_each,
         get_plugin_instances=lambda: [inst],
         id_for_instance=lambda i: "ppe-metadata" if i is inst else None,
     ))

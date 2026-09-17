@@ -105,6 +105,16 @@ async def test_the_provider_list_says_which_art_each_plugin_supplies(monkeypatch
 
 # ── Icons are not covers ─────────────────────────────────────────────────────
 
+def _calls_through(hook):
+    """`plugin_manager.call_each` over a fake relay: the art searches ask the
+    plugins through it since 1.0.35 (test_one_slow_or_broken_plugin_costs_only_
+    its_own_answer)."""
+    async def _call_each(hook_name, timeout=None, **kwargs):
+        fn = getattr(hook, hook_name, None)
+        return [] if fn is None else list(fn(**kwargs))
+    return _call_each
+
+
 @pytest.mark.asyncio
 async def test_asking_plugins_for_icons_does_not_return_their_covers(monkeypatch):
     import plugins.manager as pm_mod
@@ -116,8 +126,10 @@ async def test_asking_plugins_for_icons_does_not_return_their_covers(monkeypatch
         asked.append(query)
         return [[{"url": "http://x/box.jpg", "_source": "TheGamesDB"}]]
 
+    hook = SimpleNamespace(metadata_get_covers=_covers)
     monkeypatch.setattr(pm_mod, "plugin_manager", SimpleNamespace(
-        hook=SimpleNamespace(metadata_get_covers=_covers),
+        hook=hook,
+        call_each=_calls_through(hook),
         get_plugin_instances=lambda: [],
         id_for_instance=lambda i: None,
     ))
@@ -135,9 +147,11 @@ async def test_asking_plugins_for_covers_still_returns_them(monkeypatch):
     import plugins.manager as pm_mod
     from handler.metadata.external_art import search_cover_options
 
+    hook = SimpleNamespace(metadata_get_covers=lambda query: [[
+        {"url": "http://x/box.jpg", "_source": "TheGamesDB"}]])
     monkeypatch.setattr(pm_mod, "plugin_manager", SimpleNamespace(
-        hook=SimpleNamespace(metadata_get_covers=lambda query: [[
-            {"url": "http://x/box.jpg", "_source": "TheGamesDB"}]]),
+        hook=hook,
+        call_each=_calls_through(hook),
         get_plugin_instances=lambda: [],
         id_for_instance=lambda i: None,
     ))

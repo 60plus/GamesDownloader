@@ -1627,7 +1627,7 @@ async def plugin_metadata_search(request: Request, q: str = Query(...)) -> list[
     """Search all metadata provider plugins for a game title."""
     results = []
     try:
-        all_results = plugin_manager.hook.metadata_search_game(query=q)
+        all_results = await plugin_manager.call_each("metadata_search_game", query=q)
         for provider_results in all_results:
             if isinstance(provider_results, list):
                 results.extend(provider_results)
@@ -1646,14 +1646,14 @@ async def plugin_metadata_fetch(
 ) -> dict:
     """Fetch full metadata for a game from a specific plugin provider."""
     try:
-        all_results = plugin_manager.hook.metadata_get_game(provider_game_id=game_id)
+        all_results = await plugin_manager.call_each("metadata_get_game", provider_game_id=game_id)
         for result in all_results:
             if isinstance(result, dict) and result.get("provider_id") == provider_id:
                 # Fallback: if the provider's game dict carries no cover, ask its
                 # dedicated cover hook (metadata_get_cover_url) and fold it in.
                 if not result.get("cover_url") and not result.get("cover"):
                     try:
-                        for cu in plugin_manager.hook.metadata_get_cover_url(provider_game_id=game_id):
+                        for cu in await plugin_manager.call_each("metadata_get_cover_url", provider_game_id=game_id):
                             if cu:
                                 result["cover_url"] = cu
                                 break

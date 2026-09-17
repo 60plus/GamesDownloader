@@ -47,6 +47,10 @@ from plugins.storage import plugin_data_dir  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
+#: How long one plugin is waited for in `call_each`. The shipped metadata
+#: plugins set 15-20 s per request, and a search that fetches details makes two.
+METADATA_HOOK_TIMEOUT = 30.0
+
 
 class PluginManager:
     def __init__(self) -> None:
@@ -372,8 +376,59 @@ class PluginManager:
 
     @property
     def hook(self):
-        """Direct access to the pluggy hook caller."""
+        """Direct access to the pluggy hook caller.
+
+        Not for the metadata hooks from async code: those go to the network,
+        synchronously, and one call asks every plugin at once - use `call_each`.
+        """
         return self._pm.hook
+
+    async def call_each(
+        self, hook_name: str, *, timeout: float = METADATA_HOOK_TIMEOUT, **kwargs: Any,
+    ) -> list[Any]:
+        """Ask every plugin implementing `hook_name`, each on its own thread.
+
+        What a plain `hook.<name>(...)` call does, minus its two failures (1.0.34
+        audit, #14 and #15):
+
+          - pluggy stops at the first plugin that raises and discards what the
+            others already answered, so one broken provider emptied every
+            provider's results. Here a plugin that raises costs its own answer;
+          - it runs on whatever thread called it, and from a route that is the
+            event loop - with one uvicorn worker, a slow upstream stalled every
+            request and socket event. Here each plugin runs on a worker thread,
+            side by side, and is waited for at most `timeout` seconds.
+
+        A plugin past its time is no longer waited for but keeps running: a
+        thread cannot be stopped from outside. The shipped plugins give up on
+        their own after 15-20 s.
+
+        Answers come in the order pluggy would give them (the last registered
+        first), without the Nones pluggy leaves out too.
+        """
+        import asyncio
+
+        caller = getattr(self._pm.hook, hook_name, None)
+        if caller is None:
+            return []
+        impls = list(reversed(caller.get_hookimpls()))
+
+        async def _ask(impl) -> Any:
+            args = {k: v for k, v in kwargs.items() if k in impl.argnames}
+            name = self._pm.get_name(impl.plugin) or type(impl.plugin).__name__
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(impl.function, **args), timeout)
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.warning("Plugin %s took longer than %ss to answer %s; left out",
+                               name, timeout, hook_name)
+            except Exception:
+                logger.warning("Plugin %s failed in %s; its answer is left out",
+                               name, hook_name, exc_info=True)
+            return None
+
+        answers = await asyncio.gather(*(_ask(i) for i in impls))
+        return [a for a in answers if a is not None]
 
     def register(self, plugin: Any) -> None:
         """Manually register a plugin instance."""

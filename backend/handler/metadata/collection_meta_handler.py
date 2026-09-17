@@ -58,7 +58,7 @@ async def search(query: str) -> list[dict[str, Any]]:
 
     # Metadata plugins.
     try:
-        for pr in plugin_manager.hook.metadata_search_collection(query=q):
+        for pr in await plugin_manager.call_each("metadata_search_collection", query=q):
             if isinstance(pr, list):
                 results.extend(pr)
     except Exception as e:
@@ -84,7 +84,7 @@ async def get(provider_id: str, provider_collection_id: str) -> dict[str, Any] |
 
     # Metadata plugins.
     try:
-        for r in plugin_manager.hook.metadata_get_collection(provider_collection_id=cid_arg):
+        for r in await plugin_manager.call_each("metadata_get_collection", provider_collection_id=cid_arg):
             if isinstance(r, dict) and r.get("provider_id") == pid:
                 return r
     except Exception as e:
@@ -135,11 +135,8 @@ async def _sgdb_art(query: str, kind: str = "grids") -> list[dict[str, Any]]:
 async def _plugin_art(query: str, hook_name: str) -> list[dict[str, Any]]:
     """Collect art from metadata plugins via the given game-art hook."""
     out: list[dict[str, Any]] = []
-    hook = getattr(plugin_manager.hook, hook_name, None)
-    if hook is None:
-        return out
     try:
-        for pr in hook(query=query):
+        for pr in await plugin_manager.call_each(hook_name, query=query):
             if isinstance(pr, list):
                 for it in pr:
                     if isinstance(it, dict) and it.get("url"):

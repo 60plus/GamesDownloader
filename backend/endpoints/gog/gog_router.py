@@ -730,9 +730,8 @@ async def get_cover_options(
             # plugin's box art as candidate icons.
             hook_name = {"grids": "metadata_get_covers", "heroes": "metadata_get_heroes",
                          "logos": "metadata_get_logos"}.get(asset_type)
-            hook = getattr(plugin_manager.hook, hook_name, None) if hook_name else None
-            if hook:
-                all_results = hook(query=search_term)
+            if hook_name:
+                all_results = await plugin_manager.call_each(hook_name, query=search_term)
                 for provider_results in all_results:
                     if isinstance(provider_results, list):
                         for r in provider_results:
@@ -930,7 +929,7 @@ async def get_screenshot_options(
         # Plugin screenshots (via metadata_get_game -> screenshots field)
         try:
             from plugins.manager import plugin_manager
-            all_plugin = plugin_manager.hook.metadata_search_game(query=search_term)
+            all_plugin = await plugin_manager.call_each("metadata_search_game", query=search_term)
             for provider_results in all_plugin:
                 if not isinstance(provider_results, list) or not provider_results:
                     continue
@@ -939,7 +938,7 @@ async def get_screenshot_options(
                 gid = best.get("provider_game_id", "")
                 if not pid or not gid:
                     continue
-                game_data_list = plugin_manager.hook.metadata_get_game(provider_game_id=gid)
+                game_data_list = await plugin_manager.call_each("metadata_get_game", provider_game_id=gid)
                 for gd in game_data_list:
                     if not isinstance(gd, dict) or gd.get("provider_id") != pid:
                         continue

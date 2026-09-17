@@ -245,9 +245,8 @@ async def search_cover_options(
             # plugin's box art as candidate icons.
             hook_name = {"grids": "metadata_get_covers", "heroes": "metadata_get_heroes",
                          "logos": "metadata_get_logos"}.get(asset_type)
-            hook = getattr(plugin_manager.hook, hook_name, None) if hook_name else None
-            if hook:
-                all_results = hook(query=search_term)
+            if hook_name:
+                all_results = await plugin_manager.call_each(hook_name, query=search_term)
                 for provider_results in all_results:
                     if isinstance(provider_results, list):
                         for r in provider_results:
