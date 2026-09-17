@@ -15,6 +15,10 @@
 // up its own listeners (core via the socket store, plugins via __GD__.events).
 
 import client from "../services/api/client";
+import { useDialog } from "../composables/useDialog";
+import { useI18n } from "../i18n";
+
+const { t } = useI18n();
 
 /** Normalize a library slug for targeting: "", "games" and null all mean the
  * built-in Games library, expressed as `undefined` so it is omitted. */
@@ -111,9 +115,48 @@ export async function findGameByTitle(
   return rows.find(g => String(g?.title ?? "").trim().toLowerCase() === wanted) ?? null;
 }
 
+/** The game an upload goes into: the one already on the shelf, a new one, or
+ *  null when the person cancels.
+ *
+ *  THE OWNER DECIDED, 2026-09-17: when the title is already on the shelf,
+ *  ALWAYS ask - "uploader doda gre a admin moze dodac dlc na przyklad" - and
+ *  anybody who may upload may add to a game somebody else added. So the
+ *  question has three answers:
+ *
+ *    Add to the existing game   the file joins it (a DLC, an extra, a build);
+ *    Separate entry             a different game that shares the title - Doom
+ *                               1993 and Doom 2016 - made here, in its own
+ *                               folder on the server;
+ *    Cancel                     null: nothing is made and nothing is sent.
+ *
+ *  Before this, "no" gave up, and the only way to upload a second game with
+ *  that title was to type a different one (1.0.34 audit, #13).
+ *
+ *  One place asks it, for all four upload dialogs: Modern, Classic, and the two
+ *  themes through `__GD__.library`, which ship separately and could not be
+ *  corrected with a copy of their own. */
+export async function chooseUploadTarget(opts: CreateGameOpts): Promise<any | null> {
+  const title = (opts.title || "").trim();
+  const existing = await findGameByTitle(title, opts.library);
+  if (!existing) return createGame(opts);
+
+  const answer = await useDialog().gdChoose(
+    t("upload.game_exists_choice", { title: existing.title }),
+    {
+      title:       t("upload.same_title"),
+      confirmText: t("upload.add_to_existing"),
+      altText:     t("upload.separate_entry"),
+    },
+  );
+  if (answer === "confirm") return existing;
+  if (answer !== "alt") return null;
+  return createGame(opts);
+}
+
 /** Create a LibraryGame. When `library` names a folder-backed custom library
  * the server adds membership and keeps the game out of the default Games
- * library. Returns the created game (has `.id`). */
+ * library. Returns the created game (has `.id`). Always creates: a dialog
+ * uploading under a title asks `chooseUploadTarget` instead. */
 export async function createGame(opts: CreateGameOpts): Promise<any> {
   const { library, title, ...rest } = opts;
   const { data } = await client.post("/library/games", {
@@ -211,11 +254,14 @@ export async function scan(librarySlug?: string | null): Promise<any> {
 }
 
 /** Convenience for the common "Add game + upload one file" flow (used by themes
- * whose upload dialog only supports a local file). Creates the game in `library`
- * then uploads the file to it. Returns the created game. */
-export async function addByUpload(opts: AddByUploadOpts): Promise<any> {
+ * whose upload dialog only supports a local file). Finds or creates the game in
+ * `library` the way every upload dialog does - asking when the title is already
+ * there, see `chooseUploadTarget` - then uploads the file to it. Returns the
+ * game, or null when the person cancelled and nothing was sent. */
+export async function addByUpload(opts: AddByUploadOpts): Promise<any | null> {
   const { library, title, file, os = "windows", fileType = "game", language, version, onProgress } = opts;
-  const game = await createGame({ title, library });
+  const game = await chooseUploadTarget({ title, library });
+  if (!game) return null;
   await uploadFile(game.id, file, { os, fileType, language, version, onProgress });
   return game;
 }
@@ -321,6 +367,7 @@ export async function clearGameMetadata(kind: GameKind, id: number | string): Pr
 // went out, and the tray said only "Upload failed".
 const libraryActions = {
   findGameByTitle,
+  chooseUploadTarget,
   createGame,
   uploadFile,
   uploadFromUrl,

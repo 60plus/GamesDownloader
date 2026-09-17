@@ -54,9 +54,16 @@ def route(monkeypatch):
         # because the route asks unconditionally.
         return 0
 
+    async def _no_files_there(_game_id, _from_user_id, *, admin_id):
+        # A game the account does not own is taken over as the files it ADDED
+        # there (test_an_uploader_may_add_to_a_game_somebody_else_added). Here it
+        # added none, so there is nothing to take and the row is skipped.
+        return 0
+
     monkeypatch.setattr(R._lib, "get_by_id", games.get_by_id)
     monkeypatch.setattr(R._lib, "update", games.update)
     monkeypatch.setattr(R._lib, "release_files_of", _release)
+    monkeypatch.setattr(R._lib, "claim_files_of", _no_files_there)
     return R, games
 
 

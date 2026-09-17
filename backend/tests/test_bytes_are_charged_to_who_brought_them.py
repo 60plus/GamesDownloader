@@ -17,9 +17,10 @@ were reachable:
 So the file records who brought it, and the sum reads that in preference to the
 game's owner. Falling back to the game keeps every row that already exists
 counted exactly as it is counted today, rather than making a release quietly
-hand everybody's quota back. And the manual upload asks whose game it is, which
-also keeps the delete rule honest: bytes you are charged for sit on a game you
-can clear up.
+hand everybody's quota back. The manual upload also asked whose game it is, to
+keep bytes you are charged for on a game you can clear up; since 2026-09-17 the
+owner lets any uploader add to a game they can see, and the account that added
+a file removes it on its own (test_an_uploader_may_add_to_a_game_somebody_else_added).
 """
 
 from __future__ import annotations
@@ -53,14 +54,26 @@ def test_an_uploader_may_add_to_their_own_game():
     assert can_upload_into_game(UPLOADER, BOB, _game(BOB))
 
 
-def test_an_uploader_may_not_add_to_somebody_elses():
-    assert not can_upload_into_game(UPLOADER, BOB, _game(ALICE))
+# THE RULE BELOW CHANGED BY THE OWNER'S DECISION (2026-09-17): "uploader rowniez
+# powinien miec mozliwosc dodania dlc czy extras do gry dodanej przez kogos
+# innego", and any type of file. These two said the opposite until then. What
+# made the old rule necessary is the rest of this file: the bytes are charged to
+# the account that brought them, not to the game's owner, so adding to somebody
+# else's game no longer costs them anything. Which games may be named is the
+# visibility question (test_an_uploader_may_add_to_a_game_somebody_else_added).
+
+def test_an_uploader_may_add_to_somebody_elses():
+    assert can_upload_into_game(UPLOADER, BOB, _game(ALICE))
 
 
-def test_an_uploader_may_not_add_to_a_game_nobody_owns():
-    """Torrent-registered and scanner-registered games have no owner. Reading
-    that as "mine" would open every one of them."""
-    assert not can_upload_into_game(UPLOADER, BOB, _game(None))
+def test_an_uploader_may_add_to_a_game_nobody_owns():
+    """Torrent-registered and scanner-registered games have no owner. Adding a
+    file there charges the adder and makes nobody the owner of the game."""
+    assert can_upload_into_game(UPLOADER, BOB, _game(None))
+
+
+def test_an_account_without_the_upload_right_may_not_add_anywhere():
+    assert not can_upload_into_game({Scope.LIBRARY_READ}, BOB, _game(BOB))
 
 
 def test_an_administrator_may_add_to_any_game():
@@ -80,9 +93,12 @@ def test_both_upload_routes_ask():
         # To the next decorator, or to the end of the file for the last route.
         nxt = rest.find("\n@", 10)
         body = rest if nxt < 0 else rest[:nxt]
-        assert "assert_can_upload_into" in body, (
-            f"trasa {route} nie pyta, czyja to gra"
+        assert "_game_open_to_upload(" in body, (
+            f"trasa {route} nie pyta, czy to konto moze wgrywac i czy widzi te gre"
         )
+    gate = source[source.index("async def _game_open_to_upload("):]
+    gate = gate[:gate.index("\nasync def ", 10)]
+    assert "assert_can_upload_into" in gate and "visible_game_or_none" in gate
 
 
 # ── What the sum reads ───────────────────────────────────────────────────────
@@ -384,15 +400,15 @@ def test_both_claim_routes_hand_the_files_over(route):
 # ── And the refusal says what was refused ────────────────────────────────────
 
 def test_the_upload_refusal_talks_about_adding_not_removing():
-    """One rule guards two different acts now. An uploader adding a file to
-    somebody else's game was told they may not REMOVE it - an answer to a
-    question nobody asked, leaving them no idea what was actually refused."""
+    """An account refused a file upload was told it may not REMOVE the game - an
+    answer to a question nobody asked, leaving them no idea what was refused.
+    Only an account without the upload right is refused now."""
     from fastapi import HTTPException
 
     from handler.library.ownership import assert_can_upload_into
 
     request = SimpleNamespace(state=SimpleNamespace(
-        user=SimpleNamespace(id=BOB), scopes=UPLOADER))
+        user=SimpleNamespace(id=BOB), scopes={Scope.LIBRARY_READ}))
     with pytest.raises(HTTPException) as raised:
         assert_can_upload_into(request, _game(ALICE))
 

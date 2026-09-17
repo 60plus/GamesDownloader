@@ -118,19 +118,51 @@ def can_delete_rom_set(
     return True
 
 
+def charged_to(file_row: Any, game: Any) -> int | None:
+    """The account a file counts against: the one that brought it in, and only
+    when nothing says, the account that owns the game. The same sentence the
+    quota sums with, so "yours" here and "yours" on the bar never disagree."""
+    return getattr(file_row, "published_by", None) or getattr(game, "published_by", None)
+
+
 def can_upload_into_game(scopes: Iterable[Scope], user_id: int | None, game: Any) -> bool:
-    """Whether this caller may add files to this game.
+    """Whether this caller may add files to this game: anybody who may upload.
 
-    The same question as removing it, and for a reason worth writing down: the
-    upload route never asked, so an uploader who owned nothing had a quota that
-    read zero for ever. They could name any game id - listing games is a read
-    everybody has - and push files into it at no cost, while the account that
-    owned it was pushed over its own limit by uploads it never made.
+    THE OWNER DECIDED THIS, in so many words: an uploader has to be able to add
+    a DLC or an extras pack - any kind of file - to a game somebody else added
+    (2026-09-17). This used to be the delete rule, owner or administrator, for a
+    reason that has since been answered at its root: the upload route charged
+    the bytes to the GAME's owner, so an uploader who owned nothing could push
+    files into any game for free. Files now carry the account that brought them
+    in and the quota counts them against it (`charged_to`), so adding to
+    somebody else's game costs the adder, not the owner.
 
-    Keeping the two rules identical also keeps the pair honest: the bytes you
-    are charged for sit on a game you are allowed to clear up.
+    Which games may be named is a separate question - the ones this caller may
+    SEE - and the routes ask it first, answering 404 for the rest.
     """
-    return _may_delete(scopes, user_id, game, admin_scope=Scope.LIBRARY_ADMIN)
+    held = set(scopes)
+    return Scope.LIBRARY_ADMIN in held or Scope.LIBRARY_UPLOAD in held
+
+
+def can_replace_file(
+    scopes: Iterable[Scope], user_id: int | None, game: Any, file_row: Any | None,
+) -> bool:
+    """Whether this caller may overwrite a file that is already in this game's folder.
+
+    Adding to somebody else's game is allowed; replacing what somebody else put
+    there is not. An administrator, or the account the file counts against.
+
+    `file_row` is None for a file on the disk with no row behind it. Nobody is
+    charged for that one, so it is treated as the game's: its owner may replace
+    it, and an uploader adding to somebody else's game may not.
+    """
+    held = set(scopes)
+    if Scope.LIBRARY_ADMIN in held:
+        return True
+    if Scope.LIBRARY_UPLOAD not in held or not user_id:
+        return False
+    owner = charged_to(file_row, game) if file_row is not None else getattr(game, "published_by", None)
+    return bool(owner) and owner == user_id
 
 
 def can_touch_download(scopes: Iterable[Scope], user_id: int | None, job: Any) -> bool:
@@ -206,8 +238,13 @@ def assert_can_touch_download(request: Any, job: Any) -> None:
 
 
 def assert_can_upload_into(request: Any, game: Any) -> None:
-    _assert(request, game, rule=can_upload_into_game, what="game",
-            verb="add files to")
+    user = getattr(request.state, "user", None)
+    scopes = getattr(request.state, "scopes", set())
+    if not can_upload_into_game(scopes, getattr(user, "id", None), game):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account may not add files to games.",
+        )
 
 
 def assert_can_delete_rom_set(request: Any, named: Any, members: Iterable[Any]) -> None:

@@ -84,7 +84,13 @@ def route(tmp_path, monkeypatch):
         return SimpleNamespace(id=1, slug="playstation", fs_slug="psx")
 
     async def by_fs_name(_platform_id, fs_name):
-        return rows.get(fs_name)
+        row = rows.get(fs_name)
+        # A real row always names its folder, and a replacement has to be the
+        # file in THAT folder (test_a_second_copy_of_your_own_rom_is_not_free).
+        # These rows are the files on the psx shelf.
+        if row is not None and not getattr(row, "fs_path", None):
+            row.fs_path = str(tmp_path / "psx")
+        return row
 
     monkeypatch.setattr(R.rom_platform_handler, "get_by_slug", platform)
     monkeypatch.setattr(R.rom_handler, "get_by_fs_name", by_fs_name)
@@ -95,6 +101,14 @@ def route(tmp_path, monkeypatch):
     monkeypatch.setattr(R.rom_handler, "max_rom_id", newest_rom_id)
     monkeypatch.setattr(R, "_get_roms_path", roms_path)
     monkeypatch.setattr(quota, "ceiling_for", ceiling)
+
+    async def no_live_limit(_user, **_k):
+        # The budget here is the ceiling above. Uploads running side by side
+        # are checked live as well, and that has its own tests
+        # (test_uploads_running_side_by_side_see_each_other).
+        return quota.Reservation(None, limit=0)
+
+    monkeypatch.setattr(quota, "reservation_for", no_live_limit)
     monkeypatch.setattr(rsh, "scan_after_write", nothing)
     monkeypatch.setattr(R, "_stamp_uploaded", nothing)
     monkeypatch.setattr(clam, "is_upload_scanning_enabled", clam_off)

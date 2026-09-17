@@ -15,9 +15,9 @@
       :title="it.title"
       @click="clickable && emit('select', it)"
     >
-      <span class="dcs-cover" :style="{ aspectRatio: it.aspect || '92 / 122' }">
+      <span class="dcs-cover" :style="{ aspectRatio: it.aspect || natural[String(it.key)] || '92 / 122' }">
         <i class="mdi mdi-gamepad-variant-outline dcs-ph"></i>
-        <img v-if="it.cover" :src="it.cover" alt="" @error="imgErr" />
+        <img v-if="it.cover" :src="it.cover" alt="" @load="onCoverLoad(it, $event)" @error="imgErr" />
         <span v-if="it.kind" class="dcs-kind">{{ it.kind }}</span>
         <span v-if="clickable && hover === 'play'" class="dcs-play"><i class="mdi mdi-play"></i></span>
       </span>
@@ -31,7 +31,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, reactive, computed, onMounted, onUnmounted } from "vue";
 
 interface StripItem { key: string | number; cover: string | null; title: string; sub?: string; kind?: string; aspect?: string; rating?: number | null; [k: string]: unknown }
 
@@ -54,6 +54,20 @@ const count = computed(() => {
 const visible = computed(() => props.items.slice(0, count.value));
 
 function imgErr(e: Event): void { (e.target as HTMLImageElement).style.display = "none"; }
+
+// A tile that brings no shape - a library game, which stores none - takes the
+// picture's own once it has loaded, so a square or wide cover is not cut to the
+// portrait frame. A ROM's shape comes from the server and wins: it is snapped to
+// the standard box ratios, which keeps one platform's shelf in line. Clamped so
+// a banner-sized image cannot turn a tile into a strip.
+const natural = reactive<Record<string, string>>({});
+function onCoverLoad(it: StripItem, e: Event): void {
+  if (it.aspect) return;
+  const img = e.target as HTMLImageElement;
+  if (!img.naturalWidth || !img.naturalHeight) return;
+  const ratio = Math.min(1.8, Math.max(0.6, img.naturalWidth / img.naturalHeight));
+  natural[String(it.key)] = String(Math.round(ratio * 1000) / 1000);
+}
 
 let ro: ResizeObserver | null = null;
 onMounted(() => {

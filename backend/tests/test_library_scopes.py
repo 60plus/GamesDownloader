@@ -58,6 +58,14 @@ OWNER_GUARDED: dict[str, str] = {
         "the transfer, not the game: a finished torrent's files have already "
         "moved into the library and deleting THOSE still goes through the "
         "route above.",
+    "DELETE /library/games/{game_id}/my-files":
+        "Declares LIBRARY_UPLOAD because the owner decided (2026-09-17) that an "
+        "uploader may add files to a game somebody else added and removes them "
+        "again itself. The handler takes out ONLY the files charged to the "
+        "caller (ownership.charged_to, the sentence the quota sums with), leaves "
+        "the game and everybody else's files, and answers 404 for a game the "
+        "caller cannot see. Covered by "
+        "test_an_uploader_may_add_to_a_game_somebody_else_added.py.",
 }
 
 # POST that does not change the library, and is meant to be within a plain

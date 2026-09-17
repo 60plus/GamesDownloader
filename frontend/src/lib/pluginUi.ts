@@ -40,11 +40,35 @@ export interface RomEditorRequest {
   onClosed?: () => void
 }
 
+export interface AddFileRequest {
+  /** The game the file goes into; `id` is what is sent, `title` heads the dialog. */
+  game: { id: number | string; title?: string }
+  /** After a file landed, so the page can refetch its file list. */
+  onAdded?: () => void
+  onClosed?: () => void
+}
+
 export const pluginUiState = reactive({
   metadataEditor: null as MetadataEditorRequest | null,
   collectionEditor: null as CollectionEditorRequest | null,
   romEditor: null as RomEditorRequest | null,
+  addFileDialog: null as AddFileRequest | null,
 })
+
+/** Open the "add a file to this game" dialog (1.0.35). For a skin that draws its
+ *  own game page: an uploader may add a file to any game it can see, and the
+ *  form is the core's, so every skin sends the same request and shows the same
+ *  refusal. The dialog stays open after a file lands, for the next one. */
+export function openAddFileDialog(req: AddFileRequest): void {
+  if (!req || !req.game || !req.game.id) return
+  pluginUiState.addFileDialog = { ...req }
+}
+
+export function closeAddFileDialog(): void {
+  const req = pluginUiState.addFileDialog
+  pluginUiState.addFileDialog = null
+  req?.onClosed?.()
+}
 
 export function openMetadataEditor(req: MetadataEditorRequest): void {
   if (!req || !req.game) return

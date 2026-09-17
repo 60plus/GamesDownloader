@@ -51,6 +51,13 @@
               class="gd-dlg-btn gd-dlg-btn--ghost"
               @click="cancel"
             >{{ dialogState.cancelText }}</button>
+            <!-- A second choice, for the questions that have one (`gdChoose`):
+                 "add to the game that is there" or "make a separate entry". -->
+            <button
+              v-if="dialogState.type === 'confirm' && dialogState.altText"
+              class="gd-dlg-btn gd-dlg-btn--ghost"
+              @click="choseAlt"
+            >{{ dialogState.altText }}</button>
             <button
               class="gd-dlg-btn"
               :class="dialogState.danger ? 'gd-dlg-btn--danger' : 'gd-dlg-btn--primary'"
@@ -117,6 +124,16 @@ function cancel() {
   dialogState.visible = false
   dialogState.resolve?.(false)
   dialogState.resolve = null
+}
+
+// The second choice tells the one who asked, then closes like Cancel: `gdChoose`
+// reads a "no" that came through here as that choice. Cleared before anything
+// else so a displaced question can never report it.
+function choseAlt() {
+  const pick = dialogState.onAlt
+  dialogState.onAlt = null
+  pick?.()
+  cancel()
 }
 
 function onBackdrop() {

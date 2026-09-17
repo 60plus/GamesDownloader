@@ -43,6 +43,7 @@ from __future__ import annotations
 import io
 import json
 import pathlib
+import re
 
 import pytest
 
@@ -174,22 +175,25 @@ def test_nothing_a_theme_may_call_is_only_a_named_export():
 
 # ── Every dialog asks before it creates ──────────────────────────────────────
 
+# SINCE 2026-09-17 THE QUESTION HAS THREE ANSWERS AND ONE HOME. The owner asked
+# for it always to be asked, and for a separate entry to be one of the answers
+# (test_the_same_title_asks_join_separate_or_cancel). The finding, the asking and
+# the creating moved into `chooseUploadTarget` in the core, so the four dialogs
+# below are asked only whether they go through it, before anything is created,
+# and stop when it answers nothing.
+
 @pytest.mark.parametrize("path", CORE_DIALOGS + THEME_DIALOGS, ids=lambda p: p.name)
 def test_a_dialog_looks_before_it_creates(path):
     """Asked per DIALOG. All four had the same two lines, and one of them left
     unchanged is the whole bug still present for whoever uses that skin."""
     body = _read(path)
-    assert "findGameByTitle" in body, (
+    assert "chooseUploadTarget(" in body, (
         f"{path.name} nadal tworzy nowa gre bez sprawdzenia, czy taka juz jest"
     )
-
-    # And the check has to come BEFORE the row is made, or it is an apology
-    # rather than a question.
-    where_check = body.index("findGameByTitle")
-    where_create = body.index("createGame(")
-    assert where_check < where_create, (
-        f"{path.name} sprawdza kolizje PO utworzeniu gry - wtedy duplikat juz "
-        "istnieje i slug jest zajety na zawsze"
+    # And nothing is created before the question: the one place a new row is
+    # made is inside it.
+    assert "createGame(" not in body, (
+        f"{path.name} tworzy gre sam, obok wspolnego pytania"
     )
 
 
@@ -197,74 +201,72 @@ def test_a_dialog_looks_before_it_creates(path):
 def test_nothing_is_merged_without_being_asked(path):
     """THE HALF THE OWNER SPECIFICALLY CHOSE. Two different games can share a
     title - a remaster, another platform, another edition - and joining them
-    silently is undone by hand in the database."""
+    silently is undone by hand in the database. The asking is in the core now;
+    a dialog must not join a game it found by itself."""
     body = _read(path)
-    at = body.index("findGameByTitle")
-    branch = body[at:at + 900]
-    # The core reaches `gdConfirm` through `useDialog`; a theme cannot import
-    # `@/composables` and calls `__GD__.ui.confirm` instead. Both are the same
-    # styled in-app dialog, which is the thing being asked about - the native
-    # `window.confirm` is banned in this project either way.
-    assert "gdConfirm(" in branch or "ui.confirm(" in branch, (
-        f"{path.name} dopina plik do istniejacej gry bez pytania"
+    assert "findGameByTitle(" not in body, (
+        f"{path.name} szuka gry po swojemu i moze ja dopiac bez pytania"
     )
-    bez_naszych = body.replace("gdConfirm(", "").replace("ui.confirm(", "")
-    assert "window.confirm(" not in bez_naszych and "window.alert(" not in bez_naszych, (
+    assert "window.confirm(" not in body and "window.alert(" not in body, (
         f"{path.name} uzywa natywnego okna przegladarki - w tym projekcie zakazane"
     )
 
 
 @pytest.mark.parametrize("path", CORE_DIALOGS + THEME_DIALOGS, ids=lambda p: p.name)
 def test_saying_no_uploads_nothing(path):
-    """Answering "no" has to leave the shelf exactly as it was. A dialog that
-    creates the duplicate anyway after the question would be worse than one that
-    never asked."""
+    """Answering "cancel" has to leave the shelf exactly as it was, and send no
+    file. A dialog that uploads anyway after the question would be worse than one
+    that never asked."""
     body = _read(path)
-    at = body.index("findGameByTitle")
-    branch = body[at:at + 900]
-    assert "return" in branch, (
-        f"{path.name} nie przerywa po odmowie, wiec pytanie niczego nie zmienia"
+    at = body.index("chooseUploadTarget(")
+    branch = body[at:at + 400]
+    assert re.search(r"if \(!game\)[^\n]*return", branch), (
+        f"{path.name} nie przerywa po anulowaniu, wiec pytanie niczego nie zmienia"
     )
 
 
 # ── The way round that never has to ask ──────────────────────────────────────
 
 DETAIL = FRONTEND / "src" / "views" / "games" / "GamesGameDetail.vue"
+#: Since 1.0.35 the form is one core component, shown on Modern's page and opened
+#: as a dialog by the skins that draw their own game page - and it is for an
+#: uploader as well as an admin
+#: (test_an_uploader_adds_a_file_from_the_games_own_page).
+FORM = FRONTEND / "src" / "components" / "games" / "AddFileForm.vue"
+
+
+def _submit(body: str) -> str:
+    at = body.index("async function submit(")
+    return body[at:body.index("\n}\n", at)]
 
 
 def test_a_game_can_be_given_a_file_from_its_own_page():
     """The other half of what the owner asked for, and the half that removes the
     need to type a title at all: the game is the one on screen."""
-    body = _read(DETAIL)
-    assert "submitAddFile" in body, (
+    assert "<AddFileForm" in _read(DETAIL), (
         "strona gry nadal nie ma sposobu na dodanie do niej pliku"
     )
-    at = body.index("async function submitAddFile")
-    fn = body[at:body.index("\nasync function ", at + 10)]
-    assert "uploadFile(" in fn, "przycisk nie wysyla pliku"
+    assert "uploadFile(" in _submit(_read(FORM)), "przycisk nie wysyla pliku"
 
 
 def test_that_way_can_never_make_a_second_entry():
     """The point of this door. Adding a file from the game's own page has a game
     id in hand, so `createGame` has no business being anywhere near it - and if
     it ever appears, this way round grows the very bug it was built to avoid."""
-    body = _read(DETAIL)
-    at = body.index("async function submitAddFile")
-    fn = body[at:body.index("\nasync function ", at + 10)]
+    fn = _submit(_read(FORM))
     assert "createGame" not in fn, (
         "dodawanie pliku ze strony gry tworzy nowa gre - to jest ta sama usterka, "
         "tylko innymi drzwiami"
     )
-    assert "game.value.id" in fn, "plik nie jest celowany w te gre"
+    assert "uploadFile(props.gameId" in fn, "plik nie jest celowany w te gre"
+    assert ':game-id="game.id"' in _read(DETAIL)
 
 
 def test_the_picker_is_cleared_after_a_send():
     """A file input keeps the old name, so a second add looks like it is about
     to send the file that already went."""
-    body = _read(DETAIL)
-    at = body.index("async function submitAddFile")
-    fn = body[at:body.index("\nasync function ", at + 10)]
-    assert "addFileInput" in fn and "''" in fn
+    fn = _submit(_read(FORM))
+    assert "input.value.value = ''" in fn
 
 
 # ── In every language ────────────────────────────────────────────────────────

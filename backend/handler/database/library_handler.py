@@ -236,6 +236,31 @@ class LibraryHandler(DBBaseHandler):
         return int(result.rowcount or 0)
 
     @begin_session
+    async def claim_files_of(
+        self, game_id: int, from_user_id: int | None, *, admin_id: int | None,
+        session: AsyncSession = None,
+    ) -> int:
+        """Take over the files one account added to a game it does not own.
+
+        Written to the administrator by name rather than cleared: a file with no
+        name of its own counts against the GAME's owner, and that is somebody
+        else - clearing it would move the bytes onto them.
+
+        Only files that name the account. One that names nobody is the game
+        owner's already, which is not the account being taken over from.
+        """
+        if not from_user_id or not admin_id:
+            return 0
+        result = await session.execute(
+            sql_update(LibraryFile)
+            .where(LibraryFile.library_game_id == game_id,
+                   LibraryFile.published_by == from_user_id)
+            .values(published_by=admin_id)
+        )
+        await session.flush()
+        return int(result.rowcount or 0)
+
+    @begin_session
     async def create_file(self, file: LibraryFile, *, session: AsyncSession = None) -> LibraryFile:
         session.add(file)
         await session.flush()

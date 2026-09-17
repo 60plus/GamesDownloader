@@ -434,7 +434,7 @@ const myReqTotal = computed(() =>
 );
 const topUserAvatar = computed(() => avatarUrl(admin.value?.top_user?.avatar_path));
 const raItems = computed(() => (admin.value?.recently_added || []).map((it) => ({
-  key: it.kind + it.id, cover: it.cover, title: it.title,
+  key: it.kind + it.id, cover: it.cover, title: it.title, aspect: it.aspect ?? undefined,
   kind: it.kind === "rom" ? "ROM" : it.kind === "gog" ? "GOG" : undefined,
   rkind: it.kind, id: it.id, platform_slug: it.platform_slug, // routing to the game detail
 })));
@@ -675,8 +675,12 @@ onUnmounted(() => { offHealth?.(); offHealth = undefined; });
 .dash-td-list { display: flex; flex-direction: column; gap: 6px; }
 .dash-td-row { display: flex; align-items: center; gap: 9px; }
 .dash-td-rank { width: 16px; text-align: center; font-size: 12px; font-weight: 700; opacity: 0.5; flex: 0 0 auto; }
-.dash-td-cover { position: relative; width: 30px; height: 40px; flex: 0 0 auto; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--text, #888) 10%, transparent); display: flex; align-items: center; justify-content: center; }
-.dash-td-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.dash-td-cover { position: relative; width: 56px; height: 40px; flex: 0 0 auto; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--text, #888) 10%, transparent); display: flex; align-items: center; justify-content: center; }
+/* The whole cover, whatever its shape: a square case or a wide box used to be cut
+   to this slot. The slot is as wide as a wide box, so a portrait one sits in its
+   middle rather than being cropped. */
+.dash-td-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.dash-td-cover:has(img) { background: transparent; }
 .dash-td-cover i { font-size: 20px; opacity: 0.3; }
 .dash-td-title { flex: 1; min-width: 0; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-td-n { flex: 0 0 auto; font-size: 12px; opacity: 0.7; display: inline-flex; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; }

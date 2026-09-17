@@ -440,47 +440,24 @@
 
         </div><!-- /gd-cols -->
 
+        <!-- Add a file to THIS game.
+             Reported by the owner: he uploaded Ion Fury, then its DLC, and got
+             a second library entry - because the only upload dialog in the whole
+             interface began by creating a game. This is the door that never has
+             to ask. For an uploader as well as an admin since 1.0.35: the owner
+             decided an uploader may add a file to any game it can see, and the
+             bytes count against the account that sends them. -->
+        <section v-if="isUploader" class="gd-section">
+          <h2 class="gd-section-title">{{ t('detail.add_file') }}</h2>
+          <AddFileForm :game-id="game.id" @added="fetchGame" />
+        </section>
+
         <!-- Admin: file management -->
         <section v-if="isAdmin" class="gd-section gd-admin-section">
           <h2 class="gd-section-title">
             {{ t('detail.file_management') }}
             <span class="admin-badge">{{ t('detail.admin_badge') }}</span>
           </h2>
-
-          <!-- Add a file to THIS game.
-               Reported by the owner: he uploaded Ion Fury, then its DLC, and got
-               a second library entry - because the only upload dialog in the
-               whole interface begins by creating a game. Nothing anywhere added
-               a file to a game already on the shelf, so there was no right thing
-               to click. This is that door. -->
-          <div class="admin-add-file">
-            <input
-              ref="addFileInput"
-              type="file"
-              class="admin-add-file-input"
-              :disabled="addBusy"
-              @change="onAddFilePicked"
-            />
-            <select v-model="addForm.os" class="admin-add-select" :disabled="addBusy">
-              <option value="windows">Windows</option>
-              <option value="mac">macOS</option>
-              <option value="linux">Linux</option>
-              <option value="all">All</option>
-            </select>
-            <select v-model="addForm.file_type" class="admin-add-select" :disabled="addBusy">
-              <option value="game">{{ t('upload.type_game') }}</option>
-              <option value="dlc">DLC</option>
-              <option value="extra">{{ t('upload.type_extra') }}</option>
-            </select>
-            <button
-              class="gd-btn-ghost"
-              :disabled="addBusy || !addFile"
-              @click="submitAddFile"
-            >
-              {{ addBusy ? `${addProgress}%` : t('detail.add_file') }}
-            </button>
-            <span v-if="addError" class="field-server-error">{{ addError }}</span>
-          </div>
 
           <div class="admin-files-list">
             <div v-for="f in game.files" :key="f.id" class="admin-file-row">
@@ -675,8 +652,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
-import * as libActions from '@/lib/libraryActions'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
@@ -684,6 +660,7 @@ import { useCollectionsStore } from '@/stores/collections'
 import client from '@/services/api/client'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
 import PackageDialog from '@/components/games/PackageDialog.vue'
+import AddFileForm from '@/components/games/AddFileForm.vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
 import { resolveDetailRows } from '@/themes/index'
 import { sanitizeHtml } from '@/utils/sanitize'
@@ -1201,46 +1178,6 @@ async function deleteGame() {
   } catch (e) { console.error('Delete failed', e) }
 }
 
-// ── Adding a file to this game ───────────────────────────────────────────────
-//
-// The counterpart to the upload dialog's new question. That dialog asks before
-// making a second entry for a title it already knows; this is the way round
-// that never has to ask, because the game is the one on screen.
-const addFileInput = ref<HTMLInputElement>()
-const addFile = ref<File | null>(null)
-const addForm = reactive({ os: 'windows', file_type: 'game' })
-const addBusy = ref(false)
-const addProgress = ref(0)
-const addError = ref('')
-
-function onAddFilePicked(e: Event) {
-  addFile.value = (e.target as HTMLInputElement).files?.[0] ?? null
-  addError.value = ''
-}
-
-async function submitAddFile() {
-  if (!game.value || !addFile.value || addBusy.value) return
-  addBusy.value = true
-  addProgress.value = 0
-  addError.value = ''
-  try {
-    await libActions.uploadFile(game.value.id, addFile.value, {
-      os: addForm.os,
-      fileType: addForm.file_type,
-      onProgress: (percent) => { addProgress.value = percent },
-    })
-    addFile.value = null
-    // The picker keeps the old name otherwise, so a second add looks like it
-    // is about to send the file that already went.
-    if (addFileInput.value) addFileInput.value.value = ''
-    await fetchGame()
-  } catch (e: any) {
-    addError.value = e?.response?.data?.detail || t('upload.failed')
-  } finally {
-    addBusy.value = false
-  }
-}
-
 async function toggleFileAvailability(f: LibFile) {
   try {
     await client.patch(`/library/files/${f.id}`, { is_available: !f.is_available })
@@ -1616,19 +1553,6 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 /* ── Admin file management ───────────────────────────────────────────────────── */
 .gd-admin-section { border: 1px solid rgba(239,68,68,.15); border-radius: 10px; padding: var(--space-5, 20px); }
 .admin-files-list { display: flex; flex-direction: column; gap: 6px; }
-/* Adding a file to this game. Sits above the list it adds to, and wraps rather
-   than pushing the panel wider on a narrow window. */
-.admin-add-file {
-  display: flex; align-items: center; gap: var(--space-2, 8px); flex-wrap: wrap;
-  padding: 8px 12px; margin-bottom: var(--space-2, 8px);
-  background: var(--glass-bg); border: 1px dashed var(--glass-border); border-radius: 6px;
-}
-.admin-add-file-input { font-size: var(--fs-xs, 10px); color: var(--muted); max-width: 100%; }
-.admin-add-select {
-  padding: 4px 8px; font-size: var(--fs-xs, 10px); font-family: inherit;
-  background: rgba(255,255,255,.06); border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm, 4px); color: var(--text); outline: none;
-}
 .admin-file-row {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 12px; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 6px;

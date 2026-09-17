@@ -37,6 +37,13 @@ export interface DialogOptions {
    *  needs one label, and it is the core dialog that renders it, so a theme
    *  asking through `__GD__.ui.confirm` gets this for nothing. */
   requireTick?: boolean
+  /** A third answer between Cancel and the confirm button. Use `gdChoose`,
+   *  which reads it back; on its own a confirm only knows yes and no. The third
+   *  button is never guarded by the tick - it is not the destructive answer. */
+  altText?:     string
+  /** Called when the third button is pressed, before the dialog answers no.
+   *  Set by `gdChoose` and not meant to be passed by hand. */
+  onAlt?:       (() => void) | null
 }
 
 interface DialogState {
@@ -49,6 +56,8 @@ interface DialogState {
   cancelText:  string
   image:       string
   requireTick: boolean
+  altText:     string
+  onAlt:       (() => void) | null
   resolve:     ((value: boolean) => void) | null
   // Bumped every time a dialog is opened, so the component can tell "the same
   // question is still up" from "a different one took its place". `visible` says
@@ -68,6 +77,8 @@ export const dialogState = reactive<DialogState>({
   cancelText:  'Cancel',
   image:       '',
   requireTick: false,
+  altText:     '',
+  onAlt:       null,
   resolve:     null,
   seq:         0,
 })
@@ -103,6 +114,9 @@ export function useDialog() {
       // Assigned every time for the same reason as the picture above: left as
       // it was, one guarded question would arm the next, unrelated one.
       dialogState.requireTick = opts.requireTick ?? false
+      // And the third button, for the same reason again.
+      dialogState.altText     = opts.altText     ?? ''
+      dialogState.onAlt       = opts.onAlt       ?? null
       dialogState.resolve     = resolve
     })
   }
@@ -120,9 +134,28 @@ export function useDialog() {
       dialogState.cancelText  = ''
       dialogState.image       = opts.image       ?? ''
       dialogState.requireTick = false   // nothing to guard: an alert only says OK
+      dialogState.altText     = ''
+      dialogState.onAlt       = null
       dialogState.resolve     = (v) => resolve()
     })
   }
 
-  return { gdConfirm, gdAlert }
+  /** A question with three answers: the confirm button, a second choice, or
+   *  Cancel. Built on `gdConfirm` rather than opened on its own, so there stays
+   *  exactly one way a question replaces another. The answer is kept per call,
+   *  not on the shared state, which the next question would overwrite.
+   *
+   *    const answer = await gdChoose('...', { confirmText: 'Add', altText: 'New' })
+   *    // 'confirm' | 'alt' | 'cancel'
+   */
+  async function gdChoose(
+    message: string, opts: DialogOptions & { altText: string },
+  ): Promise<'confirm' | 'alt' | 'cancel'> {
+    let alt = false
+    const ok = await gdConfirm(message, { ...opts, onAlt: () => { alt = true } })
+    if (ok) return 'confirm'
+    return alt ? 'alt' : 'cancel'
+  }
+
+  return { gdConfirm, gdAlert, gdChoose }
 }

@@ -318,6 +318,10 @@
           </div>
 
           <div v-if="tError" class="gl-error">{{ tError }}</div>
+          <!-- The torrent is already a game on the shelf: offer to open it. -->
+          <button v-if="tErrorGame" type="button" class="gl-btn gl-btn--ghost gl-open-game" @click="openExistingGame">
+            {{ t('torrent.open_existing_game') }}
+          </button>
         </div>
 
         <div class="gl-modal-footer">
@@ -428,7 +432,6 @@ import { formatBytes as fmtBytes } from '@/utils/format'
 import { useSocketStore } from '@/stores/socket'
 
 const { t } = useI18n()
-const { gdConfirm } = useDialog()
 
 function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -444,13 +447,12 @@ import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import client from '@/services/api/client'
 import * as libActions from '@/lib/libraryActions'
-import { describeAddRefusal } from '@/lib/transferError'
+import { addRefusalGame, describeAddRefusal } from '@/lib/transferError'
 import LibraryIcon from '@/components/common/LibraryIcon.vue'
 import GameRequestDialog from '@/components/GameRequestDialog.vue'
 import GameListRow from '@/components/games/GameListRow.vue'
 import { useRequestNotify } from '@/composables/useRequestNotify'
 import { useIncrementalList } from '@/composables/useIncrementalList'
-import { useDialog } from '@/composables/useDialog'
 
 interface LibGame {
   id: number
@@ -737,6 +739,8 @@ const torrentModal     = ref(false)
 const tTab             = ref<'url' | 'file'>('url')
 const tAdding          = ref(false)
 const tError           = ref('')
+// The game a refusal says this torrent already became, for the link under it.
+const tErrorGame       = ref<{ id: number; title: string } | null>(null)
 const torrentFileInput = ref<HTMLInputElement>()
 
 // Progress tracking after submission
@@ -753,6 +757,7 @@ function openTorrentModal() {
   addMenuOpen.value = false
   tTab.value = 'url'
   tError.value = ''
+  tErrorGame.value = null
   tDownloadId.value = null
   tDlPercent.value = 0
   tDlSpeed.value = 0
@@ -812,8 +817,17 @@ function fmtEta(secs: number): string {
   return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm'
 }
 
+function openExistingGame() {
+  const game = tErrorGame.value
+  if (!game) return
+  _stopTorrentListeners()
+  torrentModal.value = false
+  router.push({ name: 'games-detail', params: { id: game.id } })
+}
+
 async function submitTorrent() {
   tError.value = ''
+  tErrorGame.value = null
   tAdding.value = true
   try {
     // In a custom library view the finished download lands in that library
@@ -842,6 +856,7 @@ async function submitTorrent() {
     // `detail` is an object now: a reason name, its figures, and a sentence.
     // Printing it directly would render "[object Object]".
     tError.value = describeAddRefusal(e, t) || t('detail.torrent_failed')
+    tErrorGame.value = addRefusalGame(e)
   } finally {
     tAdding.value = false
   }
@@ -930,29 +945,18 @@ async function submitUpload() {
   uProgress.value = 0
   uUploading.value = true
   try {
-    // Step 1: find or create the game entry. A second file for a game already
-    // on this shelf joins it rather than making a second entry - the owner hit
-    // that uploading Ion Fury and then its DLC under the same title, and got
-    // `ion-fury` and `ion-fury-1`. Asked rather than assumed: two different
-    // games can share a title.
+    // Step 1: the game this file goes into. When the title is already on this
+    // shelf the core asks: add to it (a DLC, an extra, another build), make a
+    // separate entry for a different game with the same title, or cancel -
+    // see `chooseUploadTarget`. Nothing is sent on cancel.
     //
     // In a custom library view, a new game targets that library so it (and its
     // uploaded files) land there instead of the Games library.
-    const existing = await libActions.findGameByTitle(
-      uForm.value.title.trim(), librarySlug.value)
-    let game = existing
-    if (existing) {
-      const ok = await gdConfirm(
-        t('upload.game_exists', { title: existing.title }),
-        { title: t('upload.add_to_existing'), confirmText: t('upload.add_to_existing') },
-      )
-      if (!ok) { uUploading.value = false; return }
-    } else {
-      game = await libActions.createGame({
-        title:   uForm.value.title.trim(),
-        library: librarySlug.value,
-      })
-    }
+    const game = await libActions.chooseUploadTarget({
+      title:   uForm.value.title.trim(),
+      library: librarySlug.value,
+    })
+    if (!game) { uUploading.value = false; return }
     const gameId = game.id
 
     if (uTab.value === 'url') {
@@ -1402,6 +1406,7 @@ onBeforeUnmount(() => {
 .gl-progress-label { font-size: 11px; color: var(--muted); margin-top: 4px; display: block; }
 
 .gl-error   { font-size: var(--fs-sm, 12px); color: #f87171; }
+.gl-open-game { align-self: flex-start; }
 .gl-success { font-size: var(--fs-sm, 12px); color: #4ade80; }
 
 /* Torrent download progress */

@@ -770,18 +770,21 @@ async def create_library_game(request: Request, body: GameCreateBody) -> dict:
     # behind; and a plugin had been told about a game the answer said was never
     # made. Nothing here needs the row - `body.library` is known on the first
     # line - so there was never a reason for the order.
-    target = None
-    target_slug = (body.library or "").strip()
-    if target_slug and target_slug != "games":
-        from handler.database.library_registry_handler import library_registry_handler
-        target = await library_registry_handler.get_by_slug(target_slug)
-        # A shelf the caller could not be shown is not a shelf they may put a
-        # game on. Naming a disabled library made a game whose only membership
-        # is one nobody can see - an orphan - and turned the library switch into
-        # a way of hiding your own uploads from everybody including yourself.
-        if target is not None and not await library_registry_handler.user_can_access(
-                request.state.user, target):
-            raise HTTPException(status_code=404, detail="Library not found")
+    #
+    # No slug is the built-in Games library, and it is asked like any other.
+    # It used to be exempt by name; Games can be switched off and restricted
+    # now, and a game created there while it was off was an upload nobody could
+    # see, charged to the account that made it (1.0.34 audit, #5).
+    from handler.database.library_registry_handler import library_registry_handler
+    target_slug = (body.library or "").strip() or "games"
+    target = await library_registry_handler.get_by_slug(target_slug)
+    # A shelf the caller could not be shown is not a shelf they may put a
+    # game on. Naming a disabled library made a game whose only membership
+    # is one nobody can see - an orphan - and turned the library switch into
+    # a way of hiding your own uploads from everybody including yourself.
+    if target is not None and not await library_registry_handler.user_can_access(
+            request.state.user, target):
+        raise HTTPException(status_code=404, detail="Library not found")
 
     base = body.slug or _slugify(body.title)
     slug = base
@@ -1060,11 +1063,21 @@ async def claim_library_games(request: Request, body: ClaimBody) -> dict:
         if not game:
             missing += 1
             continue
-        # Not the account this list was drawn from, so not what was confirmed.
-        # Counted rather than raised, on the same grounds as a missing id: the
-        # other nineteen games are still the right thing to do.
+        # Not the account this list was drawn from. The list also shows a game
+        # that account only ADDED files to - a DLC on somebody else's game - and
+        # taking that over is taking over those files, the way a game is taken
+        # over: they stop counting against the account and it can no longer
+        # remove them. The game and everybody else's files stay as they are.
         if body.from_user_id is not None and game.published_by != body.from_user_id:
-            skipped += 1
+            moved = await _lib.claim_files_of(
+                game.id, body.from_user_id, admin_id=getattr(admin, "id", None))
+            if moved:
+                claimed += 1
+            else:
+                # Nothing of theirs here, so not what was confirmed. Counted
+                # rather than raised, on the same grounds as a missing id: the
+                # other nineteen games are still the right thing to do.
+                skipped += 1
             continue
         previous_owner = getattr(game, "published_by", None)
         await _lib.update(game, writes)
@@ -1103,7 +1116,10 @@ async def delete_library_game(
     request: Request, game_id: int, delete_files: bool = Query(False)
 ) -> dict:
     game = await _lib.get_by_id(game_id)
-    if not game:
+    # A game this caller cannot see answers like one that does not exist. The
+    # ownership refusal below used to answer first, and its 403 confirmed the id
+    # of a game in a library hidden from them (1.0.34 audit, #7).
+    if not game or await _visible_or_none(request, game) is None:
         raise HTTPException(status_code=404, detail="Game not found")
     assert_can_delete(request, game)
 
@@ -1121,6 +1137,44 @@ async def delete_library_game(
 
     await _lib.delete(game)
     return {"ok": True, "files_deleted": removed}
+
+
+async def _visible_or_none(request: Request, game):
+    from handler.library.visibility import visible_game_or_none
+    return await visible_game_or_none(getattr(request.state, "user", None), game)
+
+
+@protected_route(library_router.delete, "/games/{game_id}/my-files", scopes=[Scope.LIBRARY_UPLOAD])
+async def remove_my_files(request: Request, game_id: int) -> dict:
+    """Take the caller's own files out of a game, from the disk too, and leave the game.
+
+    THE OWNER DECIDED THIS (2026-09-17): an uploader may add a DLC or an extras
+    pack to a game somebody else added, and removes it again themselves - "B
+    usuwa swoje pliki", with an administrator able to take such files over the
+    way a game is taken over. The bytes are charged to the account that brought
+    them in, so that account needs a way to get them back; before this it saw
+    the game in "My uploads" behind a lock.
+
+    "Own" is the account a file counts against (`ownership.charged_to`), the
+    same sentence the quota sums with - so what this removes is exactly what the
+    bar gives back.
+
+    Always from the disk. A row taken away with its file left behind would be
+    bytes on the server that count against nobody.
+    """
+    from handler.library.ownership import charged_to
+
+    game = await _lib.get_by_id(game_id)
+    if not game or await _visible_or_none(request, game) is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    me = getattr(getattr(request.state, "user", None), "id", None)
+    mine = [f for f in await _lib.get_files_for_game(game_id)
+            if me and charged_to(f, game) == me]
+    removed_on_disk = _delete_files_on_disk(mine)
+    for f in mine:
+        await _lib.delete_file(f)
+    logger.info("Account %s removed %d of its files from game %d", me, len(mine), game_id)
+    return {"ok": True, "removed": len(mine), "files_deleted": removed_on_disk}
 
 
 # ── Local trailer copy (download via yt-dlp / upload) ─────────────────────────
@@ -1494,7 +1548,7 @@ async def search_screenshot_options(
         # Plugin screenshots
         try:
             from plugins.manager import plugin_manager
-            all_plugin = plugin_manager.hook.metadata_search_game(query=search_term)
+            all_plugin = await plugin_manager.call_each("metadata_search_game", query=search_term)
             for provider_results in all_plugin:
                 if not isinstance(provider_results, list) or not provider_results:
                     continue
@@ -1503,7 +1557,7 @@ async def search_screenshot_options(
                 gid = best.get("provider_game_id", "")
                 if not pid or not gid:
                     continue
-                game_data_list = plugin_manager.hook.metadata_get_game(provider_game_id=gid)
+                game_data_list = await plugin_manager.call_each("metadata_get_game", provider_game_id=gid)
                 for gd in game_data_list:
                     if not isinstance(gd, dict) or gd.get("provider_id") != pid:
                         continue

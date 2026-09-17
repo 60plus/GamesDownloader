@@ -16,7 +16,7 @@ import { useCouchTheme } from "./composables/useCouchTheme";
 import { getEjsCore } from "./utils/ejsCores";
 import { buildLanguageList } from "./utils/langMap";
 import { describeUpload, uploadHadRefusals } from "./lib/uploadResult";
-import { describeAddRefusal } from "./lib/transferError";
+import { addRefusalGame, describeAddRefusal } from "./lib/transferError";
 import { sanitizeHtml } from "./utils/sanitize";
 import i18n from "./i18n";
 import { useAuthStore } from "./stores/auth";
@@ -37,8 +37,9 @@ import DownloadDialog from "./components/gog/DownloadDialog.vue";
 import RandomGamePicker from "./components/RandomGamePicker.vue";
 import AmbientBackground from "./components/common/AmbientBackground.vue";
 import GameRequestDialog from "./components/GameRequestDialog.vue";
-import { openMetadataEditor, openCollectionEditor, closeMetadataEditor, closeCollectionEditor, openRomMetadataEditor, closeRomMetadataEditor } from "./lib/pluginUi";
+import { openMetadataEditor, openCollectionEditor, closeMetadataEditor, closeCollectionEditor, openRomMetadataEditor, closeRomMetadataEditor, openAddFileDialog, closeAddFileDialog } from "./lib/pluginUi";
 import { openAbout } from "./lib/about";
+import { watchSaveConflicts } from "./lib/saveConflictBadge";
 
 import "@mdi/font/css/materialdesignicons.css";
 import "./styles/base.css";
@@ -185,6 +186,10 @@ function createSafeSocketStore() {
     // skins keep their own copy of that dialog, and `detail` is an object now:
     // a theme still printing it directly would render "[object Object]".
     describeAddRefusal,
+    // addRefusalGame(err) -> {id, title} | null: the game a torrent already
+    // became, when that is why it was refused, so a dialog can offer to open
+    // it. Named only when the reader may see that game.
+    addRefusalGame,
     uploadHadRefusals,
   },
   registerTheme,
@@ -316,12 +321,18 @@ function createSafeSocketStore() {
   //       createGame: `POST /library/games` always creates, so an upload dialog
   //       that skips the question turns a second file for the same game into a
   //       second library entry (`ion-fury`, then `ion-fury-1`).
+  //   library.chooseUploadTarget({title, library})    -> game | null. THE ONE
+  //       AN UPLOAD DIALOG CALLS (GD >= 1.0.35): finds the game, and when the
+  //       title is taken asks "add to it / separate entry / cancel" in the core
+  //       dialog, creating the game when that is the answer. null = cancelled,
+  //       send nothing.
   //   library.createGame({title, library})            -> game (has .id)
   //   library.uploadFile(gameId, file, {os, fileType, onProgress})
   //   library.uploadFromUrl(gameId, {url, os, fileType}) -> {id, filename}
   //   library.addTorrent({source, title, os, library, isFile}) -> download
   //   library.scan(librarySlug?)                       -> {created, updated, ...}
-  //   library.addByUpload({library, title, file, os, fileType, onProgress}) -> game
+  //   library.addByUpload({library, title, file, os, fileType, onProgress}) -> game | null
+  //       (asks like chooseUploadTarget; null = cancelled, nothing sent)
   library: libraryActions,
   // Plugin catalogues (stores). A theme brings its own shelf layout and calls
   // these for the data, instead of hard-coding the endpoints the way the first
@@ -372,6 +383,13 @@ function createSafeSocketStore() {
     // saves also dispatch a 'gd-rom-updated' DOM event.
     openRomMetadataEditor,
     closeRomMetadataEditor,
+    // openAddFileDialog({game: {id, title}, onAdded?, onClosed?}) (GD >= 1.0.35)
+    // - the core "add a file to this game" form, for a skin with its own game
+    // page. For an uploader and an admin: an uploader may add to any game it
+    // can see. Stays open for the next file; each one also dispatches
+    // 'gd-game-updated'.
+    openAddFileDialog,
+    closeAddFileDialog,
     // Styled in-app dialogs (same look in every theme) so plugins never have
     // to fall back to the browser-native window.confirm()/alert() popups.
     // confirm(msg, {title?, danger?, confirmText?, cancelText?, image?,
@@ -426,6 +444,10 @@ void (async () => {
 // re-fetched after login in the auth store).
 useLibrariesStore().fetch();
 useCollectionsStore().fetch();
+
+// Two memory cards for one game, waiting for their owner to choose: a badge on
+// the avatar in every layout, refreshed on sign-in and when the server says so.
+watchSaveConflicts();
 
 // Load plugin translations (i18n.json files from installed plugins)
 client.get("/plugins/frontend/i18n").then((res: any) => {

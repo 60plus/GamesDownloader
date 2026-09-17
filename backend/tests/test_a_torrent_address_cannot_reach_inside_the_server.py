@@ -60,6 +60,13 @@ def adding(monkeypatch):
             total_size=0, rate_download=0, eta=-1, error_msg=None, game_id=None,
             library=None, created_by="gdtest", created_at=None, completed_at=None)
 
+    # Which shelf may be named is its own test
+    # (test_a_switched_off_games_library_takes_no_new_games); here the Games
+    # library is simply open.
+    async def _shelf_open(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(R, "_assert_shelf_allowed", _shelf_open)
     monkeypatch.setattr(R, "_create_torrent_download", _create)
     monkeypatch.setattr(R.os, "makedirs", lambda *_a, **_k: None)
 

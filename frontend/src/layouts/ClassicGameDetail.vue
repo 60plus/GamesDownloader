@@ -80,6 +80,12 @@
             <button v-else-if="libAvailableFiles.length" class="cov-btn" :title="t('common.download')" @click="showLibDownload = true">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
+            <!-- Add a file to this game: a DLC, an extra, another build. An
+                 uploader may add to any game it can see (1.0.35); the form is
+                 the core's, opened as a dialog. -->
+            <button v-if="activeLib === 'games' && canUpload" class="cov-btn" @click="openAddFile" :title="t('detail.add_file')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </button>
             <button v-if="canEdit"
               :disabled="metaLocked" class="cov-btn" :class="{ 'cov-btn--locked': metaLocked }" @click="metaOpen = true" :title="metaLocked ? t('meta.locked_by_admin') : t('detail.edit_metadata')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -732,6 +738,7 @@ import { useI18n } from '@/i18n'
 import { sanitizeHtml } from '@/utils/sanitize'
 import { getEjsCore } from '@/utils/ejsCores'
 import { romActions } from '@/lib/romSourceActions'
+import { openAddFileDialog } from '@/lib/pluginUi'
 import { formatBytes } from '@/utils/format'
 const formatSize = (b: number | null | undefined) => formatBytes(b, '-')
 
@@ -748,6 +755,18 @@ const isAdmin = computed(() => authStore.user?.role === 'admin')
 // both in the wrong places.
 const canEdit = computed(() =>
   ['admin', 'uploader', 'editor'].includes(authStore.user?.role as string))
+// Adding a file asks for LIBRARY_UPLOAD, which an editor does not have.
+const canUpload = computed(() =>
+  ['admin', 'uploader'].includes(authStore.user?.role as string))
+
+function openAddFile() {
+  if (!game.value) return
+  const id = props.gameId
+  openAddFileDialog({
+    game: { id: (game.value as any).id ?? id, title: (game.value as any).title },
+    onAdded: () => loadGame(id),
+  })
+}
 // A locked entry is the admin's alone, so there is nothing here for anyone
 // else to open. Refusing at the button matters beyond tidiness: opening the
 // editor fires searches at the metadata providers, and some of them charge

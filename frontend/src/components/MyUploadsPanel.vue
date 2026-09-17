@@ -78,8 +78,10 @@
                   ? { name: 'emulation-detail', params: { platform: g.library.slug, id: g.id } }
                   : { name: 'games-detail', params: { id: g.id } }"
               >
-                <img v-if="g.cover_path" :src="g.cover_path" class="mup-cover" :alt="g.title" />
-                <span v-else class="mup-cover mup-cover--none">
+                <!-- Each cover in its own shape, as everywhere else that mixes
+                     them: a ROM row says which, and a game is a portrait box. -->
+                <img v-if="g.cover_path" :src="g.cover_path" class="mup-cover" :style="{ aspectRatio: g.aspect || '2/3' }" :alt="g.title" />
+                <span v-else class="mup-cover mup-cover--none" :style="{ aspectRatio: g.aspect || '2/3' }">
                   <i class="mdi mdi-image-off-outline"></i>
                 </span>
               </router-link>
@@ -102,14 +104,20 @@
                 >
                   <i class="mdi" :class="g.metadata_locked ? 'mdi-lock' : 'mdi-pencil-outline'"></i>
                 </button>
+                <!-- A game this account only ADDED files to - a DLC on somebody
+                     else's game - keeps the bin: it takes out this account's own
+                     files and leaves the game. A ROM set it does not wholly own
+                     stays locked, as it was. -->
                 <button
                   class="mup-act mup-act--danger"
-                  :class="{ 'mup-act--locked': g.can_delete === false }"
-                  :title="g.can_delete === false
-                    ? t('uploads.shared_game', 'This game holds files from another account, so only an administrator can remove it.')
-                    : t('common.delete', 'Delete')"
-                  :disabled="busy === g.id || g.can_delete === false"
-                  @click="remove(g)"
+                  :class="{ 'mup-act--locked': g.kind === 'rom' && g.can_delete === false }"
+                  :title="g.can_delete !== false
+                    ? t('common.delete', 'Delete')
+                    : g.kind === 'game'
+                      ? t('uploads.remove_mine', 'Remove my files')
+                      : t('uploads.shared_game', 'This game holds files from another account, so only an administrator can remove it.')"
+                  :disabled="busy === g.id || (g.kind === 'rom' && g.can_delete === false)"
+                  @click="onBin(g)"
                 >
                   <i class="mdi mdi-trash-can-outline"></i>
                 </button>
@@ -144,6 +152,8 @@ interface OwnedGame {
   kind: "game" | "rom";
   id: number; title: string; slug: string;
   cover_path: string | null; source: string;
+  // A ROM's cover shape as a CSS ratio ("7/6", "16/11"); a game has none.
+  aspect?: string | null;
   size_bytes: number; file_count: number; metadata_locked: boolean;
   // A game can appear here because ONE file in it is this account's, while the
   // game itself belongs to somebody else - a catalogue entry fetched twice
@@ -151,6 +161,9 @@ interface OwnedGame {
   // files too, so the delete rule reads the game's owner and the server says
   // here which kind of row this is.
   can_delete?: boolean;
+  // On a game this account owns: how many files OTHER accounts added to it.
+  // Deleting the game takes them too, so the question says how many.
+  others_file_count?: number;
   library: Shelf;
 }
 interface ShelfGroup extends Shelf { games: OwnedGame[]; bytes: number }
@@ -250,6 +263,15 @@ async function edit(g: OwnedGame) {
 // before the question is put. The ROM detail page has asked this way all along;
 // this panel asked one sentence and deleted the lot.
 async function removalDetail(g: OwnedGame): Promise<string> {
+  // A game other accounts added files to - a DLC, an extras pack - takes those
+  // along. The owner decided that is allowed, since they are no use without the
+  // game; the people who added them are not asked, so the one deleting is told.
+  if (g.kind === "game") {
+    return g.others_file_count
+      ? " " + t("uploads.delete_others_files", "Files added by other accounts go too: {n}.")
+          .replace("{n}", String(g.others_file_count))
+      : "";
+  }
   if (g.kind !== "rom") return "";
   try {
     const { data } = await client.get(`/roms/${g.id}/removal`);
@@ -288,6 +310,34 @@ async function remove(g: OwnedGame) {
     // them behind would put a ROM back in the library on the next scan, which
     // is not what somebody clearing space just agreed to.
     await client.delete(`${apiPrefix(g)}/${g.id}`, { params: { delete_files: true } });
+    await load();
+  } finally {
+    busy.value = null;
+  }
+}
+
+// The bin on a tile. On a game somebody else added, where this account only
+// added files, it takes out those files and leaves the game.
+function onBin(g: OwnedGame) {
+  if (g.kind === "game" && g.can_delete === false) return removeMine(g);
+  return remove(g);
+}
+
+// THE OWNER DECIDED (2026-09-17): an uploader may add a DLC or an extras pack
+// to a game another account added, and removes it again itself. Its bytes count
+// against this account, so this is how the space comes back.
+async function removeMine(g: OwnedGame) {
+  const ok = await gdConfirm(
+    t("uploads.remove_mine_body",
+      "Remove the files you added to {name} ({n}) from disk? The game stays. This cannot be undone.")
+      .replace("{n}", String(g.file_count))
+      .replace("{name}", g.title),
+    { danger: true, requireTick: true, title: t("uploads.remove_mine", "Remove my files") },
+  );
+  if (!ok) return;
+  busy.value = g.id;
+  try {
+    await client.delete(`/library/games/${g.id}/my-files`);
     await load();
   } finally {
     busy.value = null;
@@ -369,6 +419,8 @@ onMounted(() => {
 .mup-grid {
   display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  /* Covers keep their own heights, so a row lines up on the titles below them. */
+  align-items: end;
   padding: 12px;
   border: 1px solid var(--glass-border, rgba(255,255,255,.07));
   border-top: none;
@@ -379,7 +431,7 @@ onMounted(() => {
 .mup-tile { position: relative; min-width: 0; }
 .mup-art { display: block; }
 .mup-cover {
-  width: 100%; aspect-ratio: 2 / 3; border-radius: 6px; object-fit: cover;
+  width: 100%; border-radius: 6px; object-fit: cover;
   display: block; background: color-mix(in srgb, var(--pl, #7c3aed) 12%, transparent);
   transition: transform .15s, box-shadow .15s;
 }

@@ -404,14 +404,19 @@ async def _recently_added(session: AsyncSession, limit: int = 12) -> list[dict]:
         items.append({"kind": r[3] or "custom", "id": r[0], "title": r[1], "cover": r[2],
                       "platform_slug": None, "created_at": r[4]})
     roms = (await session.execute(
-        select(Rom.id, Rom.name, Rom.fs_name_no_ext, Rom.cover_path, Rom.created_at, RomPlatform.slug)
+        select(Rom.id, Rom.name, Rom.fs_name_no_ext, Rom.cover_path, Rom.created_at, RomPlatform.slug,
+               Rom.cover_type, Rom.cover_aspect, RomPlatform.fs_slug)
         .join(RomPlatform, Rom.platform_id == RomPlatform.id)
         .order_by(desc(Rom.created_at)).limit(limit)
     )).all()
     for r in roms:
-        # ROMs route to /emulation/<platform_slug>/<id>.
+        # ROMs route to /emulation/<platform_slug>/<id>. The cover's own shape
+        # goes with it, as on every other ROM surface: without it the strip drew
+        # a Super Nintendo box in a portrait frame. A library game stores none,
+        # and the strip reads that one off the picture.
         items.append({"kind": "rom", "id": r[0], "title": r[1] or r[2], "cover": r[3],
-                      "platform_slug": r[5], "created_at": r[4]})
+                      "platform_slug": r[5], "created_at": r[4],
+                      "aspect": _rom_cover_aspect(r[6], r[7], r[8])})
     items.sort(key=lambda x: x["created_at"] or datetime.min, reverse=True)
     for it in items:
         it["created_at"] = it["created_at"].isoformat() if it["created_at"] else None

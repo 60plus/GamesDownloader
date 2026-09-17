@@ -224,9 +224,28 @@ async def test_an_allowed_shelf_still_gets_its_game(create, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_default_library_needs_no_shelf_lookup(create):
+@pytest.mark.parametrize("slug", ["games", None])
+async def test_an_open_default_library_still_gets_its_game(create, monkeypatch, slug):
+    """The default library used to be exempt from the question by name. It is
+    asked like any other now, because it can be switched off and restricted
+    (test_a_switched_off_games_library_takes_no_new_games) - and when it is
+    open, which is nearly always, the game is made and stays in it."""
+    from handler.database.library_registry_handler import library_registry_handler
+
     R, made, fired = create
 
-    out = await R.create_library_game(_request(), _body("games"))
+    async def _games(_slug):
+        return SimpleNamespace(id=2, slug="games", kind="custom")
+
+    async def _open(_user, _target):
+        return True
+
+    monkeypatch.setattr(library_registry_handler, "get_by_slug", _games)
+    monkeypatch.setattr(library_registry_handler, "user_can_access", _open)
+
+    out = await R.create_library_game(_request(), _body(slug))
 
     assert len(made) == 1 and out["title"] == "Nowa gra"
+    assert made[0].in_default_library is not False, (
+        "gra z domyslnej biblioteki wypadla z domyslnej biblioteki"
+    )

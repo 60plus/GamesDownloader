@@ -110,6 +110,14 @@ def shelf(tmp_path, monkeypatch):
 
     monkeypatch.setattr(R, "_get_roms_path", roms_path)
     monkeypatch.setattr(quota, "ceiling_for", ceiling)
+
+    async def no_live_limit(_user, **_k):
+        # The budget here is the ceiling above. Uploads running side by side
+        # are checked live as well, and that has its own tests
+        # (test_uploads_running_side_by_side_see_each_other).
+        return quota.Reservation(None, limit=0)
+
+    monkeypatch.setattr(quota, "reservation_for", no_live_limit)
     monkeypatch.setattr(rsh, "scan_after_write", scan_after_write)
     monkeypatch.setattr(R.rom_handler, "get_by_fs_name", get_by_fs_name)
     monkeypatch.setattr(R.rom_handler, "set_owner", set_owner)
@@ -354,3 +362,74 @@ async def test_an_admin_may_still_replace_an_unowned_rom_without_becoming_its_ow
     assert shelf.state.stamped == [], (
         "podmiana wspolnego ROM-u przez admina przepisala go na jego konto"
     )
+
+# ── A second copy of your own ROM is not free ─────────────────────────────────
+#
+# A second copy of your own ROM is not free storage.
+#
+# Found by the 1.0.34 audit round on ROM ownership and left for 1.0.35 to confirm:
+# "wlasciciel wgrywa wariant wielkosci liter (ucieczka od limitu)".
+#
+# Confirmed from the route. A ROM row is found by name the way MariaDB compares
+# names - without regard to case - and a row in `psx/roms/` answers for `psx/` too.
+# When that row is the uploader's own, the route read the upload as REPLACING it
+# and let it through. But the bytes did not replace anything:
+#
+#   * `GAME.chd` beside `Game.chd` is another file on the case-sensitive disk the
+#     container runs on;
+#   * `psx/Game.chd` beside `psx/roms/Game.chd` is another file in another folder.
+#
+# The original stays, the new file lands beside it, and the scan folds both into
+# the one row that is already charged - or leaves the second without a row at all.
+# Either way the second copy counts against nothing, and an account at its limit
+# can repeat it with every spelling of the name.
+#
+# A replacement is the same file: the same name in the same folder. Anything else
+# that the database calls the same ROM is refused like a name somebody else holds.
+# The owner swapping a bad dump for a good one under the SAME name keeps working,
+# and is tested here beside the refusals.
+
+@pytest.mark.asyncio
+async def test_a_case_variant_of_your_own_rom_is_refused(shelf):
+    _already_on_shelf(shelf, "Game.chd", shelf.psx, owner=UPLOADER_ID)
+
+    out = await _upload(shelf, ["GAME.chd"])
+
+    assert _refused_as_already_here(out, "GAME.chd"), (
+        "wlasny ROM pod inna wielkoscia liter przeszedl jako 'podmiana', a to drugi "
+        "plik obok pierwszego, ktorego nic nie liczy do limitu"
+    )
+    assert not (shelf.psx / "GAME.chd").exists()
+    assert (shelf.psx / "Game.chd").read_bytes() == b"THE ORIGINAL"
+
+
+@pytest.mark.asyncio
+async def test_a_copy_of_your_own_rom_in_the_other_folder_is_refused(shelf):
+    _already_on_shelf(shelf, "Game.chd", shelf.psx / "roms", owner=UPLOADER_ID)
+
+    out = await _upload(shelf, ["Game.chd"])
+
+    assert _refused_as_already_here(out, "Game.chd")
+    assert not (shelf.psx / "Game.chd").exists()
+
+
+@pytest.mark.asyncio
+async def test_an_administrator_does_not_make_a_second_copy_either(shelf):
+    """Not a question of permission: two files for one row confuse every later
+    scan and delete, whoever made them."""
+    _already_on_shelf(shelf, "Game.chd", shelf.psx, owner=UPLOADER_ID)
+
+    out = await _upload(shelf, ["game.CHD"], scopes=ADMIN)
+
+    assert _refused_as_already_here(out, "game.CHD")
+
+
+@pytest.mark.asyncio
+async def test_replacing_your_own_rom_under_the_same_name_still_works(shelf):
+    """THE LEGAL CASE: a better dump sent under the name it already has."""
+    _already_on_shelf(shelf, "Game.chd", shelf.psx, owner=UPLOADER_ID)
+
+    out = await _upload(shelf, ["Game.chd"])
+
+    assert out["saved"] == ["Game.chd"], f"podmiana wlasnego ROM-u zostala odrzucona: {out}"
+    assert (shelf.psx / "Game.chd").read_bytes() == b"rom bytes"

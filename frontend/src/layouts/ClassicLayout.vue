@@ -753,11 +753,9 @@ import { useNotifications } from '@/composables/useNotifications'
 import { useI18n } from '@/i18n'
 import { useNotificationStore } from '@/stores/notifications'
 import { openAbout } from '@/lib/about'
-import { useDialog } from '@/composables/useDialog'
 
 const { success: notifySuccess, error: notifyError } = useNotifications()
 const { t } = useI18n()
-const { gdConfirm } = useDialog()
 const notifStore = useNotificationStore()
 
 interface Game {
@@ -1587,27 +1585,16 @@ function onUploadFileChange(e: Event) {
 async function submitUpload() {
   uError.value = ''; uSuccess.value = ''; uProgress.value = 0; uUploading.value = true
   try {
-    // A second file for a game already on this shelf joins it, rather than
-    // making a second entry. The owner hit this uploading Ion Fury and then its
-    // DLC under the same title: the file landed in the right folder and the
-    // library grew a duplicate. Asked rather than assumed - two different games
-    // can share a title, and unpicking a merge is hand work in the database.
-    const existing = await libActions.findGameByTitle(
-      uForm.value.title.trim(), activeLib.value)
-    let game = existing
-    if (existing) {
-      const ok = await gdConfirm(
-        t('upload.game_exists', { title: existing.title }),
-        { title: t('upload.add_to_existing'), confirmText: t('upload.add_to_existing') },
-      )
-      if (!ok) { uUploading.value = false; return }
-    } else {
-      // Target the active custom library so the game and its files land there.
-      game = await libActions.createGame({
-        title:   uForm.value.title.trim(),
-        library: activeLib.value,
-      })
-    }
+    // The game this file goes into. When the title is already on this shelf the
+    // core asks: add to it, make a separate entry for a different game with the
+    // same title, or cancel - see `chooseUploadTarget`. Nothing is sent on
+    // cancel. A new game targets the active custom library so it and its files
+    // land there.
+    const game = await libActions.chooseUploadTarget({
+      title:   uForm.value.title.trim(),
+      library: activeLib.value,
+    })
+    if (!game) { uUploading.value = false; return }
     if (uTab.value === 'url') {
       // Server downloads in the background - follow progress over the socket.
       const res = await libActions.uploadFromUrl(game.id, {
