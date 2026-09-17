@@ -115,6 +115,9 @@ class _RomJob:
     error_code: str = ""
     error_detail: str = ""
     task: asyncio.Task | None = None
+    #: The quota reservation for the bytes this job writes, held from the first
+    #: chunk until the scan has registered the file and the stamp has charged it.
+    reservation: Any = None
 
     @property
     def terminal(self) -> bool:
@@ -1008,7 +1011,11 @@ async def _rom_download_job(job: _RomJob, resume_from: int = 0) -> None:
     # _scan_cv holding *its* slot too, so all three could sit idle behind a
     # single scan. The slot goes back first; then the file is registered.
     if landed:
-        await _register_after_download(job)
+        try:
+            await _register_after_download(job)
+        finally:
+            # Only now does a row count these bytes.
+            _let_go_of_reservation(job)
 
 
 async def _register_after_download(job: _RomJob) -> None:
@@ -1044,6 +1051,14 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
     # rather than beside it: without this the limit was only ever noticed after
     # the bytes had landed, so every account could exceed it by one download.
     max_bytes = await _ceiling_for_job(job)
+    # And the bytes counted against the account's other streams at every chunk,
+    # because `max_bytes` was the room when this job started and they grow while
+    # it runs. Held until the file is registered; see _rom_download_job.
+    from handler.library import quota
+
+    job.reservation = await quota.reservation_for_account(job.actor_id)
+    job.reservation.open()
+    landed = False
     size = resume_from
     started = time.monotonic()
     last_emit = 0.0
@@ -1108,6 +1123,13 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
                     logger.info(
                         "ROM download #%d: source ignored Range, starting over", job.id)
                     size = 0
+                # What is already on the disk from before a pause is this job's
+                # too, and has to fit beside everything else as much as a new byte.
+                if resuming and not await job.reservation.take(resume_from):
+                    raise ValueError(
+                        "Upload quota reached: this account has no room left for the "
+                        "rest of this download."
+                    )
                 total = int(resp.headers.get("content-length") or 0)
                 if resuming and total:
                     total += resume_from
@@ -1125,6 +1147,11 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
                         job.received = size
                         if size > max_bytes:
                             raise ValueError("ROM exceeds the maximum allowed size.")
+                        if not await job.reservation.take(len(chunk)):
+                            raise ValueError(
+                                "Upload quota reached: this download and the rest of "
+                                "this account's do not fit."
+                            )
                         now = time.monotonic()
                         if now - last_emit >= 1.0:
                             last_emit = now
@@ -1153,7 +1180,8 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
             f", actor={job.actor}" if job.actor else "",
         )
         # The scan and the scrape happen after the caller hands back its
-        # download slot; see _rom_download_job.
+        # download slot; see _rom_download_job. The reservation goes with them.
+        landed = True
         return True
     except asyncio.CancelledError:
         # Only reachable when a stop was asked for and the connection had gone
@@ -1207,6 +1235,17 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
         job.task = None
         _release_job_locks(job)
         _prune_jobs()
+        if not landed:
+            # Nothing reached the shelf: failed, paused or cancelled. A paused
+            # job's .part is counted again when it resumes.
+            _let_go_of_reservation(job)
+
+
+def _let_go_of_reservation(job) -> None:
+    held = getattr(job, "reservation", None)
+    if held is not None:
+        held.close()
+        job.reservation = None
 
 
 def _prune_jobs() -> None:

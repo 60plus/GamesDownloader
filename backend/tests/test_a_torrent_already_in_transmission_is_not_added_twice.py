@@ -107,6 +107,28 @@ def adding(monkeypatch, tmp_path):
     async def _fetched(_url):
         return b"torrent bytes"
 
+    # Nothing in the database holds it, and the daemon's copy is not in the
+    # download area: the one duplicate that is still refused as it always was.
+    # What a holder changes is test_a_torrent_somebody_already_has_says_where_it_is.
+    async def _nothing_holds_it(_hash):
+        return None
+
+    async def _seeded_elsewhere(_ref):
+        return dict(HELD, downloadDir="/data/games/CUSTOM/Somebody's game")
+
+    async def _never_removed(*_a, **_k):
+        raise AssertionError("duplikat zdjal torrent z demona")
+
+    # Which shelf may be named is its own test
+    # (test_a_switched_off_games_library_takes_no_new_games); here the Games
+    # library is simply open.
+    async def _shelf_open(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(R, "_assert_shelf_allowed", _shelf_open)
+    monkeypatch.setattr(R, "_what_holds", _nothing_holds_it)
+    monkeypatch.setattr(R.transmission_handler, "get_torrent", _seeded_elsewhere)
+    monkeypatch.setattr(R.transmission_handler, "remove_torrent", _never_removed)
     monkeypatch.setattr(R, "_create_torrent_download", _create)
     monkeypatch.setattr(R, "_refuse_if_it_does_not_fit", _fits)
     monkeypatch.setattr(R, "_fetch_torrent_file", _fetched)

@@ -182,6 +182,10 @@ async def _over_quota(td, total_size: int) -> bool | None:
     later are about the same person. No account recorded, the account deleted
     since, or no limit in force are all decided answers of False: nothing is
     being guessed at in those cases.
+
+    Weighed against what has landed and what the account's OTHER transfers are
+    still bringing - never this one, whose size may already be stored when the
+    resume button asks, and which would otherwise be counted twice.
     """
     owner_id = getattr(td, "created_by_id", None)
     if not owner_id:
@@ -196,7 +200,7 @@ async def _over_quota(td, total_size: int) -> bool | None:
         limit = await quota.limit_for(user)
         if not limit or limit <= 0:
             return False
-        used = await quota.used_bytes(owner_id)
+        used = await quota.committed_bytes(owner_id, except_torrent_id=getattr(td, "id", None))
         return not quota.fits(used=used, incoming=total_size, limit=limit)
     except Exception:  # noqa: BLE001 - a failed reading is not a verdict
         logger.warning(
@@ -368,7 +372,11 @@ async def _room_left(td) -> int:
         limit = await quota.limit_for(user)
         if not limit or limit <= 0:
             return 0
-        return max(0, limit - await quota.used_bytes(td.created_by_id))
+        # The same total `_over_quota` refused against, or the message would
+        # quote more room than the decision it explains had.
+        used = await quota.committed_bytes(
+            td.created_by_id, except_torrent_id=getattr(td, "id", None))
+        return max(0, limit - used)
     except Exception:  # noqa: BLE001 - a figure in a message, never a verdict
         logger.debug("Could not work out the room left for the refusal message",
                      exc_info=True)
@@ -451,6 +459,25 @@ async def _refuse_over_quota(td, info: dict, total_size: int) -> None:
                          {"id": td.id, "reason": "quota", "removed": mine})
 
 
+async def _as_it_is_now(td):
+    """This transfer's row as the database holds it at this moment, or None.
+
+    For the decisions that depend on who owns a transfer. The monitor reads its
+    rows at the start of a tick, and an administrator taking the upload right
+    away hands the account's transfers over (`hand_running_torrents_to`) in the
+    database, not in the rows a tick is already holding.
+    """
+    from handler.database.session import async_session_factory
+    from models.torrent_download import TorrentDownload
+    from sqlalchemy import select
+
+    async with async_session_factory() as db:
+        found = (await db.execute(
+            select(TorrentDownload).where(TorrentDownload.id == td.id)
+        )).scalars().all()
+    return next((row for row in found if row.id == td.id), None)
+
+
 async def _check_downloads() -> None:
     from handler.database.session import async_session_factory
     # STATUS is a constant of the MODULE, not a field of the client, and reading
@@ -470,7 +497,14 @@ async def _check_downloads() -> None:
             select(TorrentDownload).where(TorrentDownload.status == "downloading")
         )).scalars().all()
 
-    for td in rows:
+    for held in rows:
+        # As the row is NOW, not as the tick read it. One transfer landing takes
+        # minutes, and meanwhile a transfer can be taken over or paused: the one
+        # after it was weighed against the demoted account's allowance and, if
+        # it landed, filed as that account's game.
+        td = await _as_it_is_now(held)
+        if td is None or td.status != "downloading":
+            continue
         if td.transmission_id is None:
             continue
 
@@ -754,9 +788,13 @@ def _move_into_library(
     """
     import shutil
 
-    os.makedirs(dest_root, exist_ok=True)
     root = os.path.realpath(dest_root)
-    moved = []
+    # Every destination is decided and checked before a single file moves. The
+    # refusal used to come at the colliding file, after the ones before it had
+    # gone: those sat in the library with no rows, outside the quota and out of
+    # sight, the torrent's folder was left incomplete so seeding broke, and the
+    # caller told the person the files were still in the download folder.
+    plan: list[tuple[str, str]] = []
     for fpath in files:
         dest = os.path.join(dest_root, os.path.relpath(fpath, download_dir))
         # Inside the folder it belongs in. Not reachable through `relpath` as
@@ -773,17 +811,75 @@ def _move_into_library(
             raise FileExistsError(
                 f"A file is already in the library at {dest}; the torrent was "
                 "left in its download folder rather than written over it.")
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        shutil.move(fpath, dest)
-        # Sized here, in the thread, so the caller does not stat every file
-        # back on the event loop.
-        moved.append((dest, os.path.getsize(dest)))
-        logger.debug("Moved torrent file %s -> %s", fpath, dest)
+        plan.append((fpath, dest))
+
+    os.makedirs(dest_root, exist_ok=True)
+    moved = []
+    done: list[tuple[str, str]] = []
+    current: tuple[str, str] | None = None
+    try:
+        for fpath, dest in plan:
+            current = (fpath, dest)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.move(fpath, dest)
+            done.append(current)
+            # Sized here, in the thread, so the caller does not stat every file
+            # back on the event loop.
+            moved.append((dest, os.path.getsize(dest)))
+            logger.debug("Moved torrent file %s -> %s", fpath, dest)
+    except BaseException:
+        _put_torrent_files_back(done, current, dest_root)
+        raise
     try:
         shutil.rmtree(download_dir)
     except Exception:
         pass  # ignore cleanup errors
     return moved
+
+
+def _put_torrent_files_back(done, current, dest_root) -> None:
+    """Undo a move that broke off, so the download folder is whole again.
+
+    A full disk or a mount going away can stop the move after some files have
+    gone, and the caller then says the files are still in the download folder.
+    This makes that true: what had been moved goes back, and a copy that broke
+    off halfway - across the bind mounts a move is a copy - is removed from the
+    library while its original is still in place. Nothing at those destinations
+    was anybody else's: every one was checked to be free before the first move.
+    """
+    import shutil
+
+    if current is not None and current not in done:
+        source, dest = current
+        if os.path.exists(source) and os.path.lexists(dest):
+            try:
+                os.remove(dest)
+            except OSError:
+                logger.warning("Could not remove the partial copy at %s", dest, exc_info=True)
+    touched = {os.path.dirname(dest) for _s, dest in done}
+    if current is not None:
+        touched.add(os.path.dirname(current[1]))
+    for source, dest in reversed(done):
+        try:
+            os.makedirs(os.path.dirname(source), exist_ok=True)
+            shutil.move(dest, source)
+        except OSError:
+            logger.warning("Could not put %s back into the download folder", dest, exc_info=True)
+    # And the folders the move made, now empty. Only empty ones: the
+    # destination can be a folder a deleted game left behind, with its own files.
+    root = os.path.realpath(dest_root)
+    for directory in sorted(touched, key=len, reverse=True):
+        here = os.path.realpath(directory)
+        while here != root and os.path.commonpath([root, here]) == root:
+            try:
+                os.rmdir(here)
+            except OSError:
+                break
+            here = os.path.dirname(here)
+    try:
+        os.rmdir(root)
+    except OSError:
+        pass
 
 
 async def _auto_register_game(td) -> tuple[int | None, str | None, str | None, str | None]:
@@ -827,6 +923,12 @@ async def _auto_register_game(td) -> tuple[int | None, str | None, str | None, s
     title = td.title or "Unknown Game"
     slug_base = _slug_for(title)
 
+    # Whose game this is, read now. The virus scan above can take minutes, and
+    # a transfer taken over meanwhile carries its new owner in the database, not
+    # in the row the monitor handed in. Who brought it in stays as it was.
+    current = await _as_it_is_now(td)
+    owner_id = current.created_by_id if current is not None else td.created_by_id
+
     # Claim the slug and the row first, in a session that closes immediately.
     # The copy below can run for minutes, and it used to run inside this
     # session, which meant a database connection sat open and idle for all of
@@ -853,7 +955,7 @@ async def _auto_register_game(td) -> tuple[int | None, str | None, str | None, s
             # which turned a dormant gap into the one way in that ignored the
             # limit. Still None for a download queued before the account was
             # recorded and whose uploader has since been deleted.
-            published_by=td.created_by_id,
+            published_by=owner_id,
             # Who brought it in, which is only different once an administrator
             # has taken the transfer over from an account that lost the right
             # to upload. Falls back to the owner for every row written before

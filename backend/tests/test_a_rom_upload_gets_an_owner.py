@@ -89,6 +89,14 @@ def route(tmp_path, monkeypatch):
     state.pending = []
     monkeypatch.setattr(R, "_get_roms_path", roms_path)
     monkeypatch.setattr(quota, "ceiling_for", ceiling)
+
+    async def no_live_limit(_user, **_k):
+        # The budget here is the ceiling above. Uploads running side by side
+        # are checked live as well, and that has its own tests
+        # (test_uploads_running_side_by_side_see_each_other).
+        return quota.Reservation(None, limit=0)
+
+    monkeypatch.setattr(quota, "reservation_for", no_live_limit)
     monkeypatch.setattr(rsh, "scan_after_write", scan_after_write)
     monkeypatch.setattr(R.rom_handler, "get_by_fs_name", get_by_fs_name)
     monkeypatch.setattr(R.rom_handler, "set_owner", set_owner)

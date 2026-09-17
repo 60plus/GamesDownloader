@@ -81,13 +81,22 @@ def route(tmp_path, monkeypatch):
     async def my_disc(_platform_id, fs_name):
         # Every disc on this shelf is mine, so ownership never gets in the way
         # of what these tests are about.
-        return SimpleNamespace(id=1, fs_name=fs_name, published_by=ME)
+        # In the shelf's own folder: the file a replacement would replace.
+        return SimpleNamespace(id=1, fs_name=fs_name, published_by=ME, fs_path=str(shelf))
 
     monkeypatch.setattr(R.rom_platform_handler, "get_by_slug", platform)
     monkeypatch.setattr(R.rom_handler, "get_by_fs_name", my_disc)
     monkeypatch.setattr(R.rom_handler, "max_rom_id", nothing)
     monkeypatch.setattr(R, "_get_roms_path", roms_path)
     monkeypatch.setattr(quota, "ceiling_for", ceiling)
+
+    async def no_live_limit(_user, **_k):
+        # The budget here is the ceiling above. Uploads running side by side
+        # are checked live as well, and that has its own tests
+        # (test_uploads_running_side_by_side_see_each_other).
+        return quota.Reservation(None, limit=0)
+
+    monkeypatch.setattr(quota, "reservation_for", no_live_limit)
     monkeypatch.setattr(rsh, "scan_after_write", nothing)
     monkeypatch.setattr(R, "_stamp_uploaded", nothing)
     monkeypatch.setattr(clam, "is_upload_scanning_enabled", clam_off)

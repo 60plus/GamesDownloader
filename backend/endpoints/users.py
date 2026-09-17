@@ -347,6 +347,19 @@ async def delete_user(request: Request, user_id: int) -> dict:
     if not user:
         from exceptions.common import NotFoundException
         raise NotFoundException("User", user_id)
+    # The strongest way of taking the right to upload away, so it does what the
+    # weaker ones do: running transfers change hands to the administrator, and
+    # before the account goes. Left behind they ran on under an id that no
+    # longer exists, and landed either filed under it or, where the foreign key
+    # refused that, as a transfer reading "complete" with no game and no word.
+    from handler.torrent import torrent_ownership
+
+    try:
+        await torrent_ownership.hand_running_torrents_to(user_id, getattr(me, "id", None))
+    except Exception:  # noqa: BLE001 - deleting the account is what was asked for
+        logger.warning(
+            "Could not hand over the running torrents of account %s before deleting it",
+            user_id, exc_info=True)
     await _users_db.delete(user)
     # There is no session to revoke here - the row simply goes - and without
     # this the socket outlives the account, sitting in `user:<id>` and

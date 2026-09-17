@@ -57,15 +57,18 @@ async def db():
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
     async with maker() as session:
-        for row_id, status, owner in (
-            (1, "downloading", UPLOADER),
-            (2, "paused",      UPLOADER),
-            (3, "complete",    UPLOADER),
-            (4, "downloading", BYSTANDER),
+        for row_id, status, owner, game_id in (
+            (1, "downloading", UPLOADER,  None),
+            (2, "paused",      UPLOADER,  None),
+            (3, "complete",    UPLOADER,  99),
+            (4, "downloading", BYSTANDER, None),
+            # Finished downloading and still being filed: virus-scanned, then
+            # copied between bind mounts, which takes minutes. Not a game yet.
+            (5, "complete",    UPLOADER,  None),
         ):
             session.add(TorrentDownload(
                 id=row_id, title=f"gra {row_id}", os="windows",
-                download_dir=f"/d/{row_id}", status=status,
+                download_dir=f"/d/{row_id}", status=status, game_id=game_id,
                 created_by="gdtest", created_by_id=owner, uploaded_by_id=owner,
             ))
         await session.commit()
@@ -91,7 +94,25 @@ async def test_a_running_transfer_is_handed_to_the_administrator(db):
         "wiec zajmuje jego limit i skonczy jako jego gra"
     )
     assert rows[2].created_by_id == ADMIN, "wstrzymany transfer tez trzeba przejac"
-    assert moved == 2
+    assert moved == 3
+
+
+@pytest.mark.asyncio
+async def test_a_transfer_still_being_filed_is_handed_over_too(db):
+    """"complete" is written before the game is, so a transfer being virus
+    scanned and copied reads as finished for minutes without being a game. Left
+    out of the handover, its game was filed under the account that had just lost
+    the right to upload."""
+    from handler.torrent.torrent_ownership import hand_running_torrents_to
+
+    await hand_running_torrents_to(UPLOADER, ADMIN, session=db)
+
+    rows = await _rows(db)
+    assert rows[5].created_by_id == ADMIN, (
+        "transfer w trakcie wkladania do biblioteki zostal przy koncie, ktore "
+        "wlasnie stracilo prawo wgrywania - jego gra trafi do tego konta"
+    )
+    assert rows[5].uploaded_by_id == UPLOADER
 
 
 @pytest.mark.asyncio
@@ -198,3 +219,69 @@ def test_switching_an_account_off_counts_as_losing_it():
     off = _account("uploader")
     off.enabled = False
     assert lost_upload(on, off) is True
+
+
+# ── Deleting the account ─────────────────────────────────────────────────────
+
+@pytest.fixture
+def deleting(monkeypatch):
+    """`delete_user` as the route runs it, with the account store and the
+    socket layer replaced. Every call is recorded in order."""
+    from endpoints import users as U
+    from handler import socket_handler
+    from handler.torrent import torrent_ownership as T
+
+    calls: list = []
+
+    async def _get(user_id):
+        return SimpleNamespace(id=user_id, username="gdtest")
+
+    async def _delete(user):
+        calls.append(("delete", user.id))
+
+    async def _drop(user_id):
+        calls.append(("drop", user_id))
+
+    async def _hand(previous_owner_id, admin_id, **_k):
+        calls.append(("hand", previous_owner_id, admin_id))
+        return 1
+
+    monkeypatch.setattr(U._users_db, "get_by_id", _get)
+    monkeypatch.setattr(U._users_db, "delete", _delete)
+    monkeypatch.setattr(socket_handler, "drop_sockets_for_user", _drop)
+    monkeypatch.setattr(T, "hand_running_torrents_to", _hand)
+
+    request = SimpleNamespace(state=SimpleNamespace(
+        user=SimpleNamespace(id=ADMIN), scopes=set()))
+    return SimpleNamespace(module=U, calls=calls, request=request, torrents=T)
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_account_hands_its_transfers_over(deleting):
+    """The strongest way of taking the right to upload away did not do what the
+    weaker ones do. The transfer ran on under an id that no longer exists, and
+    when it landed its game was filed under that id - or the insert failed on
+    the foreign key after the row had already been written "complete", so it
+    read as a success with no game and no message."""
+    await deleting.module.delete_user.__wrapped__(deleting.request, UPLOADER)
+
+    assert ("hand", UPLOADER, ADMIN) in deleting.calls, (
+        "usuniecie konta zostawia jego torrenty przy koncie, ktorego juz nie ma"
+    )
+    assert deleting.calls.index(("hand", UPLOADER, ADMIN)) < deleting.calls.index(
+        ("delete", UPLOADER)), "transfery przekazane dopiero po zniknieciu konta"
+
+
+@pytest.mark.asyncio
+async def test_an_account_is_deleted_even_if_the_handover_fails(deleting, monkeypatch):
+    """Deleting the account is what was asked for. A handover that cannot be
+    done is logged, as it is when a permission is taken away."""
+    async def _broken(*_a, **_k):
+        raise RuntimeError("baza nie odpowiada")
+
+    monkeypatch.setattr(deleting.torrents, "hand_running_torrents_to", _broken)
+
+    await deleting.module.delete_user.__wrapped__(deleting.request, UPLOADER)
+
+    assert ("delete", UPLOADER) in deleting.calls
+    assert ("drop", UPLOADER) in deleting.calls

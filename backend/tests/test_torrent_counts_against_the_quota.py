@@ -41,6 +41,17 @@ def _source(path: pathlib.Path) -> str:
     return io.open(path, encoding="utf-8").read()
 
 
+def _registration() -> str:
+    """`_auto_register_game`, whole. A fixed window of characters from its
+    start stopped reaching the end of it as soon as a comment was added above
+    the lines being checked, and would have passed for the wrong reason the day
+    the next function started inside it."""
+    source = _source(MONITOR)
+    start = source.index("async def _auto_register_game")
+    end = re.search(r"\n(async )?def ", source[start + 10:])
+    return source[start:start + 10 + end.start()] if end else source[start:]
+
+
 def test_the_download_records_the_account_and_not_only_a_name():
     """created_by is a username, kept for display. A username cannot be summed
     against a quota, and it stops pointing anywhere if the account is renamed."""
@@ -64,9 +75,7 @@ def test_both_ways_of_queueing_record_who_asked():
 
 
 def test_the_registered_game_belongs_to_whoever_queued_it():
-    source = _source(MONITOR)
-    start = source.index("async def _auto_register_game")
-    body = source[start:start + 4000]
+    body = _registration()
     assert "published_by=None" not in body, "gra z torrenta nadal jest niczyja"
     assert "created_by_id" in body, "monitor nie przepisuje konta na gre"
 
@@ -74,9 +83,7 @@ def test_the_registered_game_belongs_to_whoever_queued_it():
 def test_the_uploader_is_recorded_too():
     """Same as every other way in: owner and uploader start out equal, and only
     a claim parts them."""
-    source = _source(MONITOR)
-    start = source.index("async def _auto_register_game")
-    assert "uploaded_by" in source[start:start + 4000]
+    assert "uploaded_by" in _registration()
 
 
 def test_the_column_is_created_and_filled_in_on_an_existing_install():
@@ -107,7 +114,13 @@ def test_games_already_here_from_a_torrent_are_given_their_owner_too():
 
 def test_a_torrent_was_never_excluded_from_the_sum_itself():
     """The rule about what counts leaves out GOG publications and nothing else,
-    so the fix is about the owner being missing rather than about the sum."""
+    so the fix is about the owner being missing rather than about the sum.
+
+    Read from the rule itself rather than the whole module: the module talks
+    about torrents now, because a transfer still on its way counts against the
+    quota too (test_a_transfer_still_on_its_way_counts_against_the_quota)."""
     source = _source(BACKEND / "handler" / "library" / "quota.py")
-    assert '!= "gog"' in source
-    assert "torrent" not in source
+    at = source.index("def _counts_towards_quota(")
+    rule = source[at:at + re.search(r"\n(async )?def ", source[at + 1:]).start() + 1]
+    assert '!= "gog"' in rule
+    assert "torrent" not in rule

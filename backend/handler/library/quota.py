@@ -27,6 +27,7 @@ already past it.
 
 from __future__ import annotations
 
+import itertools
 from typing import Any
 
 from sqlalchemy import func, select
@@ -122,6 +123,197 @@ async def used_bytes(user_id: int | None) -> int:
     return int(games or 0) + int(roms or 0)
 
 
+async def in_flight_bytes(user_id: int | None, *, except_torrent_id: int | None = None) -> int:
+    """What this account's transfers are still bringing, once their size is known.
+
+    `used_bytes` above is what has LANDED, and every door used to weigh one
+    incoming transfer against that alone. A torrent adds nothing to it until its
+    game is filed, hours later, so five 9 GB torrents queued one after another
+    onto a 10 GB allowance each saw nothing used and each fitted (1.0.34 audit,
+    #2). Counting what is on its way closes that: the second one sees the first.
+
+    "On its way" is `torrent_ownership.not_landed()`, the same rows an
+    administrator is handed when this account loses the right to upload. A
+    finished transfer that became a game is not here - its files are counted
+    above - and neither is one that was refused, failed or dismissed.
+
+    `except_torrent_id` is the transfer being weighed. Resuming a paused 9 GB
+    torrent whose size is already stored is not a second 9 GB, and counting it
+    would refuse a transfer that fits.
+
+    A size of zero is a magnet whose metadata has not arrived; it adds nothing
+    until it has, which is also the first moment it can be weighed itself.
+    """
+    if not user_id:
+        return 0
+    from handler.database.session import async_session_factory
+    from handler.torrent.torrent_ownership import not_landed
+    from models.torrent_download import TorrentDownload
+
+    query = (
+        select(func.coalesce(func.sum(TorrentDownload.total_size), 0))
+        .where(TorrentDownload.created_by_id == user_id, not_landed())
+    )
+    if except_torrent_id is not None:
+        query = query.where(TorrentDownload.id != except_torrent_id)
+    async with async_session_factory() as session:
+        return int(await session.scalar(query) or 0)
+
+
+async def committed_bytes(
+    user_id: int | None, *, except_torrent_id: int | None = None, with_writing: bool = True,
+) -> int:
+    """What a door admitting bytes weighs against the limit: landed plus on its way.
+
+    `used_bytes` stays what the "My uploads" bar shows, because that figure has
+    to agree with the list of games drawn under it, and a transfer is not a game
+    yet. Every place that lets bytes in asks this instead; a test walks the
+    backend for any that ask only what landed.
+
+    "On its way" is torrents AND streams still being written (`Reservation`).
+    `with_writing=False` is for a reservation itself, which counts the streams
+    live at every chunk rather than once.
+    """
+    total = await used_bytes(user_id) + await in_flight_bytes(
+        user_id, except_torrent_id=except_torrent_id)
+    if with_writing:
+        total += writing_bytes(user_id)
+    return total
+
+
+# ── Streams still being written ──────────────────────────────────────────────
+#
+# Every transfer written as a stream - a game file upload, a download from an
+# address, a catalogue download, a ROM upload, a ROM download - used to ask how
+# much room there was once, at its start, and then count only its own bytes. Two
+# started together onto one allowance each saw it empty and both finished (1.0.34
+# audit, #2; the owner: "teraz").
+#
+# In memory, because one process holds every transfer: uvicorn runs a single
+# worker (Dockerfile), and nothing here outlives the transfers it describes.
+
+#: Account -> {transfer: bytes written so far}.
+_writing: dict[int, dict[int, int]] = {}
+#: Account -> how many of its transfers have let go. A change means bytes moved
+#: from "being written" to "landed" (or went away), so what landed is read again.
+_settled: dict[int, int] = {}
+_tokens = itertools.count(1)
+
+
+def writing_bytes(user_id: int | None) -> int:
+    """Bytes this account's streams have written and nothing else counts yet."""
+    if not user_id:
+        return 0
+    return sum(_writing.get(user_id, {}).values())
+
+
+class Reservation:
+    """The bytes one stream has written, visible to its account's other transfers.
+
+    Opened before the first byte and closed only once the bytes are counted
+    somewhere else - the file row a game upload writes, the ROM row a scan makes
+    - so there is never a moment when they count nowhere. `take` counts each
+    chunk and answers whether the account is still inside its limit with this
+    stream and every other one it has running.
+
+    `credit` is what the transfer gives back by replacing a file that is already
+    counted; `give_back` adds to it once the transfer finds that out.
+    """
+
+    def __init__(self, user_id: int | None, *, limit: int, credit: int = 0):
+        self.user_id = user_id or None
+        self.limit = int(limit or 0)
+        self.credit = int(credit or 0)
+        self.bytes = 0
+        self._token = next(_tokens)
+        self._open = False
+        self._landed: int | None = None
+        self._seen: int | None = None
+
+    @property
+    def bounded(self) -> bool:
+        return bool(self.user_id) and self.limit > 0
+
+    def open(self) -> "Reservation":
+        if self.user_id and not self._open:
+            _writing.setdefault(self.user_id, {})[self._token] = self.bytes
+            self._open = True
+        return self
+
+    def close(self) -> None:
+        """Let go. Safe to call twice: every way out of a transfer calls it."""
+        if not self._open:
+            return
+        self._open = False
+        mine = _writing.get(self.user_id, {})
+        mine.pop(self._token, None)
+        if not mine:
+            _writing.pop(self.user_id, None)
+        _settled[self.user_id] = _settled.get(self.user_id, 0) + 1
+
+    async def __aenter__(self) -> "Reservation":
+        return self.open()
+
+    async def __aexit__(self, *_exc) -> None:
+        self.close()
+
+    def give_back(self, n: int) -> None:
+        self.credit += int(n or 0)
+
+    def _others(self) -> int:
+        return sum(v for k, v in _writing.get(self.user_id, {}).items() if k != self._token)
+
+    async def _landed_now(self) -> int:
+        seen = _settled.get(self.user_id, 0)
+        if self._landed is None or seen != self._seen:
+            self._seen = seen
+            self._landed = await committed_bytes(self.user_id, with_writing=False)
+        return self._landed
+
+    async def room(self) -> int:
+        """What this stream may still write. Unbounded answers a huge number."""
+        if not self.bounded:
+            return 1 << 62
+        spent = await self._landed_now() + self._others() + self.bytes - self.credit
+        return max(0, self.limit - spent)
+
+    async def take(self, n: int) -> bool:
+        """Count `n` more bytes. False once they no longer fit."""
+        self.bytes += int(n)
+        if self._open:
+            _writing[self.user_id][self._token] = self.bytes
+        if not self.bounded:
+            return True
+        spent = await self._landed_now() + self._others() + self.bytes - self.credit
+        return spent <= self.limit
+
+
+async def reservation_for(user: Any, *, credit: int = 0) -> Reservation:
+    """A reservation for this account, with the limit in force for it."""
+    limit = await limit_for(user) if user is not None else 0
+    return Reservation(getattr(user, "id", None), limit=limit, credit=credit)
+
+
+async def reservation_for_account(user_id: int | None) -> Reservation:
+    """The same, for a background job that carries only the account's id.
+
+    No account, an account gone since, or a limit that could not be read give an
+    unbounded reservation: the job already started with a ceiling from
+    `ceiling_for`, so a failed lookup here costs the live check, not the limit.
+    """
+    if not user_id:
+        return Reservation(None, limit=0)
+    try:
+        from handler.database.users_handler import UsersHandler
+
+        user = await UsersHandler().get_by_id(user_id)
+    except Exception:  # noqa: BLE001 - see above
+        return Reservation(None, limit=0)
+    if user is None:
+        return Reservation(None, limit=0)
+    return await reservation_for(user)
+
+
 def _counts_towards_quota(source_column):
     """The one sentence that decides what a quota is a quota of.
 
@@ -200,9 +392,26 @@ async def owned_games(user_id: int | None) -> list[dict]:
             # GAME's owner, and the row says which kind it is rather than
             # leaving the screen to draw a button that can only answer 403.
             "can_delete": r.published_by == user_id,
+            # Files other accounts added to this game - a DLC, an extras pack.
+            # Removing the game takes them too, and the owner decided that is
+            # allowed because they are no use without it; the question before
+            # it says how many go. Zero on a row that is not this account's.
+            "others_file_count": 0,
         }
         for r in rows
     ]
+    owned = [g["id"] for g in games if g["can_delete"]]
+    if owned:
+        async with async_session_factory() as session:
+            others = (await session.execute(
+                select(LibraryFile.library_game_id, func.count(LibraryFile.id))
+                .join(LibraryGame, LibraryGame.id == LibraryFile.library_game_id)
+                .where(LibraryFile.library_game_id.in_(owned), ~charged)
+                .group_by(LibraryFile.library_game_id)
+            )).all()
+        counts = {game_id: int(n) for game_id, n in others}
+        for g in games:
+            g["others_file_count"] = counts.get(g["id"], 0)
     await _attach_library(games)
     games.extend(await _owned_roms(user_id))
     # One order over both kinds, because the reason to open this list is to find
@@ -297,6 +506,7 @@ async def _owned_roms(user_id: int) -> list[dict]:
     looking for.
     """
     from handler.database.session import async_session_factory
+    from handler.metadata.rom_platform_map import rom_cover_aspect
     from models.rom import Rom
     from models.rom_platform import RomPlatform
 
@@ -304,6 +514,7 @@ async def _owned_roms(user_id: int) -> list[dict]:
         rows = (await session.execute(
             select(
                 Rom.id, Rom.name, Rom.fs_name, Rom.slug, Rom.cover_path,
+                Rom.cover_type, Rom.cover_aspect,
                 Rom.fs_size_bytes, Rom.metadata_locked,
                 # `track_of` and `published_by` are here for the delete rule
                 # below, not for the row it returns: without them a listed row
@@ -311,6 +522,7 @@ async def _owned_roms(user_id: int) -> list[dict]:
                 # `can_delete_rom_set`, which reads the owner off it.
                 Rom.platform_id, Rom.disk_group, Rom.track_of, Rom.published_by,
                 RomPlatform.slug.label("platform_slug"),
+                RomPlatform.fs_slug.label("platform_fs_slug"),
                 RomPlatform.name.label("platform_name"),
                 RomPlatform.custom_name,
             )
@@ -361,6 +573,9 @@ async def _owned_roms(user_id: int) -> list[dict]:
             "title": r.name or r.fs_name,
             "slug": r.slug,
             "cover_path": r.cover_path,
+            # The cover's own shape, the one every other surface draws a ROM
+            # in. A fixed frame put square PlayStation cases in tall rectangles.
+            "aspect": rom_cover_aspect(r.cover_type, r.cover_aspect, r.platform_fs_slug),
             "source": "rom",
             "size_bytes": int(r.fs_size_bytes or 0),
             "file_count": 1,
@@ -461,7 +676,7 @@ async def ceiling_for(user: Any, max_bytes: int) -> int:
     limit = await limit_for(user)
     if limit <= 0:
         return max_bytes
-    used = await used_bytes(getattr(user, "id", None))
+    used = await committed_bytes(getattr(user, "id", None))
     room = narrow(max_bytes=max_bytes, limit=limit, used=used)
     if room <= 0:
         from fastapi import HTTPException, status

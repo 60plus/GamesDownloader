@@ -117,6 +117,67 @@ def test_an_ordinary_move_still_works(tmp_path):
     assert all(size == len("bytes") for _, size in moved)
 
 
+def test_a_collision_partway_through_moves_nothing(tmp_path):
+    """The refusal used to come at the colliding file, after the ones before it
+    had already gone. Those sat in the library with no rows - outside the quota
+    and invisible in the app - the torrent's own folder was left incomplete, so
+    seeding broke, and the transfer said the files were still in the download
+    folder. Every destination is checked before anything moves."""
+    src = _torrent(tmp_path, "a.bin", "b.bin", "c.bin")
+    dest_root = tmp_path / "games" / "CUSTOM" / "gra"
+    dest_root.mkdir(parents=True)
+    (dest_root / "b.bin").write_text("CUDZY PLIK")
+
+    with pytest.raises(FileExistsError):
+        M._move_into_library(
+            [os.path.join(src, n) for n in ("a.bin", "b.bin", "c.bin")], src, str(dest_root))
+
+    assert sorted(os.listdir(src)) == ["a.bin", "b.bin", "c.bin"], (
+        "pliki sprzed kolizji wyjechaly z folderu pobierania mimo odmowy"
+    )
+    assert sorted(os.listdir(dest_root)) == ["b.bin"], (
+        "w bibliotece zostaly pliki bez wpisow"
+    )
+    assert (dest_root / "b.bin").read_text() == "CUDZY PLIK"
+
+
+def test_a_move_that_breaks_off_puts_back_what_it_had_moved(tmp_path, monkeypatch):
+    """A full disk, a vanished mount: anything can stop a move after some files
+    have gone. The transfer then tells the person the files are still in the
+    download folder, and that has to be true."""
+    import shutil
+
+    src = _torrent(tmp_path, "a.bin", "DATA/b.pak", "c.bin")
+    dest_root = tmp_path / "games" / "CUSTOM" / "gra"
+    real_move = shutil.move
+    calls = []
+
+    def _move_then_break(source, dest, *a, **k):
+        calls.append(source)
+        if len(calls) == 3:
+            # Half a copy on the destination, the original still in place -
+            # which is what a copy across bind mounts leaves when it fails.
+            with open(dest, "w") as partial:
+                partial.write("by")
+            raise OSError(28, "No space left on device")
+        return real_move(source, dest, *a, **k)
+
+    monkeypatch.setattr(shutil, "move", _move_then_break)
+
+    files = [os.path.join(src, "a.bin"), os.path.join(src, "DATA", "b.pak"),
+             os.path.join(src, "c.bin")]
+    with pytest.raises(OSError):
+        M._move_into_library(files, src, str(dest_root))
+
+    for f in files:
+        assert os.path.isfile(f), f"{os.path.basename(f)} nie wrocil do folderu pobierania"
+    left = [os.path.join(d, n) for d, _s, names in os.walk(dest_root) for n in names]
+    assert left == [], f"w bibliotece zostalo: {left}"
+    assert not dest_root.exists(), (
+        "w bibliotece zostal pusty folder gry, ktorej nie ma"
+    )
+
+
 def test_nothing_is_written_outside_the_folder_it_belongs_in(tmp_path):
     """A path that climbs out of the destination is refused rather than
     followed. Not reachable through `relpath` today; asserted because the day

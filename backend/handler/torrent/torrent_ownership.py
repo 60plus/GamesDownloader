@@ -27,7 +27,33 @@ logger = logging.getLogger(__name__)
 #: game has its own claim, with its own route. Reaching into it from here would
 #: be a second way to do the same thing, ready to disagree with the first the
 #: day either one changes.
+#:
+#: "Not landed" includes a transfer that reads "complete" and has no game yet.
+#: The monitor writes "complete" before it files the game, and filing takes
+#: minutes - every file virus scanned, then copied between bind mounts - so a
+#: transfer in that state is still on its way, and left out of the handover its
+#: game was filed under the account that had just lost the right to upload.
 IN_FLIGHT = ("downloading", "paused")
+
+
+def not_landed():
+    """The rows still on their way, as a clause: running, paused, or finished
+    and not yet a game.
+
+    Asked in two places that must never disagree - who a transfer is handed to
+    when its owner loses the right to upload, and what an account's quota
+    already has spoken for. Written once so the day one of them learns about a
+    new state, the other does too.
+    """
+    from sqlalchemy import and_, or_
+
+    from models.torrent_download import TorrentDownload
+
+    return or_(
+        TorrentDownload.status.in_(IN_FLIGHT),
+        and_(TorrentDownload.status == "complete",
+             TorrentDownload.game_id.is_(None)),
+    )
 
 
 def hand_over_writes(*, admin_id: int | None) -> dict:
@@ -70,7 +96,7 @@ async def hand_running_torrents_to(
         rows = (await db.execute(
             select(TorrentDownload.id).where(
                 TorrentDownload.created_by_id == previous_owner_id,
-                TorrentDownload.status.in_(IN_FLIGHT),
+                not_landed(),
             )
         )).scalars().all()
         if not rows:

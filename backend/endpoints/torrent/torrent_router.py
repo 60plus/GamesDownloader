@@ -114,20 +114,26 @@ async def _assert_shelf_allowed(user, slug: str | None) -> None:
     mid-transfer - is already answered elsewhere: the transfer changes hands to
     an administrator, who can reach everything.
 
-    An empty slug and "games" are the built-in Games library, which is where
-    nearly every torrent goes and which nobody is on an allowlist for.
+    An empty slug is the built-in Games library, where nearly every torrent
+    goes. It is ASKED like any other: this used to wave it through by name, on
+    the grounds that nobody is on an allowlist for Games, and since then Games
+    can be switched off - closed to administrators too - and made restricted. A
+    torrent filed there landed on a shelf nobody could see, charged to the
+    account that queued it (1.0.34 audit, #5).
 
     `user_can_access` is the registry's own rule, the one the library screens
     ask. Nothing new is decided here.
     """
-    target = (slug or "").strip()
-    if not target or target == "games":
-        return
+    target = (slug or "").strip() or "games"
 
     from handler.database.library_registry_handler import library_registry_handler
 
     lib = await library_registry_handler.get_by_slug(target)
     if lib is None:
+        if target == "games":
+            # Seeded on every boot, so missing only on a database nothing has
+            # started against. Nothing is closed that does not exist.
+            return
         raise HTTPException(404, f"There is no library called '{target}'.")
     if not await library_registry_handler.user_can_access(user, lib):
         # 404 rather than 403, as everywhere else here: refusing by name would
@@ -161,20 +167,153 @@ def _daemon_refusal(reason: str | None) -> dict:
         reason=said)
 
 
-def _refuse_a_duplicate(info: dict) -> None:
-    """Refuse an add the daemon answered with a torrent it already held.
+_ALREADY_ADDED = ("already_added",
+                  "This torrent is already in Transmission, so it was not added again.")
 
-    That torrent is somebody else's transfer, or a library file being seeded.
-    Writing a row for the caller on top of it handed them a transfer that was
-    not theirs: weighed against their quota, a refusal removed it with its
-    data; its buttons acted on it; and when it finished, whichever row got there
-    first filed the download as its game. The daemon was not changed by the
-    attempt, so there is nothing to undo.
+
+async def _what_holds(info_hash: str):
+    """What in this application already has this torrent, or None.
+
+    Three answers, looked for in this order:
+
+      ("on_its_way", row)   a transfer still fetching it, or filing it now;
+      ("in_library", game)  a library file a seed was made from, or the game a
+                            finished transfer of it became;
+      None                  nothing - whatever the daemon holds is a leftover.
+
+    A hash names the content, the same way the daemon does, which is exactly
+    why a second account's add is answered with the first one's torrent. So a
+    seed counts whether or not it is still seeding: its hash is the file's
+    content, and that file is in the library either way. Only a published game
+    counts - an unpublished GOG game is not on anybody's shelf.
     """
-    if info.get("duplicate"):
+    from sqlalchemy import select
+
+    from handler.database.session import async_session_factory
+    from handler.torrent.torrent_ownership import not_landed
+    from models.library_file import LibraryFile
+    from models.library_game import LibraryGame
+    from models.library_torrent import LibraryTorrent
+    from models.torrent_download import TorrentDownload
+
+    wanted = (info_hash or "").strip()
+    if not wanted:
+        return None
+    async with async_session_factory() as db:
+        running = (await db.execute(
+            select(TorrentDownload)
+            .where(TorrentDownload.info_hash == wanted, not_landed())
+            .order_by(TorrentDownload.id).limit(1)
+        )).scalars().first()
+        if running is not None:
+            return "on_its_way", running
+        seeded = (await db.execute(
+            select(LibraryGame)
+            .join(LibraryFile, LibraryFile.library_game_id == LibraryGame.id)
+            .join(LibraryTorrent, LibraryTorrent.file_id == LibraryFile.id)
+            .where(LibraryTorrent.info_hash == wanted,
+                   LibraryGame.is_active.is_(True))
+            .limit(1)
+        )).scalars().first()
+        if seeded is not None:
+            return "in_library", seeded
+        # Joined to the game, so a finished transfer whose game has been
+        # deleted since holds nothing - which is the case this exists for.
+        # A transfer gets its game only when it lands, so no status is asked.
+        landed = (await db.execute(
+            select(LibraryGame)
+            .join(TorrentDownload, TorrentDownload.game_id == LibraryGame.id)
+            .where(TorrentDownload.info_hash == wanted,
+                   LibraryGame.is_active.is_(True))
+            .order_by(TorrentDownload.id.desc()).limit(1)
+        )).scalars().first()
+        if landed is not None:
+            return "in_library", landed
+    return None
+
+
+def _inside_the_download_area(path: str | None) -> bool:
+    """Whether a daemon's folder is one of ours for downloads.
+
+    By path components, not by the start of the string: a folder called
+    `torrents-old` begins with the same letters and is somewhere else.
+    """
+    if not path:
+        return False
+    area = os.path.realpath(_TORRENT_DIR)
+    here = os.path.realpath(path)
+    return here == area or here.startswith(area + os.sep)
+
+
+async def _answer_a_duplicate(request, info: dict) -> bool:
+    """Say what already holds a torrent the daemon answered an add with.
+
+    Returns True when the daemon's copy was a leftover and has been taken off,
+    so the caller can add the torrent again. Raises the refusal otherwise.
+
+    WHY IT IS REFUSED AT ALL. The torrent the daemon holds is somebody else's
+    transfer, or a library file being seeded. Writing a row for the caller on
+    top of it handed them a transfer that was not theirs: weighed against their
+    quota, a refusal removed it with its data; its buttons acted on it; and when
+    it finished, whichever row got there first filed the download as its game.
+
+    WHY IT SAYS WHERE. "Already in Transmission" was true and gave nobody
+    anything to do; the owner asked whether a digit on the torrent would get
+    past it. Content is what the daemon goes by, so the answer is to name the
+    game it became, or the transfer fetching it.
+
+    WHY A LEFTOVER IS TAKEN OFF. The daemon keeps a finished torrent after its
+    files have been filed into the library. Once that game is deleted nothing
+    here holds the torrent any more, and it blocked the game from ever being
+    downloaded again. Only when its files sit in the download area, and never
+    with its data: a whole game seeded for somebody's client has no row at all,
+    lives in the library folder, and taking it off would cut them off.
+
+    NAMED ONLY WHAT THE CALLER MAY SEE. A game in a library they cannot reach,
+    or a transfer bound for one, answers with the plain refusal: its title would
+    say what that library holds, and "the game appears when it finishes" would
+    be a promise about a screen it will never reach.
+    """
+    if not info.get("duplicate"):
+        return False
+    user = getattr(request.state, "user", None)
+    held = str(info.get("hashString") or "").strip()
+    holder = await _what_holds(held)
+
+    if holder is None:
+        daemon_copy = await transmission_handler.get_torrent(held) if held else None
+        if (daemon_copy
+                and _inside_the_download_area(daemon_copy.get("downloadDir"))
+                and await transmission_handler.remove_torrent(held, delete_data=False)):
+            logger.info("Took a leftover torrent off the daemon so it can be added again")
+            return True
+        raise RefusalError(409, _refusal(*_ALREADY_ADDED))
+
+    kind, thing = holder
+    if kind == "on_its_way":
+        try:
+            await _assert_shelf_allowed(user, getattr(thing, "library", None))
+        except HTTPException:
+            raise RefusalError(409, _refusal(*_ALREADY_ADDED))
+        if getattr(thing, "created_by_id", None) == getattr(user, "id", None):
+            raise RefusalError(409, _refusal(
+                "already_downloading",
+                "You are already downloading this torrent; it is in your transfers.",
+                mine=True))
         raise RefusalError(409, _refusal(
-            "already_added",
-            "This torrent is already in Transmission, so it was not added again."))
+            "already_downloading",
+            "Somebody is already downloading this torrent. The game will appear "
+            "in the library when it finishes.",
+            mine=False))
+
+    try:
+        await _assert_game_visible(user, thing.id)
+    except HTTPException:
+        raise RefusalError(409, _refusal(*_ALREADY_ADDED))
+    raise RefusalError(409, _refusal(
+        "already_in_library",
+        f"This game is already in the library: {thing.title}.",
+        game_id=thing.id, title=thing.title))
 
 
 def _live_figures(t: dict) -> dict:
@@ -379,7 +518,7 @@ async def _fetch_torrent_file(url: str, *, transport=None) -> bytes:
         raise RefusalError(502, _refusal(*_FETCH_FAILED))
 
 
-async def _refuse_if_it_does_not_fit(request: Request, content: bytes) -> None:
+async def _refuse_if_it_does_not_fit(request: Request, content: bytes) -> int | None:
     """Weigh a .torrent against the account's quota before anything downloads.
 
     A torrent counts against the quota once it lands, which on its own means a
@@ -388,6 +527,14 @@ async def _refuse_if_it_does_not_fit(request: Request, content: bytes) -> None:
     and the refusal can come before anything is downloaded - whether the file
     was uploaded or fetched from an address. A magnet link is a hash and
     nothing else, so it is weighed later, when its size arrives.
+
+    Weighed against what has landed AND what this account's other transfers are
+    still bringing. Against the first alone, five 9 GB torrents onto a 10 GB
+    allowance each fitted.
+
+    Returns the size it read, so the row can be written with it at once. The
+    monitor writes the size on its first tick, ten seconds on, and a second
+    .torrent added inside those ten seconds would not have seen this one.
 
     An unreadable file is let through rather than refused. "No idea" is not
     "too big", and a limit that fired on a parse failure would start rejecting
@@ -400,7 +547,7 @@ async def _refuse_if_it_does_not_fit(request: Request, content: bytes) -> None:
     size = total_bytes(content)
     if size is not None and user is not None:
         limit = await quota.limit_for(user)
-        used = await quota.used_bytes(getattr(user, "id", None))
+        used = await quota.committed_bytes(getattr(user, "id", None))
         if not quota.fits(used=used, incoming=size, limit=limit):
             room = max(0, limit - used)
             raise RefusalError(
@@ -411,6 +558,7 @@ async def _refuse_if_it_does_not_fit(request: Request, content: bytes) -> None:
                     f"{human_bytes(room)} is left of this account's upload quota.",
                     size=size, room=room),
             )
+    return size
 
 
 @protected_route(torrent_router.post, "/download/url", scopes=[Scope.LIBRARY_UPLOAD])
@@ -432,27 +580,28 @@ async def add_torrent_url(request: Request, body: AddTorrentByUrl) -> dict:
             "added."))
 
     content = None
+    size = None
     if scheme != "magnet":
         content = await _fetch_torrent_file(url)
-        await _refuse_if_it_does_not_fit(request, content)
+        size = await _refuse_if_it_does_not_fit(request, content)
 
     slug = _slugify(body.title)
     download_dir = os.path.join(_TORRENT_DIR, slug)
     os.makedirs(download_dir, exist_ok=True)
 
-    if content is None:
-        info, why = await transmission_handler.add_torrent_url(url, download_dir)
-    else:
-        info, why = await transmission_handler.add_torrent_metainfo(content, download_dir)
-    if not info:
-        raise RefusalError(502, _daemon_refusal(why))
-    _refuse_a_duplicate(info)
+    async def _add():
+        if content is None:
+            return await transmission_handler.add_torrent_url(url, download_dir)
+        return await transmission_handler.add_torrent_metainfo(content, download_dir)
+
+    info = await _add_to_the_daemon(request, _add)
 
     td = await _create_torrent_download(
         request, body.title, body.os, download_dir,
         transmission_id=info.get("id"),
         info_hash=info.get("hashString"),
         library=body.library,
+        total_size=size,
     )
     return _fmt_download(td)
 
@@ -471,7 +620,7 @@ async def add_torrent_file(
     safe_name = Path(file.filename or "upload.torrent").name  # strip path traversal
     tmp_path = os.path.join(_SEED_DIR, f"upload_{safe_name}")
     content = await read_upload_capped(file, _MAX_TORRENT_BYTES, what="Torrent file")
-    await _refuse_if_it_does_not_fit(request, content)
+    size = await _refuse_if_it_does_not_fit(request, content)
 
     with open(tmp_path, "wb") as f:
         f.write(content)
@@ -480,25 +629,50 @@ async def add_torrent_file(
     download_dir = os.path.join(_TORRENT_DIR, slug)
     os.makedirs(download_dir, exist_ok=True)
 
-    info, why = await transmission_handler.add_torrent_file(tmp_path, download_dir)
+    async def _add():
+        return await transmission_handler.add_torrent_file(tmp_path, download_dir)
+
     try:
-        os.remove(tmp_path)
-    except OSError:
-        pass
-    if not info:
-        raise RefusalError(502, _daemon_refusal(why))
-    _refuse_a_duplicate(info)
+        info = await _add_to_the_daemon(request, _add)
+    finally:
+        # After a second try, not after the first: clearing a leftover adds
+        # the same file again.
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
     td = await _create_torrent_download(
         request, title, target_os, download_dir,
         transmission_id=info.get("id"),
         info_hash=info.get("hashString"),
         library=library,
+        total_size=size,
     )
     return _fmt_download(td)
 
 
-async def _create_torrent_download(request, title, os_name, download_dir, *, transmission_id, info_hash, library=None):
+async def _add_to_the_daemon(request, add) -> dict:
+    """Hand a torrent to the daemon through `add`, and answer what it says.
+
+    A duplicate is explained by `_answer_a_duplicate`. When that turns out to be
+    a leftover it has taken off, the add is made once more - once, because a
+    torrent that is a duplicate again straight away was put back by something
+    else, and going round would be arguing with it.
+    """
+    info, why = await add()
+    if not info:
+        raise RefusalError(502, _daemon_refusal(why))
+    if await _answer_a_duplicate(request, info):
+        info, why = await add()
+        if not info:
+            raise RefusalError(502, _daemon_refusal(why))
+        if info.get("duplicate"):
+            raise RefusalError(409, _refusal(*_ALREADY_ADDED))
+    return info
+
+
+async def _create_torrent_download(request, title, os_name, download_dir, *, transmission_id, info_hash, library=None, total_size=None):
     from handler.database.session import async_session_factory
     from models.torrent_download import TorrentDownload
     user = request.state.user
@@ -521,6 +695,10 @@ async def _create_torrent_download(request, title, os_name, download_dir, *, tra
             # then, so the game this becomes still names who brought it in.
             uploaded_by_id=getattr(user, "id", None),
             library=target_lib,
+            # Known now for a .torrent, which the route has already weighed.
+            # Zero for a magnet, which the monitor weighs when its size arrives:
+            # the stored size is what tells it that has not happened yet.
+            total_size=int(total_size or 0),
         )
         db.add(td)
         await db.commit()

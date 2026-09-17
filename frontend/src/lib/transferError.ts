@@ -63,6 +63,11 @@ export interface AddRefusal {
   size?: number;
   room?: number;
   reason?: string;
+  /** `already_downloading`: whether that transfer is the reader's own. */
+  mine?: boolean;
+  /** `already_in_library`: the game the torrent already became. */
+  game_id?: number;
+  title?: string;
 }
 
 /** Why adding a torrent was refused, in the reader's language.
@@ -110,8 +115,21 @@ export function describeAddRefusal(err: unknown, t: Translate): string {
         : t('torrent.add_err_daemon_silent');
 
     case 'already_added':
-      // The daemon already held this torrent: another transfer, or a seed.
+      // The daemon holds this torrent and nothing the reader may see explains
+      // why: a game seeded for somebody's client, or a library they cannot reach.
       return t('torrent.add_err_already_added');
+
+    case 'already_downloading':
+      // Another transfer is fetching the same content, or filing it right now.
+      // Their own shows up in their transfers; somebody else's becomes a game.
+      return r.mine
+        ? t('torrent.add_err_already_downloading_yours')
+        : t('torrent.add_err_already_downloading');
+
+    case 'already_in_library':
+      // The game this torrent already became. `addRefusalGame` below hands the
+      // dialog the same game, so it can offer to open it.
+      return t('torrent.add_err_already_in_library', { title: r.title || '' });
 
     case 'url_unsupported':
     case 'url_blocked':
@@ -125,6 +143,21 @@ export function describeAddRefusal(err: unknown, t: Translate): string {
     default:
       return fallback || t('torrent.add_failed', 'Failed to add torrent.');
   }
+}
+
+/** The game an add-torrent refusal points at, or null.
+ *
+ *  Only for `already_in_library`: the server names a game there only when the
+ *  reader may see it, so a link built from this never leads to a page that
+ *  answers "not found". Handed to the themes through `window.__GD__.utils`
+ *  beside `describeAddRefusal`, because each skin draws its own dialog.
+ */
+export function addRefusalGame(err: unknown): { id: number; title: string } | null {
+  const data = (err as { response?: { data?: Record<string, unknown> } })
+    ?.response?.data;
+  const r = (typeof data?.code === 'string' ? data : {}) as AddRefusal;
+  if (r.code !== 'already_in_library' || typeof r.game_id !== 'number') return null;
+  return { id: r.game_id, title: r.title || '' };
 }
 
 /** One line for the screen. Empty while there is nothing to say. */

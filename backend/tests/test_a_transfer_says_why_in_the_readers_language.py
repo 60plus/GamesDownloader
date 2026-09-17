@@ -160,6 +160,11 @@ def test_the_screen_falls_back_to_what_the_server_wrote():
         pytest.skip("frontend tree not present")
     body = io.open(tray, encoding="utf-8").read()
 
+    # Inside the tray's own function. The file has a second `default:` above it,
+    # in the add-torrent dialog's function, and this used to find that one and
+    # pass on letters 400 characters further on - in this function - until a
+    # function added between the two moved them out of reach.
+    body = body[body.index("export function describeTransferError"):]
     at = body.find("default:")
     assert at > 0, (
         "brak galezi domyslnej: powod, ktorego ekran nie zna, zniknie zamiast "

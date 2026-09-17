@@ -89,16 +89,19 @@ def test_the_daemons_own_reason_is_passed_on():
     rejected the torrent". The owner read that as a size problem, which is what
     a refusal that hides its reason invites."""
     body = _src("endpoints/torrent/torrent_router.py")
+    # Both routes hand the add to one helper since a duplicate can be a leftover
+    # worth one more try (test_a_torrent_somebody_already_has_says_where_it_is).
     for marker in ("async def add_torrent_url(", "async def add_torrent_file("):
         at = body.index(marker)
         fn = body[at:body.index("\n@", at)]
-        assert "_daemon_refusal(" in fn, (
-            f"{marker} nie przekazuje dalej powodu, ktory podal demon"
-        )
-        # The two-value answer has to be unpacked, or there is no reason to pass.
-        assert "info, " in fn, (
-            f"{marker} nadal bierze sama odpowiedz i gubi powod"
-        )
+        assert "_add_to_the_daemon(" in fn, f"{marker} nie idzie przez wspolne dodanie"
+    at = body.index("async def _add_to_the_daemon(")
+    fn = body[at:body.index("\n@", at)]
+    assert fn.count("_daemon_refusal(why)") == 2, (
+        "dodanie (albo jego ponowienie) nie przekazuje dalej powodu, ktory podal demon"
+    )
+    # The two-value answer has to be unpacked, or there is no reason to pass.
+    assert fn.count("info, why = await add()") == 2, "odpowiedz demona gubi powod"
 
 
 @pytest.mark.asyncio
@@ -152,8 +155,9 @@ REASONS = [
     # exactly what must not come back to the screen.
     "url_unsupported", "url_blocked", "url_fetch_failed", "url_too_large",
     # The daemon already holds this torrent (test_a_torrent_already_in_
-    # transmission_is_not_added_twice.py).
-    "already_added",
+    # transmission_is_not_added_twice.py), and what holds it
+    # (test_a_torrent_somebody_already_has_says_where_it_is.py).
+    "already_added", "already_downloading", "already_in_library",
 ]
 
 
@@ -178,7 +182,8 @@ def _codes_the_add_routes_refuse_with() -> set[str]:
     body = _src("endpoints/torrent/torrent_router.py")
     codes: set[str] = set()
     for name in ("add_torrent_url", "add_torrent_file", "_fetch_torrent_file",
-                 "_refuse_if_it_does_not_fit", "_daemon_refusal", "_refuse_a_duplicate"):
+                 "_refuse_if_it_does_not_fit", "_daemon_refusal", "_answer_a_duplicate",
+                 "_add_to_the_daemon"):
         at = body.index(f"def {name}(")
         nxt = re.search(r"\n(@|async def |def )", body[at + 10:])
         fn = body[at:at + 10 + nxt.start()] if nxt else body[at:]

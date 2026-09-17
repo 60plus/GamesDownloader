@@ -119,6 +119,82 @@ async def _resolve_storage_folder(game_id: int) -> str:
     return "CUSTOM"
 
 
+async def _folder_title_for(game) -> str:
+    """The name of this game's folder: its title, unless an older game on the
+    same shelf has the same one.
+
+    Two games may share a title - Doom from 1993 and Doom from 2016 - and the
+    upload dialog offers a separate entry for exactly that. The folder is named
+    from the title, so both entries used to write into one folder: a file of one
+    could be refused as already there, or replaced by the other's.
+
+    The OLDER entry keeps the plain name, so a game that has files already keeps
+    writing where they are. A newer one gets its slug beside the title, which is
+    unique and stays the same on every upload.
+    """
+    from sqlalchemy import func, select
+
+    from handler.database.session import async_session_factory
+    from models.library_game import LibraryGame
+
+    title = (game.title or "").strip()
+    async with async_session_factory() as db:
+        older = (await db.execute(
+            select(LibraryGame.id, LibraryGame.title)
+            .where(func.lower(LibraryGame.title) == title.lower(),
+                   LibraryGame.id < game.id)
+        )).all()
+    if not older:
+        return title
+    mine = await _resolve_storage_folder(game.id)
+    for other_id, other_title in older:
+        if (_sanitize(other_title or "") == _sanitize(title)
+                and await _resolve_storage_folder(other_id) == mine):
+            return f"{title} [{game.slug}]"
+    return title
+
+
+async def _game_open_to_upload(request: Request, game_id: int):
+    """The game this caller may add a file to, or the refusal.
+
+    404 for a game they cannot see, the same answer as for one that does not
+    exist. This used to go straight to "may you add to it", and the 403 that
+    answered for somebody else's game in a restricted library said the id was
+    real (1.0.34 audit, #7). Anybody who may upload may add to any game they can
+    see - see `ownership.can_upload_into_game`.
+    """
+    from handler.library.visibility import visible_game_or_none
+
+    game = await _lib.get_by_id(game_id)
+    if not game or await visible_game_or_none(getattr(request.state, "user", None), game) is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    assert_can_upload_into(request, game)
+    return game
+
+
+async def _refuse_replacing_another_accounts_file(
+    game, dest_path: Path, *, scopes, user_id: int | None,
+) -> None:
+    """Refuse to overwrite a file somebody else is charged for.
+
+    Adding to another account's game is allowed; writing over what that account
+    put there is not. Only when the file is really there: a new name replaces
+    nothing.
+    """
+    from handler.library.ownership import can_replace_file
+
+    if not dest_path.exists():
+        return
+    rel = _rel_from_abs(str(dest_path))
+    row = next((f for f in await _lib.get_files_for_game(game.id) if f.file_path == rel), None)
+    if not can_replace_file(scopes, user_id, game, row):
+        raise HTTPException(
+            status_code=403,
+            detail=(f"'{dest_path.name}' was added by another account, so only an "
+                    "administrator or that account may replace it."),
+        )
+
+
 async def _max_upload_bytes(user=None) -> int:
     """Effective upload size limit: a per-user override (User.permissions
     ["max_upload_bytes"], set in Settings > Users) wins; otherwise the global
@@ -320,17 +396,14 @@ async def upload_game_file(
     # the replacement was even downloadable.
     overwrite:   bool = Form(False),
 ) -> dict:
-    game = await _lib.get_by_id(game_id)
-    if not game:
-        raise HTTPException(status_code=404, detail="Game not found")
-    # Whose game this is. Without it an uploader who owns nothing had a quota
-    # that read zero for ever: any game id would do, and the bytes were charged
-    # to whoever did own it.
-    assert_can_upload_into(request, game)
+    # A game this caller can see, whoever added it. The bytes are charged to
+    # the caller below, not to the game's owner.
+    game = await _game_open_to_upload(request, game_id)
 
     try:
         dest_dir = _dest_dir_for(
-            game.title, os_platform, file_type, await _resolve_storage_folder(game_id),
+            await _folder_title_for(game), os_platform, file_type,
+            await _resolve_storage_folder(game_id),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -344,6 +417,10 @@ async def upload_game_file(
         _refuse_existing(dest_path, overwrite)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    if overwrite:
+        await _refuse_replacing_another_accounts_file(
+            game, dest_path, scopes=getattr(request.state, "scopes", set()),
+            user_id=getattr(getattr(request.state, "user", None), "id", None))
 
     max_bytes = await _max_upload_bytes(getattr(request.state, "user", None))
     # Two different limits, and both have to hold: max_bytes is the ceiling on
@@ -351,87 +428,94 @@ async def upload_game_file(
     # it owns. Asked before a byte is written, so a hopeless upload is refused
     # at once rather than after the whole file has crossed the wire.
     _uploader = getattr(request.state, "user", None)
-    _quota = await quota.limit_for(_uploader)
-    room_left = 0
-    if _quota > 0:
-        used = await quota.used_bytes(getattr(_uploader, "id", None))
-        # Minus what this upload is about to give back. `used` already counts
-        # the file being replaced, so charging the replacement on top of it
-        # would refuse an account whose allowance is filled by the very file it
-        # is swapping - which is the ordinary reason to send the same path
-        # twice. Only the caller's own bytes come back: a file somebody else is
-        # charged for stays on their total until the row is rewritten.
-        replacing = 0
-        if overwrite:
-            for f in await _lib.get_files_for_game(game_id):
-                if f.file_path == _rel_from_abs(str(dest_path)) and (
-                        f.published_by or None) == getattr(_uploader, "id", None):
-                    replacing = int(f.size_bytes or 0)
-                    break
-        room_left = max(0, _quota - used + replacing)
-        if room_left == 0:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Upload quota reached: {used} of {_quota} bytes already used.",
-            )
-
-    # Into a .part, never straight onto the destination. Writing to the final
-    # name truncated whatever was already there before a single byte of the
-    # replacement had been checked, and a browser that went away mid-upload
-    # left the wreckage wearing the name of something that used to work.
-    part_path = _part_path(dest_path)
-    size = 0
-    aborted = False
-    over_quota = False
-    try:
-        with open(part_path, "wb") as fh:
-            while chunk := await file.read(_CHUNK_WRITE):
-                fh.write(chunk)
-                size += len(chunk)
-                if size > max_bytes:
-                    aborted = True
-                    break
-                # The quota is checked here as well as before the write. The
-                # size is not known in advance for a streamed body, so the only
-                # honest moment to stop is when it has actually gone past.
-                if room_left and size > room_left:
-                    aborted = True
-                    over_quota = True
-                    break
-    except Exception:
-        part_path.unlink(missing_ok=True)
-        raise
-    finally:
-        if aborted:
-            part_path.unlink(missing_ok=True)
-            raise HTTPException(
-                status_code=413,
-                detail=(
-                    f"Upload quota reached: only {room_left} bytes were free."
-                    if over_quota else
-                    f"File exceeds maximum allowed upload size "
-                    f"({max_bytes // (1024 ** 3)} GB)."
-                ),
-            )
-
-    actor = (request.state.user.username
-             if getattr(request.state, "user", None) else None)
-    try:
-        return await _finalize_upload(
-            game_id, dest_path, filename, size,
-            os_platform, file_type, language, version, actor,
-            staged=part_path,
-            owner_id=getattr(getattr(request.state, "user", None), "id", None),
-        )
-    except _VirusFound as v:
+    # What this upload is about to give back. What has landed already counts
+    # the file being replaced, so charging the replacement on top of it would
+    # refuse an account whose allowance is filled by the very file it is
+    # swapping - which is the ordinary reason to send the same path twice. Only
+    # the caller's own bytes come back: a file somebody else is charged for
+    # stays on their total until the row is rewritten.
+    replacing = 0
+    if overwrite:
+        for f in await _lib.get_files_for_game(game_id):
+            if f.file_path == _rel_from_abs(str(dest_path)) and (
+                    f.published_by or None) == getattr(_uploader, "id", None):
+                replacing = int(f.size_bytes or 0)
+                break
+    # The bytes this upload writes, counted against what has landed, what this
+    # account's torrents are still bringing and every other stream it has
+    # running - at the start and at every chunk. Held until the file row counts
+    # them, so they are never counted nowhere.
+    reservation = await quota.reservation_for(_uploader, credit=replacing)
+    if reservation.bounded and await reservation.room() == 0:
         raise HTTPException(
-            status_code=422,
-            detail={
-                "code":   "virus_detected",
-                "threat": v.threat,
-                "action": v.action,
-            },
+            status_code=413,
+            detail=f"Upload quota reached: none of this account's {reservation.limit} bytes is free.",
         )
+    reservation.open()
+
+    try:
+        # Into a .part, never straight onto the destination. Writing to the
+        # final name truncated whatever was already there before a single byte
+        # of the replacement had been checked, and a browser that went away
+        # mid-upload left the wreckage wearing the name of something that used
+        # to work.
+        part_path = _part_path(dest_path)
+        size = 0
+        aborted = False
+        over_quota = False
+        try:
+            with open(part_path, "wb") as fh:
+                while chunk := await file.read(_CHUNK_WRITE):
+                    fh.write(chunk)
+                    size += len(chunk)
+                    if size > max_bytes:
+                        aborted = True
+                        break
+                    # The quota is checked here as well as before the write.
+                    # The size is not known in advance for a streamed body, and
+                    # the account's other uploads grow while this one runs.
+                    if not await reservation.take(len(chunk)):
+                        aborted = True
+                        over_quota = True
+                        break
+        except Exception:
+            part_path.unlink(missing_ok=True)
+            raise
+        finally:
+            if aborted:
+                part_path.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"Upload quota reached: this upload and the rest of this "
+                        f"account's do not fit in its {reservation.limit} bytes."
+                        if over_quota else
+                        f"File exceeds maximum allowed upload size "
+                        f"({max_bytes // (1024 ** 3)} GB)."
+                    ),
+                )
+
+        actor = (request.state.user.username
+                 if getattr(request.state, "user", None) else None)
+        try:
+            return await _finalize_upload(
+                game_id, dest_path, filename, size,
+                os_platform, file_type, language, version, actor,
+                staged=part_path,
+                owner_id=getattr(getattr(request.state, "user", None), "id", None),
+            )
+        except _VirusFound as v:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code":   "virus_detected",
+                    "threat": v.threat,
+                    "action": v.action,
+                },
+            )
+    finally:
+        # Only now: the file row counts these bytes, or they are gone.
+        reservation.close()
 
 
 # ── Upload from a direct URL (server-side background download) ───────────────
@@ -493,6 +577,7 @@ async def _url_upload_job(
     tray: bool = False,
     overwrite: bool = False,
     actor_id: int | None = None,
+    replace_guard: tuple | None = None,
 ) -> None:
     from handler.socket_handler import sio
     import httpx
@@ -503,8 +588,18 @@ async def _url_upload_job(
     size = 0
     started = time.monotonic()
     last_emit = 0.0
+    # The bytes this job writes, counted with the account's other streams at
+    # every chunk; `max_bytes` was the room when the job was queued, and the
+    # account's other uploads grow while this one runs. Held until the file
+    # row counts them.
+    reservation = await quota.reservation_for_account(actor_id)
+    reservation.open()
     try:
         _refuse_existing(dest_path, overwrite)
+        if overwrite and replace_guard is not None:
+            game, scopes, user_id = replace_guard
+            await _refuse_replacing_another_accounts_file(
+                game, dest_path, scopes=scopes, user_id=user_id)
         timeout = httpx.Timeout(30.0, read=300.0)
         # SSRF guard: block localhost / cloud-metadata / link-local on every hop
         # (initial + redirects), but allow RFC-1918 LAN so a self-hoster can pull
@@ -527,6 +622,10 @@ async def _url_upload_job(
                         # The server named it, so the collision check has to run
                         # again against the name that will actually be used.
                         _refuse_existing(dest_path, overwrite)
+                        if overwrite and replace_guard is not None:
+                            game, scopes, user_id = replace_guard
+                            await _refuse_replacing_another_accounts_file(
+                                game, dest_path, scopes=scopes, user_id=user_id)
                 total = int(resp.headers.get("content-length") or 0)
                 if total and total > max_bytes:
                     raise ValueError(
@@ -541,6 +640,11 @@ async def _url_upload_job(
                             raise ValueError(
                                 f"File exceeds maximum allowed upload size "
                                 f"({max_bytes // (1024 ** 3)} GB)."
+                            )
+                        if not await reservation.take(len(chunk)):
+                            raise ValueError(
+                                "Upload quota reached: this download and the rest of "
+                                "this account's do not fit."
                             )
                         now = time.monotonic()
                         if now - last_emit >= 1.0:
@@ -596,6 +700,9 @@ async def _url_upload_job(
             "error_code": "url_failed",
             "error_detail": ref,
         })
+    finally:
+        # Only now: the file row counts these bytes, or they are gone.
+        reservation.close()
 
 
 async def queue_url_download(
@@ -604,7 +711,7 @@ async def queue_url_download(
     actor: str | None = None, actor_id: int | None = None,
     max_bytes: int, storage_folder: str | None = None,
     storage_title: str | None = None, tray: bool = False,
-    overwrite: bool = False,
+    overwrite: bool = False, replace_guard: tuple | None = None,
 ) -> dict:
     """Validate a URL and start a background download into a game's folder.
 
@@ -620,7 +727,13 @@ async def queue_url_download(
     ``storage_title`` overrides the per-game folder name. Two catalogue entries
     can share a title, and their builds must not share a folder - one would
     overwrite the other and deleting one would strand the other's files - so the
-    caller passes a disambiguated name. Defaults to the game's title.
+    caller passes a disambiguated name. Defaults to the game's own folder name,
+    which is its title unless an older game on the shelf has the same one.
+
+    ``replace_guard`` is ``(game, scopes, user_id)`` for a caller who may add to
+    a game but not write over another account's file in it: the manual upload.
+    A catalogue download leaves it out on purpose - two accounts fetching the
+    same entry replace the same build, and that is what the route is for.
 
     Raises ValueError on a URL that must not be fetched; callers turn that into
     whatever their transport calls a bad request.
@@ -638,26 +751,29 @@ async def queue_url_download(
 
     folder = storage_folder if storage_folder is not None else await _resolve_storage_folder(game.id)
     filename = _safe_filename(parsed.path)
-    dest_dir = _dest_dir_for(storage_title or game.title, os_platform, file_type, folder)
+    dest_dir = _dest_dir_for(storage_title or await _folder_title_for(game),
+                             os_platform, file_type, folder)
+    if overwrite and replace_guard is not None:
+        # Asked here as well as in the job, so a refusal reaches the dialog that
+        # is still open rather than the tray a moment later. The job asks again
+        # for a name the server hands out in its answer.
+        _game, scopes, user_id = replace_guard
+        await _refuse_replacing_another_accounts_file(
+            _game, dest_dir / filename, scopes=scopes, user_id=user_id)
     job_id = next(_url_job_seq)
     fire_task(_url_upload_job(
         job_id, game.id, url, dest_dir, filename,
         os_platform, file_type, language, version, actor, max_bytes,
         game_title=game.title, tray=tray, overwrite=overwrite,
-        actor_id=actor_id,
+        actor_id=actor_id, replace_guard=replace_guard,
     ))
     return {"id": job_id, "filename": filename}
 
 
 @protected_route(upload_router.post, "/games/{game_id}/upload-url", scopes=[Scope.LIBRARY_UPLOAD])
 async def upload_game_file_from_url(request: Request, game_id: int, body: UploadUrlBody) -> dict:
-    game = await _lib.get_by_id(game_id)
-    if not game:
-        raise HTTPException(status_code=404, detail="Game not found")
-    # Whose game this is. Without it an uploader who owns nothing had a quota
-    # that read zero for ever: any game id would do, and the bytes were charged
-    # to whoever did own it.
-    assert_can_upload_into(request, game)
+    # A game this caller can see, whoever added it; see the file route above.
+    game = await _game_open_to_upload(request, game_id)
 
     try:
         return await queue_url_download(
@@ -672,6 +788,8 @@ async def upload_game_file_from_url(request: Request, game_id: int, body: Upload
                 await _max_upload_bytes(getattr(request.state, "user", None)),
             ),
             overwrite=body.overwrite,
+            replace_guard=(game, getattr(request.state, "scopes", set()),
+                           getattr(getattr(request.state, "user", None), "id", None)),
         )
     # UnsafeURLError is a ValueError, so the blocked-URL case lands here too.
     except ValueError as exc:
