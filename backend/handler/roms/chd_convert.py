@@ -80,6 +80,19 @@ class ChdError(RuntimeError):
         self.detail = detail
 
 
+def _move_failure(err: OSError) -> ChdError:
+    """The converted disc could not be put in place: what went wrong, not where.
+
+    The OSError's own text names both files - the temporary work folder and the
+    path in the ROM library - and this sentence is kept on the job and shown in
+    the tray (1.0.34 audit, #17). `strerror` is the reason alone ("No space left
+    on device"); an OSError built from a bare message has none, and gets a
+    general one.
+    """
+    reason = (getattr(err, "strerror", None) or "").strip() or "the file system refused it"
+    return ChdError(f"could not put the converted disc in place: {reason}", code="chd_move")
+
+
 def can_convert(name: str) -> bool:
     """Whether this file is a disc image conversion can be offered for."""
     return Path(name or "").suffix.lower() in _CONVERTIBLE
@@ -466,8 +479,7 @@ async def convert_disc_files(
             staged.replace(target)
         except OSError as err:
             _discard(staged)
-            raise ChdError(f"could not put the converted disc in place: {err}",
-                             code="chd_move") from err
+            raise _move_failure(err) from err
 
     return ConvertedDisc(
         path=target, sha1=sha1, replaced=replaced, was_bytes=was, now_bytes=now,

@@ -20,6 +20,8 @@ import io
 import pathlib
 import re
 
+import pytest
+
 BACKEND = pathlib.Path(__file__).resolve().parent.parent
 
 # Everything that resolves the root, or that guards a path against it.
@@ -28,6 +30,7 @@ TOUCHES_THE_ROOT = [
     "handler/roms/rom_removal.py",
     "endpoints/roms/roms_router.py",
     "endpoints/settings/roms_settings_router.py",
+    "handler/filesystem/rom_scanner.py",
 ]
 
 
@@ -54,6 +57,39 @@ def test_the_deleter_asks_for_the_configured_root():
     assert "roms_library_path" in source, (
         "kasowanie ROM-ow nadal sprawdza sciezki wobec stalej z konfiguracji "
         "zamiast wobec katalogu ustawionego przez administratora"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_scheduled_scan_walks_the_library_the_administrator_moved(monkeypatch):
+    """Found by the 1.0.34 audit. The timed scan reached for the bare constant,
+    so on an install whose library had been moved it walked the old, empty
+    folder on every turn: nothing new ever appeared, and the setting looked as
+    if it did nothing at all."""
+    import asyncio
+
+    from config import config_manager
+    from handler.filesystem import rom_scanner as scanner
+
+    def _moved(_name):
+        return {"library_path": "/mnt/big/roms", scanner.SCAN_INTERVAL_KEY: "6"}
+
+    walked = []
+
+    async def _scan(path):
+        walked.append(path)
+        raise asyncio.CancelledError  # one turn is the whole question
+
+    monkeypatch.setattr(config_manager, "get_section", _moved)
+    monkeypatch.setattr(scanner, "scan_roms_path", _scan)
+    monkeypatch.setattr(scanner, "_SCAN_LOOP_START_DELAY_S", 0)
+
+    with pytest.raises(asyncio.CancelledError):
+        await scanner.periodic_scan_loop()
+
+    assert walked == ["/mnt/big/roms"], (
+        f"skan z harmonogramu chodzi po domyslnym katalogu zamiast po bibliotece "
+        f"przeniesionej w ustawieniach: {walked!r}"
     )
 
 

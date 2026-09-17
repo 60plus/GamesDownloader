@@ -24,6 +24,7 @@ gets deleted is worth distrusting.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
@@ -194,7 +195,7 @@ def unrowed_tracks(members) -> list[Path]:
     of this function is a promise the caller has to finish keeping: `known` is
     built from the set being deleted and from nothing else, so a file holding
     somebody else's library row still reads as unrowed here. Callers go through
-    removable_tracks in the router, which asks the database and drops those.
+    removable_tracks below, which asks the database and drops those.
     """
     from handler.filesystem.rom_scanner import SHEET_EXTENSIONS, tracks_referenced_by
 
@@ -217,6 +218,67 @@ def unrowed_tracks(members) -> list[Path]:
                 known.add(entry.name.lower())
                 found.append(entry)
     return found
+
+
+async def removable_tracks(members, *, session=None) -> list[Path]:
+    """The data files a set may actually take with it when it leaves the folder.
+
+    unrowed_tracks reads the sheets and answers with everything they name that
+    is not a member of this set. That is only most of the answer: it knows the
+    set being deleted and knows nothing about the rest of the library, so a file
+    holding another entry's row looks from there exactly like an orphan. The
+    database settles it, and files that turn out to be somebody's entry stay.
+
+    Asked by the delete route, for its preview and for the delete itself, and
+    by a CHD conversion before it removes or retires what it replaced. Those are
+    the ways a disc's files leave the folder, and one answer keeps them from
+    disagreeing about whose a file is.
+
+    *session* only when the caller has one to share; the handlers open their own
+    otherwise.
+    """
+    from handler.database.rom_handler import rom_handler
+
+    candidates = await asyncio.to_thread(unrowed_tracks, members)
+    if not candidates:
+        return []
+    shared = {} if session is None else {"session": session}
+    platform_id = members[0].platform_id
+    owned = await rom_handler.fs_names_with_rows(
+        platform_id, [p.name for p in candidates], **shared
+    )
+    # And the files that can never hold a row of their own. A .sbi is not a ROM
+    # extension, so the name check above never protects one - which is what made
+    # a sheet naming somebody else's subchannel file enough to delete it. The
+    # stem says which disc a file belongs to; a disc outside this set keeps it.
+    # The set's own discs are excluded, or a disc would protect its own .sbi
+    # from going with it.
+    spoken_for = await rom_handler.stems_with_rows(
+        platform_id, [p.stem for p in candidates],
+        exclude_ids=[m.id for m in members], **shared
+    )
+    return [
+        p for p in candidates
+        if p.name.lower() not in owned and p.stem.lower() not in spoken_for
+    ]
+
+
+async def track_files_that_go_with(members, *, session=None) -> set[str]:
+    """Lower-cased names of the track files that leave with this set.
+
+    Two kinds. The set's own track rows, unless a sheet from outside the set
+    still names the file - the scanner gave it to whichever sheet sorted first,
+    and that is no reason for the other sheet to lose it. And the tracks that
+    never became rows, once removable_tracks has asked the database about them.
+
+    Not the discs themselves, and not playlists or subchannel files: those are
+    the caller's to decide, because deleting a title and converting it treat
+    them differently.
+    """
+    spoken_for = await asyncio.to_thread(spoken_for_elsewhere, members)
+    going = {m.fs_name.lower() for m in members if m.track_of} - spoken_for
+    going |= {p.name.lower() for p in await removable_tracks(members, session=session)}
+    return going
 
 
 def delete_paths(paths) -> int:

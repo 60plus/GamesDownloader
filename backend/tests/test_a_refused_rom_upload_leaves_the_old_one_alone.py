@@ -83,7 +83,7 @@ def route(tmp_path, monkeypatch):
         # the only thing that can refuse this upload is the allowance. Without
         # this the test would be measuring the ownership gate instead.
         return SimpleNamespace(id=99, fs_name=fs_name, published_by=UPLOADER_ID,
-                               fs_size_bytes=len(OLD))
+                               fs_size_bytes=len(OLD), fs_path=str(shelf))
 
     monkeypatch.setattr(R.rom_platform_handler, "get_by_slug", platform)
     monkeypatch.setattr(R.rom_handler, "get_by_fs_name", my_row)
@@ -94,6 +94,14 @@ def route(tmp_path, monkeypatch):
     monkeypatch.setattr(R.rom_handler, "max_rom_id", newest_rom_id)
     monkeypatch.setattr(R, "_get_roms_path", roms_path)
     monkeypatch.setattr(quota, "ceiling_for", ceiling)
+
+    async def no_live_limit(_user, **_k):
+        # The budget here is the ceiling above. Uploads running side by side
+        # are checked live as well, and that has its own tests
+        # (test_uploads_running_side_by_side_see_each_other).
+        return quota.Reservation(None, limit=0)
+
+    monkeypatch.setattr(quota, "reservation_for", no_live_limit)
     monkeypatch.setattr(rsh, "scan_after_write", nothing)
     monkeypatch.setattr(R, "_stamp_uploaded", nothing)
     monkeypatch.setattr(clam, "is_upload_scanning_enabled", clam_off)
@@ -159,6 +167,24 @@ async def test_a_write_that_fails_leaves_the_old_file_alone(route):
         "blad zapisu zostawia po sobie ogryzek pod nazwa dzialajacego pliku"
     )
     assert _leftovers(shelf) == []
+
+
+@pytest.mark.asyncio
+async def test_a_write_that_fails_does_not_show_an_uploader_the_servers_insides(route):
+    """The text of an OSError is the full path it could not write to - the
+    server's layout - and this route is an uploader's (1.0.34 audit, #16). The
+    reason goes to the log under a reference; the answer names the file."""
+    import json
+
+    R, _shelf = route
+
+    out = await _upload(R, [_Upload("game.iso", BUDGET // 2, blow_up_after=64)])
+
+    detail = json.loads(out.body)["detail"]
+    assert "no space left on device" not in detail, (
+        f"uploader dostal tekst wyjatku z wnetrza serwera: {detail!r}"
+    )
+    assert "game.iso" in detail and "ref " in detail
 
 
 # ── ...and the legal case still passes ───────────────────────────────────────

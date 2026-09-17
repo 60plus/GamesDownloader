@@ -459,6 +459,7 @@ def extract_metadata(
     cover_type: str = "box-2D",
     region: str = "wor",
     extras: list[str] | None = None,
+    background_types: tuple[str, ...] | None = None,
 ) -> dict:
     """Normalise raw SS game dict into ROM metadata fields.
 
@@ -468,6 +469,9 @@ def extract_metadata(
         region:     Preferred region shortname (put first in lookup order).
         extras:     Additional SS media types to collect URLs for (returned
                     under key ``extra_urls`` as {ss_type: url}).
+        background_types: The SS types a background may be, in order. None is
+                    fanart then background, with a screenshot standing in;
+                    empty means no background is wanted at all.
     """
     # Build region lookup order from user preset
     region_pref = _build_region_pref(region)
@@ -615,12 +619,15 @@ def extract_metadata(
         cover_url = best_cover.get("url")
 
     # Background - fanart first, then screenshot
-    fanart_list = [m for m in medias if m.get("type") == "fanart"]
-    bg_candidates = fanart_list or [m for m in medias if m.get("type") == "background"]
+    bg_candidates: list = []
+    for bg_type in ("fanart", "background") if background_types is None else background_types:
+        bg_candidates = [m for m in medias if m.get("type") == bg_type]
+        if bg_candidates:
+            break
     best_bg = _pick_region(bg_candidates, "region", region_pref)
     if best_bg:
         bg_url = best_bg.get("url")
-    else:
+    elif background_types is None or background_types:
         ss_media = [m for m in medias if m.get("type") == "ss"]
         best_ss = _pick_region(ss_media, "region", region_pref)
         if best_ss:

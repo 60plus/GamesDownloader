@@ -23,6 +23,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from handler.database.rom_handler import rom_handler
+from handler.roms import rom_removal
 from handler.roms.chd_convert import (
     ChdError,
     convert_disc_files,
@@ -90,8 +91,11 @@ class _ChdJob:
 
 
 def _announce(job: _ChdJob) -> None:
+    # To the administrators, who alone may start or cancel a conversion. With no
+    # room this went to every signed-in account, failures and chdman's own
+    # diagnosis included (1.0.34 audit, #17).
     try:
-        asyncio.create_task(emit_event(EVENT, job.as_dict()))
+        asyncio.create_task(emit_event(EVENT, job.as_dict(), to_role="admin"))
     except RuntimeError:
         # No running loop, which happens in tests calling the work directly.
         pass
@@ -123,8 +127,18 @@ async def convert_set(
     discs = [m for m in members if not m.track_of] or [rom]
     directory = Path(rom.fs_path)
 
+    # What this set may give up, asked before anything is converted and the
+    # same way a delete asks it. A sheet names its tracks, but naming a file is
+    # not owning it: a second regional sheet beside this one can name the same
+    # data file, and a file can be somebody else's entry. Those stay where they
+    # are, neither removed nor moved into _originals, since either one leaves
+    # the other game unable to start.
+    ours = {d.fs_name.lower() for d in discs}
+    ours |= await rom_removal.track_files_that_go_with(members, session=session)
+
     renames: dict[str, str] = {}
     retired: list[Path] = []
+    kept: list[str] = []
     saved = 0
 
     for index, disc in enumerate(discs):
@@ -151,13 +165,24 @@ async def convert_set(
             disc.id, done.path.name, done.now_bytes, done.sha1, session=session,
         )
         renames[was_called] = done.path.name
-        saved += max(0, done.was_bytes - done.now_bytes)
+
+        giving_up = [p for p in done.replaced if p.name.lower() in ours]
+        staying = [p for p in done.replaced if p.name.lower() not in ours]
+        if staying:
+            logger.info(
+                "Converted %s and left %s in place: another entry still needs it",
+                was_called, ", ".join(p.name for p in staying))
+            kept += [p.name for p in staying]
+        # A file left in place frees nothing, and counting it made the tray
+        # report space that is still taken.
+        still_there = sum(p.stat().st_size for p in staying if p.is_file())
+        saved += max(0, done.was_bytes - done.now_bytes - still_there)
 
         if delete_source:
-            for path in done.replaced:
+            for path in giving_up:
                 _delete_inside(path, here)
         else:
-            retired += retire_sources(done.replaced, here)
+            retired += retire_sources(giving_up, here)
 
         if on_percent is not None:
             on_percent((index + 1) * 100.0 / len(discs))
@@ -169,6 +194,7 @@ async def convert_set(
         "discs": len(discs),
         "saved_bytes": saved,
         "retired": [str(p) for p in retired],
+        "kept": kept,
     }
 
 

@@ -15,7 +15,12 @@ its cover, its identifiers and its history.
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from config import ROMS_PATH
+
+logger = logging.getLogger(__name__)
 
 
 def roms_library_path(config_manager=None) -> str:
@@ -35,3 +40,37 @@ def roms_library_path(config_manager=None) -> str:
         return ROMS_PATH  # start deleting against the wrong root
     configured = (section.get("library_path") or "").strip()
     return configured or ROMS_PATH
+
+
+def make_platform_folders(root: str, *, create_root: bool) -> dict:
+    """One folder per known platform in *root*, so somebody filling the library
+    over FTP or a file share knows where each platform's ROMs go.
+
+    Only the canonical folder of a platform with several names: `psx`, not also
+    `playstation`, since the scan walks every directory and a second one for the
+    same machine is a second shelf for it. Nothing already there is touched.
+
+    *create_root* is for the default library on a fresh install. A library moved
+    in Settings that is not there - a typo, a disk not mounted into the
+    container - is not made up: folders made there would live inside the
+    container, invisible over FTP and gone when it is recreated.
+    """
+    from handler.metadata.rom_platform_map import PLATFORM_MAP, canonical_fs_slug
+
+    base = Path(root)
+    if not base.is_dir():
+        if not create_root:
+            return {"root_exists": False, "created": 0}
+        base.mkdir(parents=True, exist_ok=True)
+
+    created = 0
+    for fs_slug in dict.fromkeys(canonical_fs_slug(s) for s in PLATFORM_MAP):
+        folder = base / fs_slug
+        if folder.exists():
+            continue
+        try:
+            folder.mkdir()
+            created += 1
+        except OSError as exc:
+            logger.warning("Could not make the platform folder %s: %s", folder, exc)
+    return {"root_exists": True, "created": created}

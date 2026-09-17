@@ -120,3 +120,27 @@ def test_one_bad_scan_does_not_end_the_loop():
     assert body.index("except asyncio.CancelledError") < body.index("except Exception"), (
         "ogolny wyjatek lapie anulowanie, wiec zamkniecie sie zawiesi"
     )
+
+
+# ── The settings screen keeps what it did not change ─────────────────────────
+
+def test_the_settings_screen_reads_back_everything_it_saves():
+    """The screen posts its whole form, so a field it never reads back is a
+    field every save resets. The interval was one: the page opened showing 0,
+    and saving anything else on it - the library path, the hash ceiling -
+    switched the scheduled scan off without a word."""
+    import re
+
+    vue = _source(BACKEND.parent / "frontend" / "src" / "views" / "settings" / "SettingsRoms.vue")
+    form = re.search(r"const form = ref\(\{(.*?)\n\}\)", vue, re.S)
+    assert form, "nie znalazlem formularza ustawien ROM"
+    fields = re.findall(r"^\s*(\w+):", form.group(1), re.M)
+    assert "scan_interval_hours" in fields
+
+    start = vue.index("async function load()")
+    load = vue[start:vue.index("\n}", start)]
+    unread = [f for f in fields if not re.search(rf"form\.value\.{f}\s*=\s*data\.{f}\b", load)]
+    assert not unread, (
+        f"ekran ustawien ROM wysyla te pola, ale ich nie wczytuje, wiec kazdy "
+        f"zapis je zeruje: {unread}"
+    )

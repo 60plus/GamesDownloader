@@ -903,38 +903,24 @@ async def _init_db() -> None:
 def _init_rom_dirs() -> None:
     """Create ROM library subdirectory for every known platform on startup.
 
-    De-duplicates by canonical slug so alias fs_slugs (e.g. `atari-2600`,
-    `super-nintendo`) don't create a second folder next to the primary
-    one (`atari2600`, `snes`) - users saw confusing duplicate tiles and
-    the scanner choked on the shared unique-slug index.  First declaration
-    in PLATFORM_MAP wins as the canonical fs_slug.
+    In the library this install uses, which is not always the default: these
+    folders were made in `/data/games/roms` even after the library had been
+    moved in Settings > ROMs, so the moved one had none and nobody filling it
+    over FTP could tell where anything went. A moved library that is not there
+    is reported rather than made up. `make_platform_folders` says why, and why
+    a platform with two names gets one folder.
     """
-    import pathlib
-    from config import ROMS_PATH
-    from handler.metadata.rom_platform_map import PLATFORM_MAP, slug_from_fs_slug
+    from handler.filesystem import rom_paths
 
-    base = pathlib.Path(ROMS_PATH)
-    base.mkdir(parents=True, exist_ok=True)
-
-    seen_slugs: set[str] = set()
-    canonical_fs_slugs: list[str] = []
-    for fs_slug in PLATFORM_MAP:
-        slug = slug_from_fs_slug(fs_slug)
-        if slug in seen_slugs:
-            continue
-        seen_slugs.add(slug)
-        canonical_fs_slugs.append(fs_slug)
-
-    created = 0
-    for fs_slug in canonical_fs_slugs:
-        d = base / fs_slug
-        if not d.exists():
-            d.mkdir(exist_ok=True)
-            created += 1
-    logger.info(
-        "ROM dirs ready - %d canonical platforms (%d aliases skipped), %d new folder(s) created",
-        len(canonical_fs_slugs), len(PLATFORM_MAP) - len(canonical_fs_slugs), created,
-    )
+    root = rom_paths.roms_library_path()
+    out = rom_paths.make_platform_folders(root, create_root=root == rom_paths.ROMS_PATH)
+    if not out["root_exists"]:
+        logger.warning(
+            "The ROM library %s does not exist, so no platform folders were made. "
+            "Is it mounted into the container?", root,
+        )
+        return
+    logger.info("ROM dirs ready in %s - %d new folder(s) created", root, out["created"])
 
 
 _WEAK_KEYS = {"change-me-in-production", "secret", "changeme", "insecure", ""}

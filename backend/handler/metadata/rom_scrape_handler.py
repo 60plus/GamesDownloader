@@ -22,7 +22,13 @@ from config import RESOURCES_PATH
 from config import config_manager
 from handler.config.config_handler import config_handler
 from handler.database.rom_handler import rom_handler
-from handler.metadata import hltb_handler, igdb_rom_handler, launchbox_handler, screenscraper_handler
+from handler.metadata import (
+    hltb_handler,
+    igdb_rom_handler,
+    launchbox_handler,
+    scrape_presets,
+    screenscraper_handler,
+)
 from handler.metadata.rom_platform_map import (
     get_hltb_name, get_igdb_id, get_launchbox_name, get_ss_id,
 )
@@ -342,9 +348,12 @@ async def scrape_rom(
     # ── Load per-platform scrape preset ──────────────────────────────────────
     all_presets = config_manager.get_section("rom_scrape_presets") or {}
     preset      = all_presets.get(platform.fs_slug, {})
-    ss_cover_type = preset.get("cover_type", "box-2D")
+    ss_cover_type = scrape_presets.cover_type(preset)
     ss_region     = preset.get("region",     "ss")
-    ss_extras     = preset.get("extras",     [])
+    # What this platform's Additional media ticks let in. The cover is not one
+    # of them: it is the preset's own field and always fetched.
+    wanted        = scrape_presets.wanted_media(preset)
+    want_bg       = any(t in wanted for t in scrape_presets.BACKGROUND_TYPES)
 
     results: list[dict] = []
 
@@ -381,7 +390,8 @@ async def scrape_rom(
                     ss_raw,
                     cover_type=ss_cover_type,
                     region=ss_region,
-                    extras=ss_extras,
+                    background_types=tuple(
+                        t for t in scrape_presets.BACKGROUND_TYPES if t in wanted),
                 ))
         except Exception as e:
             logger.warning("[SS] Error scraping %s: %s", search_name, e)
@@ -478,7 +488,7 @@ async def scrape_rom(
     # plugin answered with a word. That is why the check sits per provider.
     try:
         from plugins.manager import plugin_manager
-        _p_search = plugin_manager.hook.metadata_search_game(query=search_name)
+        _p_search = await plugin_manager.call_each("metadata_search_game", query=search_name)
         _p_ratings: dict = {}
         for _pr in _p_search:
             if not isinstance(_pr, list) or not _pr:
@@ -489,7 +499,7 @@ async def scrape_rom(
             if not _pid or not _gid:
                 continue
             try:
-                _gd_list = plugin_manager.hook.metadata_get_game(provider_game_id=_gid)
+                _gd_list = await plugin_manager.call_each("metadata_get_game", provider_game_id=_gid)
             except Exception as _one:
                 # One provider failing is one provider's rating missing.
                 logger.info("[Plugins] %s could not be asked for a rating: %s",
@@ -535,7 +545,13 @@ async def scrape_rom(
     cover_url  = merged.pop("cover_url", None)
     bg_url     = merged.pop("background_url", None)
     ss_urls    = all_screenshots[:8]  # Combined SS + IGDB screenshots (max 8)
-    merged.pop("extra_urls", None)  # no longer used - replaced by ES-style download below
+    merged.pop("extra_urls", None)  # never a column; the ticks are read below
+
+    # Unticked is not fetched, whichever provider offered it.
+    if "ss" not in wanted:
+        ss_urls = []
+    if not want_bg:
+        bg_url = None
 
     if keep_existing_cover(rom, fill_missing):
         cover_url = None  # keep the existing cover file untouched
@@ -622,10 +638,11 @@ async def scrape_rom(
         merged["screenshots"] = saved_ss
         _from_scrape("screenshots")
 
-    # ── ES-style: always download support, wheel, steamgrid, video, bezel ────
+    # ── ES-style: support, wheel, steamgrid, video, bezel, picto ─────────────
     # Use extract_media_urls to get all categorised media from raw SS response,
-    # then pick the best item per category and save to proper DB columns.
-    # This mirrors what EmulationStation downloads automatically.
+    # then pick the best item per category and save to proper DB columns. Only
+    # the types the platform's preset ticked take part; this used to fetch all
+    # of them whatever was ticked.
     ss_raw_for_extra = None
     for r in results:
         if r.get("is_identified") and r.get("ss_metadata"):
@@ -649,7 +666,8 @@ async def scrape_rom(
         # ── Wheel: wheel-hd (wor→ss→usa→eu) then wheel (same order) ─────────
         if not merged.get("wheel_path") and not keep_existing_media(rom, "wheel_path", fill_missing):
             _wheel_region_pref = ["wor", "ss", "usa", "eu"]
-            wheels = all_media.get("wheels", [])
+            wheels = [w for w in all_media.get("wheels", [])
+                      if scrape_presets.lets_in(wanted, w.get("type", ""))]
             wheel_best = None
             for wtype in ("wheel-hd", "wheel"):
                 typed = [w for w in wheels if w.get("type") == wtype]
@@ -676,7 +694,8 @@ async def scrape_rom(
                 continue
             if keep_existing_media(rom, col, fill_missing):
                 continue
-            items = all_media.get(cat, [])
+            items = [m for m in all_media.get(cat, [])
+                     if scrape_presets.lets_in(wanted, m.get("type", ""))]
             if not items:
                 continue
             best = next(
@@ -701,10 +720,11 @@ async def scrape_rom(
             logger.info("[ROM] Downloaded %d ES-style media files for rom id=%d", downloaded, rom.id)
 
     # ── SteamGridDB fallback - grid cover + hero background ──────────────────
-    # Runs when SS didn't provide steamgrid_path and/or background_path.
-    need_grid = (not merged.get("steamgrid_path")
+    # Runs when SS didn't provide steamgrid_path and/or background_path, and
+    # only for a slot the preset ticked.
+    need_grid = ("steamgrid" in wanted and not merged.get("steamgrid_path")
                  and not keep_existing_media(rom, "steamgrid_path", fill_missing))
-    need_bg   = (not merged.get("background_path")
+    need_bg   = (want_bg and not merged.get("background_path")
                  and not keep_existing_media(rom, "background_path", fill_missing))
     if need_grid or need_bg:
         try:

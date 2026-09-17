@@ -45,6 +45,7 @@ from utils import download_tickets
 from utils.ranged_file import content_disposition
 from utils.ratings import rom_rating_agg_of
 from utils.async_utils import note_unscanned
+from utils.errors import safe_detail
 
 logger = logging.getLogger(__name__)
 
@@ -618,9 +619,14 @@ class _ConvertRequest(BaseModel):
     delete_source: bool = False
 
 
-@protected_route(router.get, "/convert-chd/jobs", scopes=[Scopes.ROMS_READ])
+@protected_route(router.get, "/convert-chd/jobs", scopes=[Scopes.ROMS_WRITE])
 async def list_chd_jobs(request: Request) -> list[dict]:
-    """Conversions this server knows about, so a refreshed page finds them."""
+    """Conversions this server knows about, so a refreshed page finds them.
+
+    For whoever may start one. Every account used to be able to read these,
+    failures and chdman's diagnosis included (1.0.34 audit, #17); the tray
+    already treats a refusal here as "not an administrator".
+    """
     return chd_jobs.list_jobs()
 
 
@@ -937,19 +943,20 @@ async def search_roms_metadata(
     # however well it answered. Reported by the owner with a ring drawn round
     # that row of chips.
     #
-    # Off the event loop. Plugin code is third-party and synchronous, and it
-    # goes to the network: called inline it would hold up the four built-in
-    # searches that are already running concurrently above.
+    # Off the event loop, each plugin on its own thread with its own time limit
+    # (`call_each`). Plugin code is third-party and synchronous, and it goes to
+    # the network. It used to be one pluggy call on one thread, and pluggy
+    # throws away every answer when one plugin raises - so a broken provider
+    # emptied the other providers' chips, and a hung one had no limit at all.
     plugin_results: list[dict] = []
     try:
         from plugins.manager import plugin_manager
-        _per_plugin = await asyncio.to_thread(
-            plugin_manager.hook.metadata_search_game, query=query.strip()
-        )
+        _per_plugin = await plugin_manager.call_each("metadata_search_game", query=query.strip())
         plugin_results = _plugin_search_candidates(_per_plugin)
     except Exception as _e:
-        # A plugin that throws costs its own results and nothing else: the four
-        # built-in sources are what this editor is for.
+        # Only reading the answers can fail here now; a plugin that throws has
+        # already cost its own results and nothing else. The four built-in
+        # sources are what this editor is for.
         logger.warning("Plugin metadata search failed: %s", _e)
 
     # ScreenScraper cover URLs carry the server's password; wrap them so the
@@ -1784,24 +1791,28 @@ async def get_rom_all_media(
                 r["_sourceIcon"] = f"/api/plugins/{_resolve_plugin_id(pid)}/logo"
                 target.append(r)
 
-        # Covers
-        for pr in plugin_manager.hook.metadata_get_covers(query=_search_q):
+        # Covers, heroes and logos, the three asked side by side. Each call asks
+        # its plugins on their own threads (`call_each`): these used to run on
+        # the event loop, one after another, and a slow upstream stalled every
+        # request on the server for as long as it took (1.0.34 audit, #14).
+        _covers, _heroes, _logos = await asyncio.gather(
+            plugin_manager.call_each("metadata_get_covers", query=_search_q),
+            plugin_manager.call_each("metadata_get_heroes", query=_search_q),
+            plugin_manager.call_each("metadata_get_logos", query=_search_q),
+        )
+        for pr in _covers:
             if isinstance(pr, list):
                 _tag_plugin_results(pr, plugin_covers)
-
-        # Heroes
-        for pr in plugin_manager.hook.metadata_get_heroes(query=_search_q):
+        for pr in _heroes:
             if isinstance(pr, list):
                 _tag_plugin_results(pr, plugin_fanarts)
-
-        # Logos
-        for pr in plugin_manager.hook.metadata_get_logos(query=_search_q):
+        for pr in _logos:
             if isinstance(pr, list):
                 _tag_plugin_results(pr, plugin_wheels)
 
         # Screenshots + detail_sources via metadata_search_game -> metadata_get_game
         try:
-            all_search = plugin_manager.hook.metadata_search_game(query=_search_q)
+            all_search = await plugin_manager.call_each("metadata_search_game", query=_search_q)
             for provider_results in all_search:
                 if not isinstance(provider_results, list) or not provider_results:
                     continue
@@ -1810,7 +1821,7 @@ async def get_rom_all_media(
                 gid = best.get("provider_game_id", "")
                 if not pid or not gid:
                     continue
-                game_data_list = plugin_manager.hook.metadata_get_game(provider_game_id=gid)
+                game_data_list = await plugin_manager.call_each("metadata_get_game", provider_game_id=gid)
                 for gd in game_data_list:
                     if not isinstance(gd, dict) or gd.get("provider_id") != pid:
                         continue
@@ -2608,29 +2619,10 @@ async def removable_tracks(members) -> list[Path]:
     database settles it, and files that turn out to be somebody's entry stay.
 
     Both the preview and the delete go through here, so the number in the
-    question is the number of files the answer removes.
+    question is the number of files the answer removes. The rule itself lives in
+    rom_removal, because a CHD conversion asks it too.
     """
-    candidates = await asyncio.to_thread(rom_removal.unrowed_tracks, members)
-    if not candidates:
-        return []
-    platform_id = members[0].platform_id
-    owned = await rom_handler.fs_names_with_rows(
-        platform_id, [p.name for p in candidates]
-    )
-    # And the files that can never hold a row of their own. A .sbi is not a ROM
-    # extension, so the name check above never protects one - which is what made
-    # a sheet naming somebody else's subchannel file enough to delete it. The
-    # stem says which disc a file belongs to; a disc outside this set keeps it.
-    # The set's own discs are excluded, or a disc would protect its own .sbi
-    # from going with it.
-    spoken_for = await rom_handler.stems_with_rows(
-        platform_id, [p.stem for p in candidates],
-        exclude_ids=[m.id for m in members],
-    )
-    return [
-        p for p in candidates
-        if p.name.lower() not in owned and p.stem.lower() not in spoken_for
-    ]
+    return await rom_removal.removable_tracks(members)
 
 
 # The same declaration as the delete below, and the same ownership question
@@ -2965,14 +2957,22 @@ async def _take_the_bytes_too(rom_id: int, slug: str | None) -> int:
 def _schedule_registration(background_tasks, fs_slug: str, names: list[str],
                            owner_id: int | None, *,
                            new_names: list[str] | None = None,
-                           newer_than: int | None = None) -> None:
+                           newer_than: int | None = None,
+                           release=None) -> None:
     """Have the files that landed scanned in and stamped, after the response.
 
     Called on the way out AND on the way out through a refusal, because bytes
     that reached the disk have to be counted whether or not the rest of the
     request succeeded.
+
+    `release` lets go of the upload's quota reservation once that is done: until
+    the scan has made the rows and the stamp has charged them, the reservation is
+    the only thing counting those bytes against the account. Called whatever
+    happens, and at once when nothing landed.
     """
     if not names:
+        if release is not None:
+            release()
         return
     landed = list(names)
     # Every landed name is scanned in; only names that had no row before the
@@ -2994,17 +2994,21 @@ def _schedule_registration(background_tasks, fs_slug: str, names: list[str],
         # rather than returning satisfied. Bounded, because an administrator who
         # keeps pressing Stop must not have us starting scans for ever.
         pending = list(landed)
-        for _attempt in range(3):
-            await scan_after_write()
-            pending = await _stamp_uploaded(fs_slug, pending, owner_id, only=stampable,
-                                            newer_than=newer_than)
-            if not pending:
-                return
-        logger.warning(
-            "Uploaded ROM(s) %s still have no row after three scans; they are "
-            "owned by nobody and count against no quota",
-            ", ".join(pending),
-        )
+        try:
+            for _attempt in range(3):
+                await scan_after_write()
+                pending = await _stamp_uploaded(fs_slug, pending, owner_id, only=stampable,
+                                                newer_than=newer_than)
+                if not pending:
+                    return
+            logger.warning(
+                "Uploaded ROM(s) %s still have no row after three scans; they are "
+                "owned by nobody and count against no quota",
+                ", ".join(pending),
+            )
+        finally:
+            if release is not None:
+                release()
 
     background_tasks.add_task(_run)
 
@@ -3130,6 +3134,13 @@ def _may_replace(request, existing) -> bool:
 #: 33 MB. 64 MB leaves that most of a doubling of room and still says no to
 #: anything that is plainly not subchannel data.
 _MAX_SUBCHANNEL_BYTES = 64 * 1024 * 1024
+
+
+def _is_this_file(row, dest_path: Path) -> bool:
+    """Whether the ROM row is the file at `dest_path`: the same name, exactly,
+    in the same folder. What sending a better dump under its name replaces."""
+    return (getattr(row, "fs_name", None) == dest_path.name
+            and Path(getattr(row, "fs_path", "") or "") == dest_path.parent)
 
 
 def _sidecar_disc(name: str, directory):
@@ -3270,6 +3281,15 @@ async def upload_roms(
 
     remaining = await quota.ceiling_for(user, max_rom_bytes())
 
+    # The bytes this request writes, counted with the account's other streams at
+    # every chunk: `remaining` was the room when the request arrived, and the
+    # account's other uploads grow while this one runs. Held until the scan has
+    # registered the files and the stamp has charged them - see the `release`
+    # handed to _schedule_registration - and let go at once if this request
+    # dies some other way.
+    reservation = await quota.reservation_for(user)
+    reservation.open()
+
     # The platform row, once, before anything is written. A shelf that has never
     # been scanned has no row - the ordinary state of every platform until its
     # first ROM lands - and then no name on it belongs to anybody.
@@ -3287,258 +3307,299 @@ async def upload_roms(
     # can become this account's; see _stamp_uploaded.
     brought_here: list[str] = []
 
-    for upload in files:
-        if not upload.filename:
-            continue
-        safe_name = Path(upload.filename).name          # strip any directory parts
-        # Refused here rather than written and forgotten. The scan only ever
-        # registers a file whose extension it recognises, and a file with no row
-        # has no owner, so it counts against nobody's quota and can be repeated
-        # for ever - the volume fills while My uploads reads zero. Asked of the
-        # scanner's own list, so the two cannot drift apart.
-        # `Path(...).suffix`, the same question the scanner asks. It used to
-        # read the letters after the last dot, and the comment below claimed the
-        # two could not drift apart - which was false for a name that is nothing
-        # but a dot and an extension. `.iso` gave "iso" here and passed, while
-        # the scanner sees a hidden file with no suffix and never makes a row:
-        # no row, no owner, no quota, repeatable for ever. Once per extension.
-        suffix = Path(safe_name).suffix.lower()
-        recognised = suffix.lstrip(".") in _scanner._ROM_EXTENSIONS
-        # ...and the files that belong TO a disc rather than being one. A .sbi is
-        # 452 bytes of subchannel data that a PAL PlayStation disc needs to boot
-        # past its LibCrypt check; the scanner deliberately keeps these out of
-        # _ROM_EXTENSIONS, so this gate refused them - and the download path
-        # applies the same rule, which left no way at all to put one on the
-        # shelf. Admitted here only beside the disc they name, which is the same
-        # question `subchannel_files_for` asks when it goes looking for them.
-        sidecar_disc = None if recognised else _sidecar_disc(safe_name, dest_dir)
-        if sidecar_disc is not None:
-            recognised = True
-        if not recognised:
-            rejected.append({
-                "filename": safe_name,
-                "threat": None,
-                "action": "extension_not_recognised",
-            })
-            continue
-        dest_path = dest_dir / safe_name
-        # Asked before the open, because "wb" truncates on the first byte and
-        # there is no undoing that. A name nobody holds is free; one somebody
-        # else holds is refused rather than silently overwritten.
-        #
-        # >>> ASKED WHETHER OR NOT A FILE SITS AT THE DESTINATION. It used to be
-        # asked only `if dest_path.exists()`, and a ROM is identified by
-        # (platform, file name) with no uniqueness: a copy under `roms/`, or the
-        # same name in other letter case - the database compares names without
-        # regard to case - is the SAME row while `exists()` here saw nothing.
-        # The file was written, the scan folded it into that row, and the stamp
-        # made the uploader the owner of a ROM carrying other accounts' saves,
-        # which the delete button then removed together with the original.
-        existing = (
-            await rom_handler.get_by_fs_name(_row.id, safe_name)
-            if _row is not None else None
-        )
-        if existing is None and sidecar_disc is None:
-            brought_here.append(safe_name)
-        if dest_path.exists() or existing is not None:
-            # A subchannel file has no row of its own and never will, so asking
-            # the database about its name can only ever answer "nobody's". It is
-            # not nobody's: it belongs to the disc it is named after, the same
-            # disc that let it through the gate two dozen lines up. So the
-            # question about a .sbi is a question about that disc's owner, which
-            # keeps replacing one exactly as hard as replacing the disc itself.
-            if existing is None and sidecar_disc is not None and _row is not None:
-                existing = await rom_handler.get_by_fs_name(
-                    _row.id, sidecar_disc.name)
-            if not _may_replace(request, existing):
+    try:
+        for upload in files:
+            if not upload.filename:
+                continue
+            safe_name = Path(upload.filename).name          # strip any directory parts
+            # Refused here rather than written and forgotten. The scan only ever
+            # registers a file whose extension it recognises, and a file with no row
+            # has no owner, so it counts against nobody's quota and can be repeated
+            # for ever - the volume fills while My uploads reads zero. Asked of the
+            # scanner's own list, so the two cannot drift apart.
+            # `Path(...).suffix`, the same question the scanner asks. It used to
+            # read the letters after the last dot, and the comment below claimed the
+            # two could not drift apart - which was false for a name that is nothing
+            # but a dot and an extension. `.iso` gave "iso" here and passed, while
+            # the scanner sees a hidden file with no suffix and never makes a row:
+            # no row, no owner, no quota, repeatable for ever. Once per extension.
+            suffix = Path(safe_name).suffix.lower()
+            recognised = suffix.lstrip(".") in _scanner._ROM_EXTENSIONS
+            # ...and the files that belong TO a disc rather than being one. A .sbi is
+            # 452 bytes of subchannel data that a PAL PlayStation disc needs to boot
+            # past its LibCrypt check; the scanner deliberately keeps these out of
+            # _ROM_EXTENSIONS, so this gate refused them - and the download path
+            # applies the same rule, which left no way at all to put one on the
+            # shelf. Admitted here only beside the disc they name, which is the same
+            # question `subchannel_files_for` asks when it goes looking for them.
+            sidecar_disc = None if recognised else _sidecar_disc(safe_name, dest_dir)
+            if sidecar_disc is not None:
+                recognised = True
+            if not recognised:
+                rejected.append({
+                    "filename": safe_name,
+                    "threat": None,
+                    "action": "extension_not_recognised",
+                })
+                continue
+            dest_path = dest_dir / safe_name
+            # Asked before the open, because "wb" truncates on the first byte and
+            # there is no undoing that. A name nobody holds is free; one somebody
+            # else holds is refused rather than silently overwritten.
+            #
+            # >>> ASKED WHETHER OR NOT A FILE SITS AT THE DESTINATION. It used to be
+            # asked only `if dest_path.exists()`, and a ROM is identified by
+            # (platform, file name) with no uniqueness: a copy under `roms/`, or the
+            # same name in other letter case - the database compares names without
+            # regard to case - is the SAME row while `exists()` here saw nothing.
+            # The file was written, the scan folded it into that row, and the stamp
+            # made the uploader the owner of a ROM carrying other accounts' saves,
+            # which the delete button then removed together with the original.
+            existing = (
+                await rom_handler.get_by_fs_name(_row.id, safe_name)
+                if _row is not None else None
+            )
+            if existing is None and sidecar_disc is None:
+                brought_here.append(safe_name)
+            if (existing is not None and sidecar_disc is None
+                    and not _is_this_file(existing, dest_path)):
+                # The database calls it the same ROM, and it is not the same FILE:
+                # another spelling of the name, or the copy in the other folder. So
+                # it is not a replacement - the original stays and this lands beside
+                # it, and the scan folds both into the one row that is already
+                # charged. A second copy that counts against nothing, repeatable
+                # with every spelling. Refused for everybody: even an administrator
+                # making one leaves two files for one row.
                 rejected.append({
                     "filename": safe_name,
                     "threat": None,
                     "action": "already_here",
                 })
                 continue
-            # And give back what this file already costs the account, because it
-            # is about to stop existing.
+            if dest_path.exists() or existing is not None:
+                # A subchannel file has no row of its own and never will, so asking
+                # the database about its name can only ever answer "nobody's". It is
+                # not nobody's: it belongs to the disc it is named after, the same
+                # disc that let it through the gate two dozen lines up. So the
+                # question about a .sbi is a question about that disc's owner, which
+                # keeps replacing one exactly as hard as replacing the disc itself.
+                if existing is None and sidecar_disc is not None and _row is not None:
+                    existing = await rom_handler.get_by_fs_name(
+                        _row.id, sidecar_disc.name)
+                if not _may_replace(request, existing):
+                    rejected.append({
+                        "filename": safe_name,
+                        "threat": None,
+                        "action": "already_here",
+                    })
+                    continue
+                # And give back what this file already costs the account, because it
+                # is about to stop existing.
+                #
+                # The library upload has done this since `room_left = quota - used +
+                # replacing`, and for the reason it states there: an account whose
+                # allowance is filled by the very file it is swapping is the
+                # ordinary reason to send the same name twice. This route counted
+                # the replacement on top of the original, so a bad dump could never
+                # be swapped for a good one by anybody near their limit.
+                #
+                # Only the row for THIS file, and only if the bytes are already
+                # charged to this account. A subchannel file is governed by its
+                # DISC's row, so crediting that would hand back a whole disc's worth
+                # of room for replacing 452 bytes.
+                if (existing is not None
+                        and getattr(existing, "fs_name", None) == safe_name
+                        and getattr(existing, "published_by", None)
+                        == getattr(user, "id", None)):
+                    remaining += int(getattr(existing, "fs_size_bytes", 0) or 0)
+                    reservation.give_back(int(getattr(existing, "fs_size_bytes", 0) or 0))
+            # Into a .part, never straight onto the destination.
             #
-            # The library upload has done this since `room_left = quota - used +
-            # replacing`, and for the reason it states there: an account whose
-            # allowance is filled by the very file it is swapping is the
-            # ordinary reason to send the same name twice. This route counted
-            # the replacement on top of the original, so a bad dump could never
-            # be swapped for a good one by anybody near their limit.
+            # `open(dest_path, "wb")` truncates on the first byte, and the length of
+            # a streamed body is not known until it ends - so a replacement that
+            # turns out not to fit was discovered with the old file already emptied,
+            # and the branch below then unlinked what was left of it. An account
+            # near its limit sending a better dump of a ROM it already has lost both
+            # copies: the refusal destroyed the thing it refused to replace. Every
+            # other failure caught here - a full volume, a name the filesystem will
+            # not take, a browser that goes away - left the wreckage wearing the
+            # name of something that used to work.
             #
-            # Only the row for THIS file, and only if the bytes are already
-            # charged to this account. A subchannel file is governed by its
-            # DISC's row, so crediting that would hand back a whole disc's worth
-            # of room for replacing 452 bytes.
-            if (existing is not None
-                    and getattr(existing, "fs_name", None) == safe_name
-                    and getattr(existing, "published_by", None)
-                    == getattr(user, "id", None)):
-                remaining += int(getattr(existing, "fs_size_bytes", 0) or 0)
-        # Into a .part, never straight onto the destination.
-        #
-        # `open(dest_path, "wb")` truncates on the first byte, and the length of
-        # a streamed body is not known until it ends - so a replacement that
-        # turns out not to fit was discovered with the old file already emptied,
-        # and the branch below then unlinked what was left of it. An account
-        # near its limit sending a better dump of a ROM it already has lost both
-        # copies: the refusal destroyed the thing it refused to replace. Every
-        # other failure caught here - a full volume, a name the filesystem will
-        # not take, a browser that goes away - left the wreckage wearing the
-        # name of something that used to work.
-        #
-        # Same shape and same reason as the library upload, which has done this
-        # correctly since `_part_path` was written; this route never got it.
-        part_path = dest_path.with_name(dest_path.name + ".part")
-        try:
-            written = 0
-            with open(part_path, "wb") as fh:
-                while chunk := await upload.read(256 * 1024):
-                    written += len(chunk)
-                    # Not `if remaining and ...`. `remaining` is a byte count,
-                    # and it was doubling as the flag saying a limit applies -
-                    # so a file that consumed the budget exactly (allowed, the
-                    # refusal being "greater than") left it at zero, which is
-                    # falsy, and every later file in the same request was
-                    # written with nothing checking it. `ceiling_for` never
-                    # answers zero: it returns the install-wide ceiling when no
-                    # account limit applies and raises when there is no room, so
-                    # there is no "no limit" state for this to stand for.
-                    if written > remaining:
-                        # Stop where the limit is, and take the partial file with
-                        # us. Leaving it would cost the disk exactly what the
-                        # refusal was meant to save. The .part is all there is to
-                        # take: whatever was already on the shelf under this name
-                        # has not been touched.
-                        fh.close()
-                        part_path.unlink(missing_ok=True)
-                        raise HTTPException(
-                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                            detail=(f"{safe_name} exceeds the space left for this "
-                                    f"account ({remaining} bytes)."),
-                        )
-                    fh.write(chunk)
-            # Refused rather than counted, because counting it would not hold:
-            # the row that carries a charge is the one thing this file can never
-            # have. Rejected like an unrecognised extension rather than ending
-            # the whole request - the other files in it are still the right
-            # thing to do, and one oversized .sbi is a mistake, not an attack on
-            # the rest of the upload.
-            if sidecar_disc is not None and written > _MAX_SUBCHANNEL_BYTES:
+            # Same shape and same reason as the library upload, which has done this
+            # correctly since `_part_path` was written; this route never got it.
+            part_path = dest_path.with_name(dest_path.name + ".part")
+            try:
+                written = 0
+                with open(part_path, "wb") as fh:
+                    while chunk := await upload.read(256 * 1024):
+                        written += len(chunk)
+                        # Not `if remaining and ...`. `remaining` is a byte count,
+                        # and it was doubling as the flag saying a limit applies -
+                        # so a file that consumed the budget exactly (allowed, the
+                        # refusal being "greater than") left it at zero, which is
+                        # falsy, and every later file in the same request was
+                        # written with nothing checking it. `ceiling_for` never
+                        # answers zero: it returns the install-wide ceiling when no
+                        # account limit applies and raises when there is no room, so
+                        # there is no "no limit" state for this to stand for.
+                        if written > remaining:
+                            # Stop where the limit is, and take the partial file with
+                            # us. Leaving it would cost the disk exactly what the
+                            # refusal was meant to save. The .part is all there is to
+                            # take: whatever was already on the shelf under this name
+                            # has not been touched.
+                            fh.close()
+                            part_path.unlink(missing_ok=True)
+                            raise HTTPException(
+                                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                                detail=(f"{safe_name} exceeds the space left for this "
+                                        f"account ({remaining} bytes)."),
+                            )
+                        # And against the account's other uploads, which grow
+                        # while this one runs: `remaining` was read when the
+                        # request arrived.
+                        if not await reservation.take(len(chunk)):
+                            fh.close()
+                            part_path.unlink(missing_ok=True)
+                            raise HTTPException(
+                                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                                detail=(f"{safe_name} does not fit beside this account's "
+                                        f"other uploads."),
+                            )
+                        fh.write(chunk)
+                # Refused rather than counted, because counting it would not hold:
+                # the row that carries a charge is the one thing this file can never
+                # have. Rejected like an unrecognised extension rather than ending
+                # the whole request - the other files in it are still the right
+                # thing to do, and one oversized .sbi is a mistake, not an attack on
+                # the rest of the upload.
+                if sidecar_disc is not None and written > _MAX_SUBCHANNEL_BYTES:
+                    part_path.unlink(missing_ok=True)
+                    reservation.give_back(written)
+                    rejected.append({
+                        "filename": safe_name,
+                        "threat": None,
+                        "action": "subchannel_too_large",
+                    })
+                    continue
+                remaining -= written
+
+                if scan_uploads:
+                    try:
+                        # The .part, before it takes the name. A threat never wears
+                        # the name of a real ROM even for the moment between the
+                        # write and the verdict.
+                        res = await _clam.scan_file(str(part_path))
+                        note_unscanned(res, "ROM upload", safe_name)
+                        if res.get("status") == "FOUND":
+                            threat = res.get("threat") or "unknown"
+                            action_res = await _clam.quarantine_or_delete(
+                                str(part_path), threat, triggered_by=actor
+                            )
+                            logger.warning(
+                                "ClamAV blocked ROM upload '%s' (threat=%s, action=%s)",
+                                safe_name, threat, action_res.get("action"),
+                            )
+                            rejected.append({
+                                "filename": safe_name,
+                                "threat":   threat,
+                                "action":   action_res.get("action"),
+                            })
+                            part_path.unlink(missing_ok=True)
+                            reservation.give_back(written)
+                            continue
+                    except Exception:
+                        logger.exception("ClamAV scan failed for %s; allowing upload", part_path)
+
+                # Only here does the upload take the name, and this is the one
+                # moment the file that was already there stops existing. Everything
+                # above can fail without costing anybody a ROM.
+                os.replace(part_path, dest_path)
+                saved.append(safe_name)
+                if sidecar_disc is None:
+                    to_register.append(safe_name)
+                logger.info("ROM uploaded: %s -> %s", safe_name, dest_dir)
+            except HTTPException as refusal:
                 part_path.unlink(missing_ok=True)
-                rejected.append({
-                    "filename": safe_name,
-                    "threat": None,
-                    "action": "subchannel_too_large",
-                })
-                continue
-            remaining -= written
+                reservation.give_back(written)
+                # Our own refusal, already the right answer. Re-wrapping it as a 500
+                # below would tell the caller the server broke rather than that they
+                # ran out of room.
+                #
+                # What already landed is registered anyway. Ten files in one request
+                # and a refusal on the ninth used to leave eight on the disk with no
+                # scan behind them: no rows, so no owner, so nothing counted against
+                # the quota that had just refused them.
+                _schedule_registration(background_tasks, fs_slug, to_register, getattr(user, "id", None),
+                                       new_names=brought_here, newer_than=newest_before,
+                                       release=reservation.close)
+                # RETURNED, not raised, and that is the whole of this fix.
+                #
+                # FastAPI attaches the BackgroundTasks object to the response it
+                # builds from what the endpoint RETURNS. When the endpoint raises,
+                # Starlette's exception handling builds a fresh JSONResponse with no
+                # background at all, and the task scheduled one line above is
+                # dropped - so the registration this branch exists for never ran,
+                # on the one path it was written for.
+                #
+                # The test that was meant to hold this called `await tasks()` itself,
+                # which is exactly what the server does not do here, so it stayed
+                # green over a fix that did nothing. The framework's actual behaviour
+                # is pinned in test_a_refusal_still_runs_its_background_work.py.
+                return JSONResponse(
+                    {"detail": refusal.detail},
+                    status_code=refusal.status_code,
+                    headers=getattr(refusal, "headers", None),
+                )
+            except Exception as exc:
+                # The half-written .part goes; the file that was already on the
+                # shelf under this name was never opened and stays as it was.
+                part_path.unlink(missing_ok=True)
+                reservation.give_back(written)
+                # Both halves of what the refusal branch above learned, because the
+                # files that landed before this failure are in exactly the state
+                # that branch exists to prevent: on the disk, with no row, so owned
+                # by nobody and counting against no quota. Registered, and RETURNED
+                # rather than raised - FastAPI attaches background tasks only to a
+                # response the endpoint returns, so raising here would schedule the
+                # work and then throw it away.
+                _schedule_registration(background_tasks, fs_slug, to_register,
+                                       getattr(user, "id", None), new_names=brought_here, newer_than=newest_before,
+                                       release=reservation.close)
+                # The reason goes to the log under a reference. Its text is the
+                # full path the file could not be written to, which is the
+                # server's layout, and this route is an uploader's (1.0.34 audit,
+                # #16); an administrator still gets it, to fix it.
+                return JSONResponse(
+                    {"detail": safe_detail(exc, request, what=f"Failed to save {safe_name}")},
+                    status_code=500,
+                )
 
-            if scan_uploads:
-                try:
-                    # The .part, before it takes the name. A threat never wears
-                    # the name of a real ROM even for the moment between the
-                    # write and the verdict.
-                    res = await _clam.scan_file(str(part_path))
-                    note_unscanned(res, "ROM upload", safe_name)
-                    if res.get("status") == "FOUND":
-                        threat = res.get("threat") or "unknown"
-                        action_res = await _clam.quarantine_or_delete(
-                            str(part_path), threat, triggered_by=actor
-                        )
-                        logger.warning(
-                            "ClamAV blocked ROM upload '%s' (threat=%s, action=%s)",
-                            safe_name, threat, action_res.get("action"),
-                        )
-                        rejected.append({
-                            "filename": safe_name,
-                            "threat":   threat,
-                            "action":   action_res.get("action"),
-                        })
-                        part_path.unlink(missing_ok=True)
-                        continue
-                except Exception:
-                    logger.exception("ClamAV scan failed for %s; allowing upload", part_path)
+        # Auto-trigger scan so freshly uploaded ROMs show up in the library without
+        # requiring a manual Scan click, and then record who put them there.
+        #
+        # This used to skip its own scan whenever one was already running, on the
+        # grounds that the scan in flight would pick the files up. That is true of
+        # the ROWS and was never true of the OWNER, which nothing else was recording
+        # - so an upload made during a scan, and in fact every upload, belonged to
+        # nobody: it counted against no quota, and the account that made it could
+        # not delete it, because that rule reads an owner. The coalescing helper the
+        # downloader uses handles both cases: it shares one scan across a burst and
+        # waits for one that is already under way, under the same scanner lock.
+        _schedule_registration(background_tasks, fs_slug, to_register, getattr(user, "id", None),
+                               new_names=brought_here, newer_than=newest_before,
+                               release=reservation.close)
 
-            # Only here does the upload take the name, and this is the one
-            # moment the file that was already there stops existing. Everything
-            # above can fail without costing anybody a ROM.
-            os.replace(part_path, dest_path)
-            saved.append(safe_name)
-            if sidecar_disc is None:
-                to_register.append(safe_name)
-            logger.info("ROM uploaded: %s -> %s", safe_name, dest_dir)
-        except HTTPException as refusal:
-            part_path.unlink(missing_ok=True)
-            # Our own refusal, already the right answer. Re-wrapping it as a 500
-            # below would tell the caller the server broke rather than that they
-            # ran out of room.
-            #
-            # What already landed is registered anyway. Ten files in one request
-            # and a refusal on the ninth used to leave eight on the disk with no
-            # scan behind them: no rows, so no owner, so nothing counted against
-            # the quota that had just refused them.
-            _schedule_registration(background_tasks, fs_slug, to_register, getattr(user, "id", None),
-                                   new_names=brought_here, newer_than=newest_before)
-            # RETURNED, not raised, and that is the whole of this fix.
-            #
-            # FastAPI attaches the BackgroundTasks object to the response it
-            # builds from what the endpoint RETURNS. When the endpoint raises,
-            # Starlette's exception handling builds a fresh JSONResponse with no
-            # background at all, and the task scheduled one line above is
-            # dropped - so the registration this branch exists for never ran,
-            # on the one path it was written for.
-            #
-            # The test that was meant to hold this called `await tasks()` itself,
-            # which is exactly what the server does not do here, so it stayed
-            # green over a fix that did nothing. The framework's actual behaviour
-            # is pinned in test_a_refusal_still_runs_its_background_work.py.
-            return JSONResponse(
-                {"detail": refusal.detail},
-                status_code=refusal.status_code,
-                headers=getattr(refusal, "headers", None),
-            )
-        except Exception as exc:
-            # The half-written .part goes; the file that was already on the
-            # shelf under this name was never opened and stays as it was.
-            part_path.unlink(missing_ok=True)
-            logger.error("Failed to save ROM %s: %s", safe_name, exc)
-            # Both halves of what the refusal branch above learned, because the
-            # files that landed before this failure are in exactly the state
-            # that branch exists to prevent: on the disk, with no row, so owned
-            # by nobody and counting against no quota. Registered, and RETURNED
-            # rather than raised - FastAPI attaches background tasks only to a
-            # response the endpoint returns, so raising here would schedule the
-            # work and then throw it away.
-            _schedule_registration(background_tasks, fs_slug, to_register,
-                                   getattr(user, "id", None), new_names=brought_here, newer_than=newest_before)
-            return JSONResponse(
-                {"detail": f"Failed to save {safe_name}: {exc}"},
-                status_code=500,
-            )
-
-    # Auto-trigger scan so freshly uploaded ROMs show up in the library without
-    # requiring a manual Scan click, and then record who put them there.
-    #
-    # This used to skip its own scan whenever one was already running, on the
-    # grounds that the scan in flight would pick the files up. That is true of
-    # the ROWS and was never true of the OWNER, which nothing else was recording
-    # - so an upload made during a scan, and in fact every upload, belonged to
-    # nobody: it counted against no quota, and the account that made it could
-    # not delete it, because that rule reads an owner. The coalescing helper the
-    # downloader uses handles both cases: it shares one scan across a burst and
-    # waits for one that is already under way, under the same scanner lock.
-    _schedule_registration(background_tasks, fs_slug, to_register, getattr(user, "id", None),
-                           new_names=brought_here, newer_than=newest_before)
-
-    return {
-        "ok": True,
-        "saved": saved,
-        "rejected": rejected,
-        "platform_slug": slug,
-        "scan_triggered": bool(saved),
-    }
+        return {
+            "ok": True,
+            "saved": saved,
+            "rejected": rejected,
+            "platform_slug": slug,
+            "scan_triggered": bool(saved),
+        }
+    except BaseException:
+        reservation.close()
+        raise
 
 
 # ── Scan ──────────────────────────────────────────────────────────────────────

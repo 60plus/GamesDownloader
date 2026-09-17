@@ -21,6 +21,10 @@
             <input v-model="form.library_path" type="text" class="sr-input" placeholder="/data/games/roms" />
           </div>
         </div>
+        <!-- No platform folders are made in a library that is not there: made
+             inside the container they would be invisible over FTP and gone on
+             the next recreate. -->
+        <p v-if="libraryMissing" class="sr-path-warn" role="alert">{{ t('roms.library_path_missing') }}</p>
 
         <div class="sr-divider" />
 
@@ -411,8 +415,10 @@ const COVER_TYPES = [
   { value: 'support-2D',       label: t('roms.cover_support2d') },
   { value: 'support-texture',  label: t('roms.cover_support_texture') },
   { value: 'ss',               label: t('roms.cover_ss') },
-  { value: 'ss-titre',         label: t('roms.cover_ss_title') },
-  { value: 'marquee',          label: t('roms.cover_marquee') },
+  // ScreenScraper's own names. The old 'ss-titre' and 'marquee' matched nothing,
+  // so either one chosen as the cover quietly gave the box instead.
+  { value: 'sstitle',          label: t('roms.cover_ss_title') },
+  { value: 'screenmarquee',    label: t('roms.cover_marquee') },
   { value: 'fanart',           label: t('roms.cover_fanart') },
   { value: 'background',       label: t('roms.cover_background') },
 ]
@@ -425,14 +431,15 @@ const REGIONS = [
   { value: 'ss',  label: t('roms.region_ss') },
 ]
 
+// Every tick here is one the scrape obeys (handler/metadata/scrape_presets.py).
+// A manual, maps, a box texture, a title screen and a marquee have nowhere to
+// be kept yet, so they are not offered until ROMs get folders of their own.
 const EXTRAS_GROUPS = [
-  { label: t('roms.extras_box'),         items: [{ value: 'box-texture',  label: 'Texture' }] },
-  { label: t('roms.extras_manual'),      items: [{ value: 'manuel', label: 'Manual (PDF)' }, { value: 'maps', label: 'Maps' }] },
-  { label: t('roms.extras_screenshots'), items: [{ value: 'ss', label: 'Gameplay' }, { value: 'ss-titre', label: 'Title Screen' }] },
+  { label: t('roms.extras_screenshots'), items: [{ value: 'ss', label: 'Gameplay' }] },
   { label: t('roms.extras_video'),       items: [{ value: 'video', label: 'Video' }, { value: 'video-normalized', label: 'Normalized' }] },
   { label: t('roms.extras_support'),     items: [{ value: 'support-2D', label: 'Support 2D' }, { value: 'support-texture', label: 'Texture' }] },
   { label: t('roms.extras_bezel'),       items: [{ value: 'bezel-16-9', label: 'Bezel 16:9' }, { value: 'bezel-4-3', label: 'Bezel 4:3' }] },
-  { label: t('roms.extras_art'),         items: [{ value: 'marquee', label: 'Marquee' }, { value: 'fanart', label: 'Fan Art' }, { value: 'background', label: 'Background' }] },
+  { label: t('roms.extras_art'),         items: [{ value: 'fanart', label: 'Fan Art' }, { value: 'background', label: 'Background' }, { value: 'wheel', label: 'Wheel' }, { value: 'steamgrid', label: 'Steam Grid' }, { value: 'pictoliste', label: 'Picto' }] },
 ]
 
 // ── General settings ──────────────────────────────────────────────────────────
@@ -455,6 +462,9 @@ const form = ref({
 })
 const saving   = ref(false)
 const savedMsg = ref('')
+// The server says whether the library path exists; it makes the platform
+// folders only where it does.
+const libraryMissing = ref(false)
 
 // The setting stores bytes; the field speaks GiB, because nobody sizes a disc
 // image in bytes. A cleared or nonsense value goes back to 0, which the server
@@ -492,13 +502,18 @@ async function load() {
     form.value.launchbox_enabled  = data.launchbox_enabled  ?? true
     form.value.max_rom_bytes      = data.max_rom_bytes      ?? 64 * GIB
     form.value.hash_max_bytes     = data.hash_max_bytes     ?? 0
+    // Read back like the rest: save() posts the whole form, and an interval
+    // left at the placeholder turned the scheduled scan off on every save.
+    form.value.scan_interval_hours = data.scan_interval_hours ?? 0
+    libraryMissing.value = !!data.library_path_missing
   } catch { /* ignore */ }
 }
 
 async function save() {
   saving.value = true; savedMsg.value = ''
   try {
-    await client.post('/settings/roms', form.value)
+    const { data } = await client.post('/settings/roms', form.value)
+    libraryMissing.value = !!data?.library_path_missing
     savedMsg.value = t('roms.saved')
     setTimeout(() => { savedMsg.value = '' }, 2500)
   } catch { savedMsg.value = t('roms.save_failed') }
@@ -517,7 +532,13 @@ const savingPresets    = ref(false)
 const savedPresetsMsg  = ref('')
 const presetOpen       = reactive<Record<string, boolean>>({})
 
-const DEFAULT_PRESET: ScrapePreset = { cover_type: 'box-2D', region: 'wor', extras: [] }
+// The server's default: the cover, which is always fetched, and gameplay
+// screenshots. Everything else is ticked by somebody who wants it.
+const DEFAULT_PRESET: ScrapePreset = { cover_type: 'box-2D', region: 'wor', extras: ['ss'] }
+
+function freshPreset(): ScrapePreset {
+  return { ...DEFAULT_PRESET, extras: [...DEFAULT_PRESET.extras] }
+}
 
 // The exclusion cards key on `slug`, which is what the routes look a platform up
 // by. `fs_slug` is shown underneath because it is the folder name somebody sees
@@ -531,7 +552,7 @@ function togglePresetOpen(fsSlug: string) {
 
 function ensurePreset(fsSlug: string) {
   if (!presets.value[fsSlug]) {
-    presets.value[fsSlug] = { ...DEFAULT_PRESET, extras: [] }
+    presets.value[fsSlug] = freshPreset()
   }
 }
 
@@ -554,9 +575,11 @@ async function loadPresets() {
     const saved: Record<string, ScrapePreset> = prRes.data || {}
     const merged: Record<string, ScrapePreset> = {}
     for (const p of pRes.data) {
+      // The server hands back what each saved preset really does, default
+      // included, so its list is taken as it comes.
       merged[p.fs_slug] = saved[p.fs_slug]
-        ? { ...DEFAULT_PRESET, ...saved[p.fs_slug], extras: saved[p.fs_slug].extras ?? [] }
-        : { ...DEFAULT_PRESET, extras: [] }
+        ? { ...freshPreset(), ...saved[p.fs_slug], extras: [...(saved[p.fs_slug].extras ?? DEFAULT_PRESET.extras)] }
+        : freshPreset()
     }
     presets.value = merged
   } catch { /* ignore */ }
@@ -689,6 +712,10 @@ onMounted(() => { load(); loadPresets() })
 .sr-btn--ghost:hover:not(:disabled) { background: rgba(255,255,255,.1); color: var(--text); }
 .sr-btn:disabled { opacity: .5; cursor: not-allowed; }
 .sr-saved-msg { font-size: var(--fs-sm, 12px); color: var(--success, #4ade80); }
+.sr-path-warn {
+  margin: 0 16px 10px; padding: 6px 10px; border-radius: 6px;
+  background: rgba(248,113,113,.1); color: #f87171; font-size: var(--fs-sm, 12px);
+}
 
 /* ── Scraper rows ─────────────────────────────────────────────────────────── */
 .sr-scraper-row {

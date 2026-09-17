@@ -195,8 +195,16 @@ BROAD = {"Exception", "BaseException"}
 ALLOWED = {("handler/config/connection_tests.py", "_bez_poswiadczen")}
 
 
+#: What an answer can be built with. `JSONResponse` since 1.0.35: the ROM upload
+#: RETURNS its refusal (a raised one drops the background registration), and
+#: this guard, reading only `HTTPException`, never saw it hand out the path of
+#: the file it could not write (1.0.34 audit, #16).
+_ANSWERS = {"HTTPException", "JSONResponse"}
+
+
 def _sites():
-    """Every `except Exception as e:` that puts `e` into an HTTPException."""
+    """Every `except Exception as e:` that puts `e` into an HTTPException or a
+    JSONResponse, raised or returned."""
     out = []
     for path in sorted(BACKEND.rglob("*.py")):
         rel = path.relative_to(BACKEND).as_posix()
@@ -215,15 +223,19 @@ def _sites():
             if not any(t in BROAD for t in types):
                 continue
             for n in ast.walk(h):
-                if not (isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call)):
+                if isinstance(n, (ast.Raise, ast.Return)):
+                    call = n.exc if isinstance(n, ast.Raise) else n.value
+                else:
                     continue
-                f = n.exc.func
-                if (getattr(f, "id", None) or getattr(f, "attr", None)) != "HTTPException":
+                if not isinstance(call, ast.Call):
+                    continue
+                f = call.func
+                if (getattr(f, "id", None) or getattr(f, "attr", None)) not in _ANSWERS:
                     continue
                 if not any(isinstance(x, ast.Name) and x.id == h.name
-                           for x in ast.walk(n.exc)):
+                           for x in ast.walk(call)):
                     continue
-                out.append((rel, n.lineno, ast.unparse(n.exc)))
+                out.append((rel, n.lineno, ast.unparse(call)))
     return out
 
 
