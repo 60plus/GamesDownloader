@@ -63,7 +63,8 @@ export interface AdminDashboard {
   users: { total: number; admins: number };
   top_user: { username: string; avatar_path: string | null; downloads: number; bytes: number } | null;
   top_platforms: Array<{ name: string; slug: string; logo: string | null; count: number; bytes: number }>;
-  recently_added: Array<{ kind: string; id: number; title: string; cover: string | null; platform_slug: string | null; created_at: string | null }>;
+  // `aspect`: a ROM's cover shape ("16/11"); absent for a library game.
+  recently_added: Array<{ kind: string; id: number; title: string; cover: string | null; platform_slug: string | null; created_at: string | null; aspect?: string | null }>;
   top_downloaded: Array<{ id: number; title: string; cover: string | null; source: string; downloads: number; bytes: number }>;
   server_health: ServerHealth;
   requests: { counts: Record<string, number>; pending: number };
@@ -225,6 +226,36 @@ export async function exportSaves(romId?: number): Promise<void> {
                   romId != null ? { rom_id: romId } : undefined);
 }
 
+/** A game this user has two memory cards for. A rename merge met a card on both
+ * of its rows, kept `current` in use and set the other aside; the owner chooses.
+ * `current` is null when the card in use has been deleted since. */
+export interface SaveConflict {
+  id: number; rom_id: number;
+  rom_name: string | null; rom_cover: string | null; rom_cover_aspect: string | null;
+  rom_support: string | null; platform_name: string | null; platform_slug: string | null;
+  platform_fs_slug: string | null;
+  set_aside: {
+    file_name: string; file_size_bytes: number; emulator_core: string | null;
+    content_hash: string | null; updated_at: string | null; set_aside_at: string | null;
+    export_url: string;
+  };
+  current: GameSaveItem | null;
+}
+/** The games this user has two memory cards for (only their own, always). */
+export async function saveConflicts(): Promise<SaveConflict[]> {
+  const { data } = await client.get("/savestates/conflicts");
+  return Array.isArray(data) ? (data as SaveConflict[]) : [];
+}
+/** Keep one of the two cards; the other is deleted. "set_aside" puts the other
+ * card in use, where a browser that has not changed its card since will load it. */
+export async function resolveSaveConflict(id: number, keep: "current" | "set_aside"): Promise<void> {
+  await client.post(`/savestates/conflicts/${id}/resolve`, { keep });
+}
+/** Download the set-aside card as an archive before choosing. */
+export async function exportSaveConflict(id: number): Promise<void> {
+  await _download(`/savestates/conflicts/${id}/export`, "battery.zip");
+}
+
 /** What became of one entry in an import. `no_rom`: the archive names a game
  * this server does not have. `need_target`: a bare .state/.srm arrived without
  * being told which game it belongs to. */
@@ -263,6 +294,7 @@ export async function deleteRequest(id: number): Promise<void> { await client.de
 const dashboardActions = {
   me, admin, queue, onQueue, onHealth, gameDownloaders, saves, deleteSaveState, deleteBatterySave,
   exportSaveState, exportBatterySave, exportSaves, importSaves,
+  saveConflicts, resolveSaveConflict, exportSaveConflict,
   requests, setRequestStatus, deleteRequest,
 };
 

@@ -23,9 +23,15 @@ So the data is carried across instead, and what the schema allows decides how:
   rom_save_states  one row per (user, rom, slot). Slots are numbers, so a
                    colliding state takes the first free one.
   rom_saves        ONE memory card per (user, rom). Two cards cannot become
-                   one, so a collision there refuses the whole merge and leaves
-                   both rows - two entries a person can sort out, rather than a
-                   card replaced without asking.
+                   one, and picking a winner would delete a save nobody was
+                   asked about.
+
+A card collision used to refuse the whole merge and leave both rows. That left
+exactly the state this file opens by describing - the old row missing, hidden,
+one click from losing its saves - for the one person with the most at stake. So
+the merge goes ahead, and the second card is set aside for its owner to choose
+between (`rom_save_conflicts`): the file stays on disk, the owner is told, and
+nothing is decided for them.
 """
 
 from __future__ import annotations
@@ -48,7 +54,7 @@ async def db():
     from models.rom import Rom
     from models.rom_platform import RomPlatform
     from models.rom_play import RomPlay
-    from models.rom_save_state import RomSave, RomSaveState
+    from models.rom_save_state import RomSave, RomSaveConflict, RomSaveState
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool)
     async with engine.begin() as conn:
@@ -56,6 +62,7 @@ async def db():
         await conn.run_sync(Rom.__table__.create)
         await conn.run_sync(RomSaveState.__table__.create)
         await conn.run_sync(RomSave.__table__.create)
+        await conn.run_sync(RomSaveConflict.__table__.create)
         await conn.run_sync(RomPlay.__table__.create)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -79,10 +86,10 @@ def _state(rom_id, user_id, slot, name="s.state"):
                         file_name=name, file_path="/saves", file_size_bytes=1)
 
 
-def _card(rom_id, user_id, name="card.srm"):
+def _card(rom_id, user_id, name="card.srm", **extra):
     from models.rom_save_state import RomSave
     return RomSave(rom_id=rom_id, user_id=user_id, file_name=name,
-                   file_path="/saves", file_size_bytes=1)
+                   file_path="/saves", file_size_bytes=1, **extra)
 
 
 def _play(rom_id, user_id, count, seconds, when):
@@ -103,7 +110,7 @@ async def test_a_savestate_that_would_collide_takes_a_free_slot(db):
         session.add(_state(NEW, ME, 0, "w trakcie.state"))
         await session.commit()
 
-        assert await RomHandler().move_player_data(NEW, OLD, session=session) is True
+        assert await RomHandler().move_player_data(NEW, OLD, session=session) == []
         await session.commit()
 
         mine = (await session.execute(
@@ -168,30 +175,64 @@ async def test_two_play_records_for_one_game_add_up(db):
 # ── The memory card, which is the one that cannot be merged ──────────────────
 
 @pytest.mark.asyncio
-async def test_two_memory_cards_refuse_the_whole_move(db):
-    """One card per game per person. Picking a winner would delete a save
-    nobody was asked about, so nothing moves and the caller keeps both rows."""
+async def test_a_second_memory_card_is_set_aside_for_its_owner(db):
+    """One card per game per person. The card already on the surviving row
+    stays in use; the other is set aside, with everything needed to put it back,
+    and the rest of the move goes ahead."""
     from handler.database.rom_handler import RomHandler
     from models.rom_play import RomPlay
-    from models.rom_save_state import RomSave
+    from models.rom_save_state import RomSave, RomSaveConflict
 
+    written = datetime(2026, 9, 6, 21, 10, 0)
     async with db() as session:
         session.add(_card(OLD, ME, "przed.srm"))
-        session.add(_card(NEW, ME, "w trakcie.srm"))
+        session.add(_card(NEW, ME, "w trakcie.srm", content_hash="ab" * 16,
+                          emulator_core="snes9x", updated_at=written))
         session.add(_play(NEW, ME, 1, 60, datetime(2026, 9, 6)))
         await session.commit()
 
-        assert await RomHandler().move_player_data(NEW, OLD, session=session) is False
+        assert await RomHandler().move_player_data(NEW, OLD, session=session) == [ME], (
+            "metoda nie mowi, czyja karta zostala odlozona"
+        )
         await session.commit()
 
         cards = (await session.execute(select(RomSave))).scalars().all()
+        aside = (await session.execute(select(RomSaveConflict))).scalars().all()
         plays = (await session.execute(select(RomPlay))).scalars().all()
 
-    assert {(c.rom_id, c.file_name) for c in cards} == {
-        (OLD, "przed.srm"), (NEW, "w trakcie.srm")}, "karta pamieci zostala ruszona"
-    assert [p.rom_id for p in plays] == [NEW], (
-        "odmowa przeniesienia zostawila polowe danych po drugiej stronie"
+    assert {(c.rom_id, c.file_name) for c in cards} == {(OLD, "przed.srm")}, (
+        "karta na zostajacym wpisie zostala ruszona"
     )
+    assert len(aside) == 1, "druga karta nie zostala odlozona - zniknie z usunietym wierszem"
+    card = aside[0]
+    assert (card.rom_id, card.user_id) == (OLD, ME), "odlozona karta nie wisi na zostajacym wpisie"
+    assert (card.file_path, card.file_name) == ("/saves", "w trakcie.srm"), (
+        "odlozona karta nie wie, gdzie lezy jej plik"
+    )
+    assert card.content_hash == "ab" * 16 and card.emulator_core == "snes9x"
+    assert card.card_updated_at == written, "zginelo, kiedy ta karta byla zapisana"
+    assert [p.rom_id for p in plays] == [OLD], "historia grania nie przeszla mimo odlozenia karty"
+
+
+@pytest.mark.asyncio
+async def test_a_card_collision_for_one_person_does_not_hold_up_another(db):
+    from handler.database.rom_handler import RomHandler
+    from models.rom_save_state import RomSave, RomSaveConflict
+
+    async with db() as session:
+        session.add(_card(OLD, ME, "moja przed.srm"))
+        session.add(_card(NEW, ME, "moja w trakcie.srm"))
+        session.add(_card(NEW, SOMEBODY_ELSE, "ich.srm"))
+        await session.commit()
+
+        assert await RomHandler().move_player_data(NEW, OLD, session=session) == [ME]
+        await session.commit()
+
+        cards = (await session.execute(select(RomSave))).scalars().all()
+        aside = (await session.execute(select(RomSaveConflict))).scalars().all()
+
+    assert {(c.rom_id, c.user_id) for c in cards} == {(OLD, ME), (OLD, SOMEBODY_ELSE)}
+    assert [c.user_id for c in aside] == [ME]
 
 
 @pytest.mark.asyncio
@@ -204,7 +245,7 @@ async def test_one_card_on_each_side_for_different_people_is_fine(db):
         session.add(_card(NEW, ME, "moja.srm"))
         await session.commit()
 
-        assert await RomHandler().move_player_data(NEW, OLD, session=session) is True
+        assert await RomHandler().move_player_data(NEW, OLD, session=session) == []
         await session.commit()
 
         cards = (await session.execute(select(RomSave))).scalars().all()
@@ -231,7 +272,7 @@ async def test_a_played_arrival_is_merged_after_its_data_is_carried_across(monke
 
     async def _move(from_id, to_id):
         moved.append((from_id, to_id))
-        return True
+        return []
 
     async def _adopt(old_id, new_id):
         adopted.append((old_id, new_id))
@@ -247,21 +288,53 @@ async def test_a_played_arrival_is_merged_after_its_data_is_carried_across(monke
     assert merged == 1
 
 
+@pytest.fixture
+def told(monkeypatch):
+    """What the scan says over the socket, and to whom."""
+    from handler import socket_handler
+
+    said: list = []
+
+    async def _emit(event, data, **target):
+        said.append((event, data, target))
+
+    monkeypatch.setattr(socket_handler, "emit_event", _emit)
+    return said
+
+
 @pytest.mark.asyncio
-async def test_a_refused_move_leaves_both_rows_alone(monkeypatch):
+async def test_a_set_aside_card_still_merges_and_tells_its_owner(monkeypatch, told):
+    """The merge used to stop here and leave the old row missing. Now it goes
+    ahead, and the one person who has two cards is told - nobody else."""
     from handler.filesystem import rom_scanner as scanner
 
     adopted: list = []
 
-    monkeypatch.setattr(scanner.rom_handler, "move_player_data", _fake_async(False))
-    monkeypatch.setattr(scanner.rom_handler, "adopt_renamed",
-                        lambda *a, **k: adopted.append(a))
+    async def _adopt(old_id, new_id):
+        adopted.append((old_id, new_id))
+        return True
 
-    assert await scanner._merge_renamed([(OLD, NEW)], {NEW}) == 0
-    assert adopted == [], (
-        "scalenie poszlo mimo odmowy przeniesienia, wiec karta pamieci zniknela "
-        "przez kaskade"
+    monkeypatch.setattr(scanner.rom_handler, "move_player_data", _fake_async([ME]))
+    monkeypatch.setattr(scanner.rom_handler, "adopt_renamed", _adopt)
+
+    assert await scanner._merge_renamed([(OLD, NEW)], {NEW}) == 1
+    assert adopted == [(OLD, NEW)], "scalenie nie poszlo, stary wpis zostaje brakujacy"
+    assert [(event, target) for event, _data, target in told] == [
+        ("saves:conflict", {"to_user": ME})], (
+        f"wlasciciel dwoch kart nie dostal wiadomosci albo dostal ja ktos inny: {told}"
     )
+    assert told[0][1].get("rom_id") == OLD
+
+
+@pytest.mark.asyncio
+async def test_nobody_is_told_when_no_card_was_set_aside(monkeypatch, told):
+    from handler.filesystem import rom_scanner as scanner
+
+    monkeypatch.setattr(scanner.rom_handler, "move_player_data", _fake_async([]))
+    monkeypatch.setattr(scanner.rom_handler, "adopt_renamed", _fake_async(True))
+
+    assert await scanner._merge_renamed([(OLD, NEW)], {NEW}) == 1
+    assert told == []
 
 
 @pytest.mark.asyncio
@@ -273,7 +346,7 @@ async def test_an_untouched_arrival_is_merged_without_moving_anything(monkeypatc
 
     async def _move(from_id, to_id):
         moved.append((from_id, to_id))
-        return True
+        return []
 
     monkeypatch.setattr(scanner.rom_handler, "move_player_data", _move)
     monkeypatch.setattr(scanner.rom_handler, "adopt_renamed", _fake_async(True))

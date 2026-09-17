@@ -21,6 +21,15 @@ per row, each in its own transaction, does not finish - so the run was undone
 PARTWAY, and the second cancellation went through the inner `except Exception`
 untouched, skipping the progress reset and the log.
 
+IT ASKED FOR THE RENAMES TOO LATE, AND THE SHUTDOWN EXIT NEVER ASKED. The
+vanished side of a rename is found by its missing flag, and the failure exit put
+the flags back first - so it found no donor and took nothing back, while the log
+said the library was as it was. The shutdown exit, kept cheap for the reason
+above, left every rename row in place. Either way the old row holding the
+artwork, the saves and the play history stayed missing for good. Both exits now
+read the renames before the flags go back and take those rows back in one
+statement, which fits the shutdown clock.
+
 IT SAID NOTHING. Both other exits announce, because the views hang their reload
 on that event and the sidebar clears its spinner there. This one left the bar
 turning, and the watchdog eventually filled it in as an ordinary finish.
@@ -61,7 +70,12 @@ def scan(tmp_path, monkeypatch):
         (shelf / name).write_bytes(b"x" * 10)
 
     made: list[int] = []
-    log: dict = {"restored": [], "deleted": [], "announced": []}
+    log: dict = {"restored": [], "deleted": [], "taken_back": [], "announced": []}
+    # The missing flag as the database keeps it. The fake that stood here before
+    # answered with the vanished row whatever the flags said, and that is how a
+    # failure exit asking for renames AFTER putting the flags back looked like it
+    # worked: the real query filters on the flag and, by then, finds nothing.
+    missing: set[int] = set()
 
     async def _upsert(*a, **k):
         if len(made) == 3:
@@ -69,12 +83,26 @@ def scan(tmp_path, monkeypatch):
         made.append(101 + len(made))
         return types.SimpleNamespace(id=made[-1])
 
+    async def _mark_all_missing(*a, **k):
+        missing.add(55)
+
     async def _restore(ids, **k):
         log["restored"].append(sorted(ids))
+        missing.difference_update(ids)
+
+    async def _vanished(*a, **k):
+        return [
+            {"id": 55, "platform_id": 1, "sha1": SHA, "size": 10,
+             "track_of": None, "ext": "iso"},
+        ] if 55 in missing else []
 
     async def _delete(rom_id, **k):
         log["deleted"].append(rom_id)
         return True
+
+    async def _delete_many(rom_ids, **k):
+        log["taken_back"].append(sorted(rom_ids))
+        return len(rom_ids)
 
     async def _announce(stats):
         log["announced"].append(dict(stats))
@@ -86,19 +114,18 @@ def scan(tmp_path, monkeypatch):
         _fake_async(types.SimpleNamespace(id=1, slug="psx", fs_slug="psx",
                                           scan_exclude=None)))
     monkeypatch.setattr(scanner.rom_handler, "present_ids", _fake_async([55]))
-    monkeypatch.setattr(scanner.rom_handler, "mark_all_missing", _nothing)
+    monkeypatch.setattr(scanner.rom_handler, "mark_all_missing", _mark_all_missing)
     monkeypatch.setattr(scanner.rom_handler, "restore_present", _restore)
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name", _fake_async(None))
     monkeypatch.setattr(scanner.rom_handler, "upsert", _upsert)
     monkeypatch.setattr(scanner.rom_handler, "delete", _delete)
+    monkeypatch.setattr(scanner.rom_handler, "delete_many", _delete_many, raising=False)
     monkeypatch.setattr(scanner, "_announce_scan_finished", _announce)
     # One vanished row that matches the FIRST arrival, so a rename really is on
     # the table - and two arrivals that match nothing, which is the ordinary
-    # case of a scan simply finding new games.
-    monkeypatch.setattr(scanner.rom_handler, "missing_with_hashes", _fake_async([
-        {"id": 55, "platform_id": 1, "sha1": SHA, "size": 10,
-         "track_of": None, "ext": "iso"},
-    ]))
+    # case of a scan simply finding new games. The vanished row is only there
+    # while its flag says so.
+    monkeypatch.setattr(scanner.rom_handler, "missing_with_hashes", _vanished)
     monkeypatch.setattr(scanner.rom_handler, "rows_for_matching", _fake_async([
         {"id": 101, "platform_id": 1, "sha1": SHA, "size": 10,
          "track_of": None, "ext": "iso"},
@@ -132,11 +159,12 @@ async def test_only_the_rows_a_rename_would_have_absorbed_are_taken_back(scan):
     with pytest.raises(RuntimeError):
         await scanner.scan_roms_path(str(root))
 
-    assert log["deleted"] == [101], (
-        "awaria kasuje CALY dorobek biegu, a powodem kasowania jest wylacznie "
-        "adopcja: wiersz bez dawcy nastepny skan po prostu znajdzie znowu, "
-        "za to skasowany trzeba przeczytac i przehaszowac od zera"
+    assert log["taken_back"] == [[101]], (
+        "awaria nie cofa wiersza zmiany nazwy (dawca szukany po przywroceniu flag), "
+        "albo cofa CALY dorobek biegu - a wiersz bez dawcy nastepny skan po prostu "
+        "znajdzie znowu"
     )
+    assert log["deleted"] == [], "cofanie wiersz po wierszu zamiast jednym poleceniem"
 
 
 @pytest.mark.asyncio
@@ -163,7 +191,7 @@ async def test_a_row_somebody_played_is_never_taken_back(scan, monkeypatch):
     with pytest.raises(RuntimeError):
         await scanner.scan_roms_path(str(root))
 
-    assert log["deleted"] == [], (
+    assert log["deleted"] == [] and log["taken_back"] == [], (
         "skasowano wiersz, przeciw ktoremu ktos juz gral albo zapisywal"
     )
 
@@ -196,13 +224,7 @@ async def test_the_original_failure_still_reaches_the_caller(scan):
 
 # ── Shutting down ────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_a_cancelled_scan_does_the_cheap_half_only(scan, monkeypatch):
-    """A container stop cancels the background task and gives it five seconds.
-    A delete per row, each its own transaction, does not finish in that - so the
-    run gets undone PARTWAY, which is the one outcome nobody wanted."""
-    scanner, root, log, made = scan
-
+def _cancelled_after_three(scanner, made, monkeypatch):
     async def _cancel(*a, **k):
         if len(made) == 3:
             raise asyncio.CancelledError()
@@ -210,6 +232,15 @@ async def test_a_cancelled_scan_does_the_cheap_half_only(scan, monkeypatch):
         return types.SimpleNamespace(id=made[-1])
 
     monkeypatch.setattr(scanner.rom_handler, "upsert", _cancel)
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_scan_does_the_cheap_half_only(scan, monkeypatch):
+    """A container stop cancels the background task and gives it five seconds.
+    A delete per row, each its own transaction, does not finish in that - so the
+    run gets undone PARTWAY, which is the one outcome nobody wanted."""
+    scanner, root, log, made = scan
+    _cancelled_after_three(scanner, made, monkeypatch)
 
     with pytest.raises(asyncio.CancelledError):
         await scanner.scan_roms_path(str(root))
@@ -219,6 +250,62 @@ async def test_a_cancelled_scan_does_the_cheap_half_only(scan, monkeypatch):
         "przy zamykaniu serwera skaner zabiera sie za kasowanie wierszy po "
         "jednym, a ma na to piec sekund - wiec bieg zostaje cofniety CZESCIOWO"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_rename_is_taken_back_on_shutdown_too(scan, monkeypatch):
+    """Left in place, the new row is one no later scan creates again, so the old
+    row with the saves is never paired and stays missing for good. One
+    statement for the renames only, not a delete per row this run made."""
+    scanner, root, log, made = scan
+    _cancelled_after_three(scanner, made, monkeypatch)
+
+    with pytest.raises(asyncio.CancelledError):
+        await scanner.scan_roms_path(str(root))
+
+    assert log["taken_back"] == [[101]], (
+        "zamkniecie serwera w trakcie skanu zostawia wiersz zmiany nazwy, wiec "
+        "stary wiersz z zapisami zostaje brakujacy na zawsze"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_played_rename_is_not_taken_back_on_shutdown_either(scan, monkeypatch):
+    scanner, root, log, made = scan
+    _cancelled_after_three(scanner, made, monkeypatch)
+    monkeypatch.setattr(scanner.rom_handler, "ids_with_player_data", _fake_async({101}))
+
+    with pytest.raises(asyncio.CancelledError):
+        await scanner.scan_roms_path(str(root))
+
+    assert log["taken_back"] == [] and log["deleted"] == [], (
+        "przy zamykaniu skasowano wiersz, przeciw ktoremu ktos juz gral"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_second_cancellation_while_reading_still_puts_the_flags_back(
+    scan, monkeypatch
+):
+    """Reading the renames first widens the window a second cancellation can
+    land in. Landing there must cost the renames, never the flags: a library
+    left with its shelf marked missing is the outcome all of this exists to
+    prevent."""
+    scanner, root, log, made = scan
+    _cancelled_after_three(scanner, made, monkeypatch)
+
+    async def _cancelled_again(*a, **k):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(scanner.rom_handler, "missing_with_hashes", _cancelled_again)
+
+    with pytest.raises(asyncio.CancelledError):
+        await scanner.scan_roms_path(str(root))
+
+    assert log["restored"] == [[55]], (
+        "drugie anulowanie w trakcie czytania zmian nazw zostawilo biblioteke ciemna"
+    )
+    assert log["taken_back"] == []
 
 
 # ── The rule both exits share ────────────────────────────────────────────────
@@ -301,3 +388,41 @@ async def test_a_played_arrival_is_still_a_rename(monkeypatch):
                         _fake_async({101}))
 
     assert await scanner._renames_this_run([101], {55}, {1}) == [(55, 101)]
+
+
+# ── The one statement, against a real database ──────────────────────────────
+
+@pytest.mark.asyncio
+async def test_taking_rows_back_in_one_statement_takes_exactly_those():
+    """Everything above fakes the handler, which is how the flag bug hid. The
+    bulk delete the shutdown exit now relies on is run for real."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from handler.database.rom_handler import rom_handler
+    from models.rom import Rom
+    from models.rom_platform import RomPlatform
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool)
+    async with engine.begin() as conn:
+        await conn.run_sync(RomPlatform.__table__.create)
+        await conn.run_sync(Rom.__table__.create)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with maker() as session:
+            session.add(RomPlatform(id=1, fs_slug="psx", slug="playstation", name="PlayStation"))
+            for rom_id in (55, 101, 102):
+                session.add(Rom(id=rom_id, platform_id=1, fs_name=f"{rom_id}.iso",
+                                fs_name_no_ext=str(rom_id), fs_extension="iso",
+                                fs_path="/roms/psx", fs_size_bytes=10))
+            await session.commit()
+
+            assert await rom_handler.delete_many([], session=session) == 0
+            assert await rom_handler.delete_many([101], session=session) == 1
+            await session.commit()
+
+            left = (await session.execute(select(Rom.id).order_by(Rom.id))).scalars().all()
+            assert left == [55, 102], "zabrano inne wiersze niz podane"
+    finally:
+        await engine.dispose()

@@ -1,12 +1,15 @@
 """ROM emulator save data models.
 
-RomSaveState - full emulator savestate (snapshot at any moment, .state file)
-RomSave      - battery save / SRAM (.srm file, tied to in-game save slots)
+RomSaveState    - full emulator savestate (snapshot at any moment, .state file)
+RomSave         - battery save / SRAM (.srm file, tied to in-game save slots)
+RomSaveConflict - a second battery save for the same person and game, set aside
 """
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, String, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from models.base import Base
@@ -70,3 +73,37 @@ class RomSave(Base):
     emulator_core: Mapped[str | None] = mapped_column(String(50), nullable=True)
     slot: Mapped[str | None] = mapped_column(String(255), nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(32), nullable=True)  # MD5 for dedup
+
+
+class RomSaveConflict(Base):
+    """A second memory card for one person and one game, waiting for them to choose.
+
+    `rom_saves` holds one card per (user, rom), and a rename can bring two
+    together: the file is renamed, a scan makes a new row for it, the player
+    saves against that row before the scan pairs it with the old one - which
+    already had a card. Keeping the old row's card and dropping the new one, or
+    the other way round, would delete a save nobody was asked about.
+
+    So the merge keeps the card already on the surviving row in use and sets the
+    other one aside here: the file stays where it was written, this row says
+    whose it is and where it lies, and its owner picks which one to keep. Only
+    that person is told, and only they can see it.
+    """
+
+    __tablename__ = "rom_save_conflicts"
+
+    rom_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("roms.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+
+    file_name: Mapped[str] = mapped_column(String(512))
+    file_path: Mapped[str] = mapped_column(String(1024))
+    file_size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+
+    emulator_core: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    slot: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # When the set-aside card itself was last written, which is what the person
+    # compares. `created_at` is only when the merge set it aside.
+    card_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -19,11 +19,20 @@ export const useSocketStore = defineStore("socket", () => {
   const torrentCallbacks: Array<(kind: string, data: Record<string, unknown>) => void> = [];
   const dashboardQueueCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   const dashboardHealthCallbacks: Array<(data: Record<string, unknown>) => void> = [];
+  const saveConflictCallbacks: Array<(data: Record<string, unknown>) => void> = [];
   let liveSubs = 0; // dashboard-live consumers sharing this per-tab socket
 
   function onDownloadJob(cb: (data: Record<string, unknown>) => void) {
     downloadJobCallbacks.push(cb);
     return () => { const i = downloadJobCallbacks.indexOf(cb); if (i >= 0) downloadJobCallbacks.splice(i, 1) }
+  }
+
+  // A scan merged a renamed game and set aside a second memory card of THIS
+  // account's (saves:conflict, sent to the owner only). Kept in a registry like
+  // the others, so it survives the socket reconnecting.
+  function onSaveConflict(cb: (data: Record<string, unknown>) => void) {
+    saveConflictCallbacks.push(cb);
+    return () => { const i = saveConflictCallbacks.indexOf(cb); if (i >= 0) saveConflictCallbacks.splice(i, 1) }
   }
 
   // A CHD conversion reports over chd:convert, one payload carrying the whole
@@ -172,6 +181,9 @@ export const useSocketStore = defineStore("socket", () => {
     socket.value.on("chd:convert", (data) => {
       chdCallbacks.forEach(cb => cb(data));
     });
+    socket.value.on("saves:conflict", (data) => {
+      saveConflictCallbacks.forEach(cb => cb(data));
+    });
     socket.value.on("roms:scan_progress", (data) => {
       romScanCallbacks.forEach(cb => cb("progress", data));
     });
@@ -239,5 +251,5 @@ export const useSocketStore = defineStore("socket", () => {
     liveSubs = 0;
   }
 
-  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onChdConvert, onRomScan, onUrlUpload, onRomSource, onTorrent, onDashboardQueue, onDashboardHealth, connect, disconnect, reconnectWithFreshToken };
+  return { socket, syncProgress, scrapeProgress, downloadProgress, downloadJobUpdate, onDownloadJob, onPackaging, onChdConvert, onRomScan, onUrlUpload, onRomSource, onTorrent, onDashboardQueue, onDashboardHealth, onSaveConflict, connect, disconnect, reconnectWithFreshToken };
 });

@@ -20,6 +20,10 @@ Routes:
 
   GET    /quota                      user's storage usage vs quota
   GET    /my                         all user's saves+states (for profile page)
+
+  GET    /conflicts                  games this user has two memory cards for
+  GET    /conflicts/{id}/export      the set-aside card, as a backup archive
+  POST   /conflicts/{id}/resolve     keep "current" or "set_aside"
 """
 
 from __future__ import annotations
@@ -31,9 +35,12 @@ import os
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
@@ -45,7 +52,7 @@ from handler.config.config_handler import config_handler
 from handler.database.rom_handler import rom_handler, rom_platform_handler
 from handler.database.save_state_handler import save_state_handler
 from handler.metadata.rom_platform_map import rom_cover_aspect as _rom_cover_aspect
-from models.rom_save_state import RomSave, RomSaveState
+from models.rom_save_state import RomSave, RomSaveConflict, RomSaveState
 from utils.save_archive import build_archive, member_bytes, read_manifest
 from utils.save_paths import (
     saves_dir as _saves_dir,
@@ -293,6 +300,173 @@ async def my_data(request: Request) -> dict:
         "used_bytes":  used,
         "limit_bytes": limit,
     }
+
+
+# ── Two memory cards for one game ─────────────────────────────────────────────
+# A rename merge that met a card on both rows kept the surviving row's card in
+# use and set the other aside (`RomSaveConflict`). Its owner chooses which one
+# stays. Only the owner: every lookup here is by (id, the asking account), and a
+# card that is somebody else's answers 404, administrators included.
+
+class SaveConflictChoice(BaseModel):
+    keep: Literal["current", "set_aside"]
+
+
+def _set_aside_dict(card: RomSaveConflict) -> dict:
+    written = card.card_updated_at or card.created_at
+    return {
+        "file_name":       card.file_name,
+        "file_size_bytes": card.file_size_bytes,
+        "emulator_core":   card.emulator_core,
+        "content_hash":    card.content_hash,
+        # When the card itself was written, which is what the person compares.
+        "updated_at":      written.isoformat() if written else None,
+        "set_aside_at":    card.created_at.isoformat() if card.created_at else None,
+        "export_url":      f"/api/savestates/conflicts/{card.id}/export",
+    }
+
+
+def _remove_set_aside_file(card: RomSaveConflict, keep: set[str] = frozenset()) -> None:
+    """Delete a set-aside card's file, refusing anything outside the saves tree.
+
+    The path is a stored string. The row that points at it is the only thing
+    that decides it is safe to remove, so it is checked here rather than trusted,
+    and the directory the merge left it in goes too once it is empty.
+    """
+    from utils.save_paths import saves_root
+
+    path = Path(card.file_path) / card.file_name
+    if str(path) in keep:
+        return
+    try:
+        target = path.resolve()
+        root = saves_root().resolve()
+    except OSError:
+        return
+    if root not in target.parents:
+        logger.warning("Refusing to delete set-aside card %s: outside %s", path, root)
+        return
+    try:
+        target.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Could not remove set-aside card %s", target, exc_info=True)
+        return
+    here = target.parent
+    while here != root and root in here.parents:
+        try:
+            here.rmdir()
+        except OSError:
+            break
+        here = here.parent
+
+
+@protected_route(router.get, "/conflicts", scopes=[Scopes.ROMS_READ])
+async def list_save_conflicts(request: Request) -> list[dict]:
+    """The games this account has two memory cards for, with both described."""
+    user_id = request.state.user.id
+    cards = await save_state_handler.list_conflicts_for_user(user_id)
+    roms = await rom_handler.get_by_ids([c.rom_id for c in cards])
+    listed = []
+    for card in cards:
+        rom = roms.get(card.rom_id)
+        current = await save_state_handler.get_save_for_rom(user_id, card.rom_id)
+        listed.append({
+            "id":        card.id,
+            "rom_id":    card.rom_id,
+            **_rom_info(rom),
+            "set_aside": _set_aside_dict(card),
+            "current":   _save_dict(current, rom) if current else None,
+        })
+    return listed
+
+
+@protected_route(router.get, "/conflicts/{conflict_id}/export", scopes=[Scopes.ROMS_READ])
+async def export_save_conflict(request: Request, conflict_id: int):
+    """The set-aside card as a backup archive, so neither choice has to be final."""
+    user_id = request.state.user.id
+    card = await save_state_handler.get_conflict(conflict_id, user_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Save not found")
+    if not (Path(card.file_path) / card.file_name).is_file():
+        raise HTTPException(status_code=404, detail="Save file missing on disk")
+    roms = await rom_handler.get_by_ids([card.rom_id])
+    rom = roms.get(card.rom_id)
+    # The archive describes a battery save; the card's own write time is the one
+    # a restore should carry, not the moment the merge set it aside.
+    row = SimpleNamespace(
+        id=card.id, rom_id=card.rom_id, slot=card.slot, emulator_core=card.emulator_core,
+        file_path=card.file_path, file_name=card.file_name, created_at=card.created_at,
+        updated_at=card.card_updated_at or card.updated_at,
+    )
+    path = await run_in_threadpool(build_archive, _archive_items([row], roms, "battery"))
+    stem = _safe_stem((rom.name if rom else None) or f"rom {card.rom_id}")
+    return _zip_response(path, f"{stem} battery (set aside).zip")
+
+
+@protected_route(router.post, "/conflicts/{conflict_id}/resolve", scopes=[Scopes.ROMS_READ])
+async def resolve_save_conflict(
+    request: Request, conflict_id: int, body: SaveConflictChoice,
+) -> dict:
+    """Keep one of the two cards and throw the other away.
+
+    "current" keeps the card already in use. "set_aside" puts the other one in
+    its place, written where the player reads a card from, with its hash, so a
+    browser that last synced the old card takes the new one at the next launch.
+    """
+    user_id = request.state.user.id
+    card = await save_state_handler.get_conflict(conflict_id, user_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Save not found")
+
+    if body.keep == "current":
+        await run_in_threadpool(_remove_set_aside_file, card)
+        await save_state_handler.delete_conflict(card.id, user_id)
+        return {"ok": True, "kept": "current"}
+
+    rom = await _get_rom_or_404(card.rom_id)
+    source = Path(card.file_path) / card.file_name
+    try:
+        data = await run_in_threadpool(source.read_bytes)
+    except OSError:
+        data = b""
+    if not data:
+        # Keeping it would put an empty card in place of a real one. The choice
+        # stays open, so the card in use can still be kept.
+        raise HTTPException(status_code=409, detail={
+            "error":   "set_aside_missing",
+            "message": "The set-aside card is no longer on disk, so it cannot be kept.",
+        })
+
+    platform_slug = rom.platform.fs_slug if rom.platform else "unknown"
+    save_dir = _saves_dir(platform_slug, rom.id, user_id)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    stem = _safe_stem(rom.name or rom.fs_name_no_ext or f"rom_{rom.id}")
+    target = save_dir / f"{stem}.srm"
+    # Written beside and moved into place, so a failure halfway never leaves the
+    # card in use cut short.
+    partial = save_dir / f".{stem}.srm.part"
+    partial.write_bytes(data)
+    os.replace(partial, target)
+
+    existing = await save_state_handler.get_save_for_rom(user_id, rom.id)
+    values = {
+        "file_name":       target.name,
+        "file_path":       str(save_dir),
+        "file_size_bytes": len(data),
+        "emulator_core":   card.emulator_core or (existing.emulator_core if existing else None),
+        "slot":            (existing.slot if existing else None) or card.slot,
+        "content_hash":    hashlib.md5(data).hexdigest(),
+        "updated_at":      datetime.utcnow(),
+    }
+    if existing:
+        _drop_stale_files(existing, keep={str(target)})
+        save = await save_state_handler.update_save(existing.id, values)
+    else:
+        # The card in use was deleted since the merge; this one simply takes over.
+        save = await save_state_handler.upsert_save(user_id, rom.id, values)
+    await run_in_threadpool(_remove_set_aside_file, card, {str(target)})
+    await save_state_handler.delete_conflict(card.id, user_id)
+    return {"ok": True, "kept": "set_aside", "save": _save_dict(save, rom)}
 
 
 # ── States ────────────────────────────────────────────────────────────────────

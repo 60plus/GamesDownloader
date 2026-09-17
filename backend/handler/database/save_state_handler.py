@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from decorators.database import begin_session
 from handler.database.base_handler import DBBaseHandler
-from models.rom_save_state import RomSave, RomSaveState
+from models.rom_save_state import RomSave, RomSaveConflict, RomSaveState
 
 
 class SaveStateHandler(DBBaseHandler):
@@ -57,12 +57,20 @@ class SaveStateHandler(DBBaseHandler):
     @begin_session
     async def list_saves_for_rom(
         self, rom_id: int, *, session: AsyncSession = None
-    ) -> list[RomSave]:
-        """Every player's battery saves for one ROM. See list_states_for_rom."""
+    ) -> list[RomSave | RomSaveConflict]:
+        """Every player's battery saves for one ROM. See list_states_for_rom.
+
+        Including a second card set aside by a rename merge. The deletion routes
+        collect a game's saves through here, and a set-aside card left out would
+        stay on disk once its row cascaded away, with nothing able to name it.
+        """
         result = await session.execute(
             select(RomSave).where(RomSave.rom_id == rom_id)
         )
-        return list(result.scalars().all())
+        aside = await session.execute(
+            select(RomSaveConflict).where(RomSaveConflict.rom_id == rom_id)
+        )
+        return list(result.scalars().all()) + list(aside.scalars().all())
 
     @begin_session
     async def list_all_states_for_user(
@@ -227,6 +235,43 @@ class SaveStateHandler(DBBaseHandler):
         if save is None or save.user_id != user_id:
             return False
         await session.delete(save)
+        return True
+
+    # ── A second card, set aside ──────────────────────────────────────────────
+    # Only ever by owner. A memory card is private, so these answer about the
+    # asking account and nobody else, an administrator included.
+
+    @begin_session
+    async def list_conflicts_for_user(
+        self, user_id: int, *, session: AsyncSession = None
+    ) -> list[RomSaveConflict]:
+        result = await session.execute(
+            select(RomSaveConflict)
+            .where(RomSaveConflict.user_id == user_id)
+            .order_by(RomSaveConflict.created_at.desc(), RomSaveConflict.id.desc())
+        )
+        return list(result.scalars().all())
+
+    @begin_session
+    async def get_conflict(
+        self, conflict_id: int, user_id: int, *, session: AsyncSession = None
+    ) -> RomSaveConflict | None:
+        result = await session.execute(
+            select(RomSaveConflict).where(
+                RomSaveConflict.id == conflict_id,
+                RomSaveConflict.user_id == user_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    @begin_session
+    async def delete_conflict(
+        self, conflict_id: int, user_id: int, *, session: AsyncSession = None
+    ) -> bool:
+        card = await session.get(RomSaveConflict, conflict_id)
+        if card is None or card.user_id != user_id:
+            return False
+        await session.delete(card)
         return True
 
     # ── Quota ─────────────────────────────────────────────────────────────────

@@ -75,6 +75,71 @@
       <button class="gsp-notice-x" @click="notice = ''"><i class="mdi mdi-close"></i></button>
     </div>
 
+    <!-- Two memory cards for one game. A scan merged a renamed game where this
+         person had saved a card under both names; one card stayed in use and the
+         other was set aside. Both are shown with when they were written, either
+         can be downloaded first, and the person keeps one. Above everything else
+         in the panel, because it is the one thing here waiting on them. -->
+    <div v-for="c in conflicts" :key="'cf' + c.id" class="gsp-conflict">
+      <div class="gsp-conflict-h">
+        <img v-if="c.rom_support" :src="c.rom_support" class="gsp-conflict-art" :alt="conflictName(c)" />
+        <i v-else class="mdi mdi-sd gsp-conflict-ico"></i>
+        <div class="gsp-conflict-txt">
+          <div class="gsp-conflict-title">
+            {{ t("profile.card_conflict_title", "Two memory cards for {game}").replace("{game}", conflictName(c)) }}
+          </div>
+          <div class="gsp-conflict-why">
+            {{ t("profile.card_conflict_why", "The game's file was renamed while you had a save under both names. Keep the card you want - you can download either one first.") }}
+          </div>
+        </div>
+      </div>
+      <div class="gsp-conflict-cards">
+        <div class="gsp-conflict-card">
+          <span class="gsp-conflict-tag">{{ t("profile.card_in_use", "In use") }}</span>
+          <template v-if="c.current">
+            <div class="gsp-conflict-meta">
+              <span>{{ fmtDate(savedAt(c.current)) }}</span>
+              <span class="gsp-sep">·</span>
+              <span>{{ fmtBytes(c.current.file_size_bytes) }}</span>
+            </div>
+            <div class="gsp-conflict-acts">
+              <button class="gsp-chip gsp-chip--act" :disabled="!!busy" @click="exportBattery(c.current.id)">
+                <span v-if="busy === 'sv' + c.current.id" class="gsp-spin gsp-spin--sm"></span>
+                <i v-else class="mdi mdi-tray-arrow-down"></i>
+                {{ t("common.download", "Download") }}
+              </button>
+              <button class="gsp-chip gsp-chip--act gsp-chip--on" :disabled="!!busy" @click="keepCard(c, 'current')">
+                <span v-if="busy === 'ck' + c.id + 'current'" class="gsp-spin gsp-spin--sm"></span>
+                <i v-else class="mdi mdi-check"></i>
+                {{ t("profile.card_keep", "Keep this one") }}
+              </button>
+            </div>
+          </template>
+          <div v-else class="gsp-conflict-meta gsp-tile-meta--muted">{{ t("profile.card_none_in_use", "No card in use") }}</div>
+        </div>
+        <div class="gsp-conflict-card">
+          <span class="gsp-conflict-tag gsp-conflict-tag--aside">{{ t("profile.card_set_aside", "Set aside") }}</span>
+          <div class="gsp-conflict-meta">
+            <span>{{ fmtDate(c.set_aside.updated_at) }}</span>
+            <span class="gsp-sep">·</span>
+            <span>{{ fmtBytes(c.set_aside.file_size_bytes) }}</span>
+          </div>
+          <div class="gsp-conflict-acts">
+            <button class="gsp-chip gsp-chip--act" :disabled="!!busy" @click="exportConflict(c.id)">
+              <span v-if="busy === 'cf' + c.id" class="gsp-spin gsp-spin--sm"></span>
+              <i v-else class="mdi mdi-tray-arrow-down"></i>
+              {{ t("common.download", "Download") }}
+            </button>
+            <button class="gsp-chip gsp-chip--act gsp-chip--on" :disabled="!!busy" @click="keepCard(c, 'set_aside')">
+              <span v-if="busy === 'ck' + c.id + 'set_aside'" class="gsp-spin gsp-spin--sm"></span>
+              <i v-else class="mdi mdi-check"></i>
+              {{ t("profile.card_keep", "Keep this one") }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="loading" class="gsp-loading"><span class="gsp-spin"></span></div>
 
     <div v-else-if="loadError" class="gsp-loadfail">
@@ -358,7 +423,9 @@ import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "@/i18n";
 import { useDialog } from "@/composables/useDialog";
-import dashboardActions, { type SavesData, type GameSaveItem } from "@/lib/dashboardActions";
+import dashboardActions, { type SavesData, type GameSaveItem, type SaveConflict } from "@/lib/dashboardActions";
+import { refreshSaveConflictBadge } from "@/lib/saveConflictBadge";
+import { useSocketStore } from "@/stores/socket";
 import { formatBytes as fmtBytes, formatDateTime } from '@/utils/format'
 import client from "@/services/api/client";
 const fmtDate = (iso: string | null | undefined) => formatDateTime(iso, "")
@@ -562,6 +629,59 @@ async function run(tag: string, fn: () => Promise<void>): Promise<void> {
   }
 }
 
+// ── Two memory cards for one game ───────────────────────────────────────────
+
+const conflicts = ref<SaveConflict[]>([]);
+
+async function loadConflicts(): Promise<void> {
+  try {
+    conflicts.value = await dashboardActions.saveConflicts();
+  } catch {
+    // Left as it was: a list that failed to load is not a list that is empty.
+  }
+}
+
+function conflictName(c: SaveConflict): string {
+  return c.rom_name || stripExt(c.set_aside.file_name);
+}
+
+function exportConflict(id: number): void { run("cf" + id, () => dashboardActions.exportSaveConflict(id)); }
+
+/* Keeps one card and deletes the other. Asked first, with a tick, like deleting
+ * a save: the card that goes has no copy behind it unless it was downloaded, and
+ * the question names both dates so the person can tell which is which. Keeping
+ * the set-aside card when no card is in use deletes nothing, so it is not asked. */
+async function keepCard(c: SaveConflict, keep: "current" | "set_aside"): Promise<void> {
+  const keptAt = keep === "current" ? savedAt(c.current!) : c.set_aside.updated_at;
+  const droppedAt = keep === "current" ? c.set_aside.updated_at : (c.current ? savedAt(c.current) : null);
+  if (keep === "current" || c.current) {
+    const go = await gdConfirm(
+      t("profile.card_confirm",
+        "Keep the card for {game} saved on {kept} and delete the one saved on {dropped}? Download that one first if you might want it back. This cannot be undone.")
+        .replace("{game}", conflictName(c))
+        .replace("{kept}", fmtDate(keptAt))
+        .replace("{dropped}", fmtDate(droppedAt)),
+      {
+        title:       t("profile.card_confirm_title", "Keep this card?"),
+        confirmText: t("profile.card_confirm_go", "Keep it"),
+        cancelText:  t("common.cancel", "Cancel"),
+        danger:      true,
+        requireTick: true,
+        image:       c.rom_support,
+      },
+    );
+    if (!go) return;
+  }
+  await run("ck" + c.id + keep, async () => {
+    await dashboardActions.resolveSaveConflict(c.id, keep);
+    conflicts.value = conflicts.value.filter((x) => x.id !== c.id);
+    data.value = await dashboardActions.saves();
+    say(t("profile.card_kept",
+      "Done. The card you kept is in use, and a browser that has not changed its card since will load it at the next launch."));
+    void refreshSaveConflictBadge();
+  });
+}
+
 function exportState(id: number): void { run("st" + id, () => dashboardActions.exportSaveState(id)); }
 function exportBattery(id: number): void { run("sv" + id, () => dashboardActions.exportBatterySave(id)); }
 function exportGame(g: GameSaves): void { run("g" + g.romId, () => dashboardActions.exportSaves(g.romId)); }
@@ -630,6 +750,10 @@ client.get("/users/me/preferences")
 
 onMounted(() => window.addEventListener("keydown", onKey));
 onUnmounted(() => window.removeEventListener("keydown", onKey));
+
+// A card set aside while the panel is open shows up without a reload.
+const stopConflictWatch = useSocketStore().onSaveConflict(() => { void loadConflicts(); });
+onUnmounted(stopConflictWatch);
 
 function stripExt(f: string): string { return f.replace(/\.(state|srm)$/, ""); }
 
@@ -810,6 +934,7 @@ async function del(kind: "state" | "save", id: number, gameName: string,
 
 const loadError = ref(false);
 onMounted(async () => {
+  void loadConflicts();
   try {
     data.value = await dashboardActions.saves();
   } catch (e: any) {
@@ -846,6 +971,31 @@ onMounted(async () => {
 .gsp-notice-x { margin-left: auto; border: 0; background: transparent; color: inherit; cursor: pointer; opacity: 0.6; font-size: 14px; display: inline-flex; }
 .gsp-notice-x:hover { opacity: 1; }
 .gsp-loading { display: flex; justify-content: center; padding: 20px 0; }
+
+/* Two cards for one game: the one thing in the panel waiting on the person, so
+   it carries a warm edge; the buttons stay in the glass style of the chips. */
+.gsp-conflict {
+  border: 1px solid color-mix(in srgb, #fbbf24 45%, transparent);
+  background: color-mix(in srgb, #fbbf24 7%, transparent);
+  border-radius: var(--radius-sm, 8px); padding: 12px 14px; margin-bottom: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.gsp-conflict-h { display: flex; align-items: center; gap: 12px; }
+.gsp-conflict-art { max-width: 64px; max-height: 44px; object-fit: contain; flex: 0 0 auto; filter: drop-shadow(0 3px 6px rgba(0,0,0,0.45)); }
+.gsp-conflict-ico { font-size: 26px; color: #fbbf24; flex: 0 0 auto; }
+.gsp-conflict-txt { min-width: 0; }
+.gsp-conflict-title { font-size: 13.5px; font-weight: 600; color: var(--text, #eee); }
+.gsp-conflict-why { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+.gsp-conflict-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.gsp-conflict-card {
+  border: 1px solid var(--glass-border); background: var(--glass-bg);
+  border-radius: var(--radius-sm, 8px); padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px; min-width: 0;
+}
+.gsp-conflict-tag { align-self: flex-start; font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 2px 8px; border-radius: 20px; background: color-mix(in srgb, var(--accent, #38d3db) 22%, transparent); color: var(--text, #eee); }
+.gsp-conflict-tag--aside { background: color-mix(in srgb, #fbbf24 24%, transparent); }
+.gsp-conflict-meta { font-size: 12px; opacity: 0.8; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.gsp-conflict-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .gsp-spin { width: 15px; height: 15px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.25); border-top-color: var(--accent, #38d3db); animation: gspSpin 0.7s linear infinite; display: inline-block; }
 .gsp-spin--sm { width: 12px; height: 12px; }
 @keyframes gspSpin { to { transform: rotate(360deg); } }

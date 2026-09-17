@@ -1086,7 +1086,7 @@ class RomHandler(DBBaseHandler):
     @begin_session
     async def move_player_data(
         self, from_rom_id: int, to_rom_id: int, *, session: AsyncSession = None,
-    ) -> bool:
+    ) -> list[int]:
         """Carry saves, savestates and play history from one ROM row to another.
 
         For the merge at the end of a scan: a renamed file arrives as a new row
@@ -1102,8 +1102,8 @@ class RomHandler(DBBaseHandler):
         the new name is by then already in the database, and it lands on the
         missing-entries screen where one click removes the save FILES too.
 
-        Returns False and moves NOTHING when it cannot be done without losing
-        something. Three tables, three rules, each forced by what the schema
+        Returns the accounts that now have a memory card set aside, so they can
+        be told. Three tables, three rules, each forced by what the schema
         allows:
 
           rom_plays        one row per (user, rom), and it is an aggregate -
@@ -1114,18 +1114,20 @@ class RomHandler(DBBaseHandler):
                            rather than displacing what is already there.
           rom_saves        ONE memory card per (user, rom). Two cards cannot
                            become one and choosing between them would delete a
-                           save nobody was asked about, so this refuses - and
-                           the caller keeps both rows, which is a mess a person
-                           can sort out rather than a loss they cannot.
+                           save nobody was asked about. The card already on the
+                           surviving row stays in use and the other is set aside
+                           in `rom_save_conflicts`, file and all, for its owner
+                           to choose. This used to refuse the whole move, which
+                           kept the merge from happening and left the old row
+                           missing - the very state described above, for the one
+                           person with the most at stake.
         """
         from models.rom_play import RomPlay
-        from models.rom_save_state import RomSave, RomSaveState
+        from models.rom_save_state import RomSave, RomSaveConflict, RomSaveState
 
         if from_rom_id == to_rom_id:
-            return True
+            return []
 
-        # The blocking question first, before anything has moved. Half a move
-        # would be worse than none: the row is deleted either way.
         cards = (await session.execute(
             select(RomSave).where(RomSave.rom_id == from_rom_id)
         )).scalars().all()
@@ -1133,10 +1135,26 @@ class RomHandler(DBBaseHandler):
             int(user_id) for (user_id,) in await session.execute(
                 select(RomSave.user_id).where(RomSave.rom_id == to_rom_id))
         }
-        if any(int(card.user_id) in held for card in cards):
-            return False
+        set_aside: list[int] = []
         for card in cards:
-            card.rom_id = to_rom_id
+            if int(card.user_id) not in held:
+                card.rom_id = to_rom_id
+                continue
+            # The row goes, the file stays where it was written: nothing here
+            # deletes save files, and the set-aside row is what points at it.
+            session.add(RomSaveConflict(
+                rom_id=to_rom_id,
+                user_id=card.user_id,
+                file_name=card.file_name,
+                file_path=card.file_path,
+                file_size_bytes=card.file_size_bytes or 0,
+                emulator_core=card.emulator_core,
+                slot=card.slot,
+                content_hash=card.content_hash,
+                card_updated_at=card.updated_at or card.created_at,
+            ))
+            await session.delete(card)
+            set_aside.append(int(card.user_id))
 
         # Savestates. Slots are per person, so somebody else's slot 0 is not in
         # the way of mine.
@@ -1181,7 +1199,7 @@ class RomHandler(DBBaseHandler):
             await session.delete(play)
 
         await session.flush()
-        return True
+        return set_aside
 
     @begin_session
     async def ids_with_player_data(
@@ -1221,6 +1239,21 @@ class RomHandler(DBBaseHandler):
         await session.delete(rom)
         await session.flush()
         return True
+
+    @begin_session
+    async def delete_many(self, rom_ids, *, session: AsyncSession = None) -> int:
+        """Drop these ROM rows in one statement. Returns how many went.
+
+        For a scan leaving by the shutdown door, where a delete per row, each in
+        its own transaction, does not fit the few seconds the process is given.
+        Saves and play history cascade in the database as they do for `delete`,
+        so callers hand in only rows nobody has played or saved against.
+        """
+        ids = [int(i) for i in rom_ids]
+        if not ids:
+            return 0
+        result = await session.execute(delete(Rom).where(Rom.id.in_(ids)))
+        return result.rowcount or 0
 
     @begin_session
     async def clear_metadata(self, rom_id: int, *, session: AsyncSession = None) -> Rom | None:

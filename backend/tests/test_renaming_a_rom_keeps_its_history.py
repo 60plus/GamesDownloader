@@ -208,8 +208,11 @@ def test_the_pass_runs_after_every_platform_directory_has_been_walked():
     # matching itself now lives in `_renames_this_run`, defined above the scan
     # function - so indexing on the bare name finds the definition and would
     # satisfy this assertion wherever the call went, which is the very
-    # first-occurrence mistake this test exists to guard against.
-    call = source.index("pairs = await _renames_this_run(")
+    # first-occurrence mistake this test exists to guard against. Searched from
+    # the scan function on, because `_put_back_after_an_unfinished_scan` above it
+    # makes the same call for the exits that did not finish.
+    call = source.index("pairs = await _renames_this_run(",
+                        source.index("async def scan_roms_path("))
     assert call > loop_end, (
         "przebieg zmiany nazwy dziala wewnatrz petli po katalogach platform"
     )

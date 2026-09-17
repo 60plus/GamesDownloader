@@ -22,7 +22,11 @@ through.
 
 CANCELLED, which is the same door as FAILED in Python and a different thing
 entirely in fact: the process is going away on a five second clock, so this exit
-does the one bulk update and nothing else.
+does one bulk update and one bulk delete and nothing per row.
+
+Both unfinished exits go through `_put_back_after_an_unfinished_scan`, which
+reads the renames BEFORE the flags go back: the vanished side of a rename is
+found by its missing flag, and asked afterwards it is not there.
 
 WHAT THIS FILE READS. Slices of source, which catch only what somebody thought
 of - so the behaviour is tested by running the scan in
@@ -81,6 +85,13 @@ def _rule() -> str:
     return source[at:source.index("\nasync def ", at + 10)]
 
 
+def _put_back() -> str:
+    """What both unfinished exits call."""
+    source = _source()
+    at = source.index("async def _put_back_after_an_unfinished_scan(")
+    return source[at:source.index("\nasync def ", at + 10)]
+
+
 def test_the_stopped_exit_is_still_the_careful_one():
     """The reference the other two are measured against. If this ever stops
     asking, the assertions below are copying the wrong thing."""
@@ -109,15 +120,15 @@ def _merge() -> str:
 
 def test_the_finished_exit_does_not_adopt_over_somebody_s_save():
     """Adoption deletes the row it adopted FROM, and the cascade takes the
-    player's data with it. It is carried across first, and if that cannot be
-    done without choosing between two memory cards, the merge is skipped."""
+    player's data with it. It is carried across first - a second memory card is
+    set aside for its owner rather than lost - and only then is the row merged."""
     merge = _merge()
     assert "move_player_data(" in merge, (
         "scalenie kasuje wiersz z danymi gracza bez przeniesienia ich - zapis "
         "zrobiony w trakcie skanu znika przez kaskade"
     )
-    assert "continue" in merge, (
-        "odmowa przeniesienia nie zatrzymuje scalenia, wiec karta pamieci ginie"
+    assert merge.index("move_player_data(") < merge.index("adopt_renamed("), (
+        "wiersz scalany przed przeniesieniem danych gracza"
     )
 
 
@@ -137,8 +148,14 @@ def test_both_exits_ask_the_same_rule():
     """The point of the helper. Two spellings of "which rows would a rename have
     taken" is how the failed exit came to delete everything the run had made."""
     body = _scan()
-    assert "_renames_this_run(" in _failed_branch(body), (
+    assert "_put_back_after_an_unfinished_scan(" in _failed_branch(body), (
         "wyjscie przez wyjatek liczy sobie samo, ktore wiersze zabrac"
+    )
+    assert "_put_back_after_an_unfinished_scan(" in _cancelled_branch(body), (
+        "wyjscie przy zamykaniu liczy sobie samo, ktore wiersze zabrac"
+    )
+    assert "_renames_this_run(" in _put_back(), (
+        "cofanie po nieukonczonym skanie nie pyta o zmiany nazw ta sama regula"
     )
     finished = body[body.index("# ── Renames"):body.index("except asyncio.CancelledError:")]
     assert "_renames_this_run(" in finished, (
@@ -150,20 +167,29 @@ def test_the_failed_exit_takes_back_what_a_rename_would_have_absorbed():
     """Same reasoning as the Stop path, written down there: a new row left
     behind is a row no future scan will create again, so the old row holding the
     artwork, the saves and the play history is missing for good."""
-    branch = _failed_branch(_scan())
-    assert "restore_present" in branch, "wyjatek przestal przywracac flagi"
-    assert "rom_handler.delete(" in branch, (
+    helper = _put_back()
+    assert "restore_present" in helper, "wyjscie niedokonczone przestalo przywracac flagi"
+    assert "delete_many(" in helper, (
         "wyjatek w srodku spaceru zostawia wiersze, ktore adopcja by wchlonela, "
         "wiec kazda przemianowana gra jest na polce dwa razy i zaden pozniejszy "
         "skan juz ich nie sparuje"
     )
 
 
-def test_the_failed_exit_restores_the_flags_first():
-    """The cheaper and more important half. If the row cleanup throws, the
-    library must still not be left with everything marked missing."""
-    branch = _failed_branch(_scan())
-    assert branch.index("restore_present") < branch.index("rom_handler.delete("), (
+def test_the_renames_are_read_before_the_flags_go_back_and_rows_go_after():
+    """The vanished side of a rename is found by its missing flag, so it has to
+    be read while the flag is still set. And the flags go back before any row is
+    removed: if the removal throws, the library must still not be left with
+    everything marked missing."""
+    helper = _put_back()
+    read = helper.index("_renames_this_run(")
+    restored = helper.index("restore_present(")
+    removed = helper.index("delete_many(")
+    assert read < restored, (
+        "zmiany nazw czytane po przywroceniu flag - dawcy juz nie sa brakujacy, "
+        "wiec nic nie zostaje cofniete"
+    )
+    assert restored < removed, (
         "flagi przywracane po kasowaniu wierszy - jesli kasowanie padnie, "
         "biblioteka zostaje z polowa pozycji oznaczonych jako brakujace"
     )
@@ -174,12 +200,13 @@ def test_shutting_down_does_the_cheap_half_only():
     row, each in its own transaction, does not finish - so the run gets undone
     partway, which is the one outcome nobody chose."""
     branch = _cancelled_branch(_scan())
-    assert "restore_present" in branch, (
+    helper = _put_back()
+    assert "_put_back_after_an_unfinished_scan(" in branch, (
         "zamykanie nie przywraca flag, wiec biblioteka wstaje ciemna"
     )
-    assert "rom_handler.delete(" not in branch and "_renames_this_run(" not in branch, (
-        "przy zamykaniu serwera skaner zabiera sie za prace, na ktora nie ma "
-        "czasu, i cofa bieg CZESCIOWO"
+    assert "rom_handler.delete(" not in branch and "rom_handler.delete(" not in helper, (
+        "przy zamykaniu serwera skaner kasuje wiersze po jednym, a ma na to "
+        "piec sekund - wiec bieg zostaje cofniety CZESCIOWO"
     )
 
 

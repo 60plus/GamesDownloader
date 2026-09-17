@@ -332,6 +332,20 @@
   "updated_at",
   "user_id"
  ],
+ "rom_save_conflicts": [
+  "card_updated_at",
+  "content_hash",
+  "created_at",
+  "emulator_core",
+  "file_name",
+  "file_path",
+  "file_size_bytes",
+  "id",
+  "rom_id",
+  "slot",
+  "updated_at",
+  "user_id"
+ ],
  "rom_save_states": [
   "created_at",
   "emulator_core",

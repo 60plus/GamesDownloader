@@ -832,6 +832,51 @@ async def _renames_this_run(created_ids, present_before, seen_platform_ids) -> l
     return pairs
 
 
+async def _put_back_after_an_unfinished_scan(
+    created_ids, present_before, seen_platform_ids,
+) -> int:
+    """What a scan that did not finish owes the library, on either door out.
+
+    The missing flags go back, and the rows a rename would have absorbed are
+    taken back - only those. A new row with no donor is one the next scan finds
+    again; a rename row left behind is one no later scan creates again, so the
+    old row holding the artwork, the saves and the play history is never paired
+    and stays missing for good.
+
+    THE RENAMES ARE READ BEFORE THE FLAGS GO BACK. `_renames_this_run` finds the
+    vanished side by its missing flag. Asked after `restore_present`, as the
+    failure exit used to, it found no donor and took nothing back, while the log
+    said the library was as it was. Reading writes nothing, so it cannot leave
+    the shelf half marked; if it fails, or a second cancellation lands in it,
+    the renames are given up and the flags still go back.
+
+    One statement to take the rows back, not one per row: the shutdown door is
+    on a few-second clock, and this is the only way it can afford the renames.
+    Returns how many rows were taken back.
+    """
+    pairs: list[tuple[int, int]] = []
+    try:
+        pairs = await _renames_this_run(created_ids, present_before, seen_platform_ids)
+    except (Exception, asyncio.CancelledError):
+        logger.exception("Could not work out which rows this scan made for renamed files")
+    await rom_handler.restore_present(present_before)
+    if not pairs:
+        return 0
+    try:
+        # Not the ones somebody has already played or saved against. Taking
+        # those back is not undoing our own work, it is deleting theirs - the
+        # ordinary exit carries that data across instead, but a scan that did
+        # not finish is not the place to start moving rows about.
+        touched = await rom_handler.ids_with_player_data([n for _o, n in pairs])
+        untouched = [n for _o, n in pairs if n not in touched]
+        if not untouched:
+            return 0
+        return await rom_handler.delete_many(untouched)
+    except Exception:  # noqa: BLE001 - the scan's own failure is the one to raise
+        logger.exception("Could not take back the rows this scan had added")
+        return 0
+
+
 async def _merge_renamed(pairs: list[tuple[int, int]], touched=frozenset()) -> int:
     """Apply the pairs, oldest row kept. Returns how many were merged.
 
@@ -848,20 +893,17 @@ async def _merge_renamed(pairs: list[tuple[int, int]], touched=frozenset()) -> i
     where one click removes the save files as well. One session was protected by
     giving up every save from before the rename.
 
-    So the data comes across first. `move_player_data` refuses, and moves
-    nothing, when carrying it over would mean choosing between two memory cards
-    for the same person; the pair is then left as two rows, which is a mess
-    somebody can sort out rather than a save nobody was asked about.
+    So the data comes across first. Where that meets two memory cards for the
+    same person, `move_player_data` sets the second one aside for them to choose
+    between, and they are told. It used to refuse and leave the pair as two rows,
+    which put back the very state described above for the one person with the
+    most at stake.
     """
     merged = 0
     for old_id, new_id in pairs:
-        if new_id in touched and not await rom_handler.move_player_data(new_id, old_id):
-            logger.info(
-                "Row %d looks like row %d renamed, but both hold a memory card "
-                "for the same account, so they are left as two entries.",
-                new_id, old_id,
-            )
-            continue
+        set_aside: list[int] = []
+        if new_id in touched:
+            set_aside = await rom_handler.move_player_data(new_id, old_id)
         if await rom_handler.adopt_renamed(old_id, new_id):
             merged += 1
             logger.info(
@@ -869,7 +911,30 @@ async def _merge_renamed(pairs: list[tuple[int, int]], touched=frozenset()) -> i
                 "metadata, saves and play history, and row %d is dropped.",
                 old_id, new_id,
             )
+        if set_aside:
+            logger.info(
+                "Row %d had a second memory card for %d account(s); set aside for "
+                "them to choose between.", old_id, len(set_aside),
+            )
+            await _tell_about_set_aside_cards(old_id, set_aside)
     return merged
+
+
+async def _tell_about_set_aside_cards(rom_id: int, user_ids) -> None:
+    """Tell each account that now has two memory cards for this game. Nobody else.
+
+    Over the socket, so a person who is signed in sees the badge at once. It is
+    not the only way they find out: the list the badge counts is read again when
+    the app starts, so somebody who was away is told the next time they arrive.
+    """
+    from handler.socket_handler import emit_event
+
+    for user_id in sorted(set(user_ids)):
+        try:
+            await emit_event("saves:conflict", {"rom_id": rom_id}, to_user=user_id)
+        except Exception:  # noqa: BLE001 - the card is safe; the message is a courtesy
+            logger.warning("Could not tell account %s about a set-aside card", user_id,
+                           exc_info=True)
 
 
 # ── One scan at a time, and optionally on a timer ────────────────────────────
@@ -913,7 +978,8 @@ async def periodic_scan_loop() -> None:
     is skipped rather than queued: a timer that fell behind should not spend the
     night running the scans it missed, one after another.
     """
-    from config import ROMS_PATH, config_manager
+    from config import config_manager
+    from handler.filesystem.rom_paths import roms_library_path
 
     global _scan_running
     await asyncio.sleep(_SCAN_LOOP_START_DELAY_S)
@@ -927,7 +993,9 @@ async def periodic_scan_loop() -> None:
                     _scan_running = True
                     try:
                         logger.info("Starting the scheduled ROM scan")
-                        await scan_roms_path(ROMS_PATH)
+                        # Where the library is NOW, asked like the interval
+                        # is: a library moved in Settings was never walked.
+                        await scan_roms_path(roms_library_path(config_manager))
                     finally:
                         _scan_running = False
         except asyncio.CancelledError:
@@ -1371,57 +1439,37 @@ async def scan_roms_path(roms_path: str) -> dict:
         # find out how far, and the second cancellation went straight through the
         # inner `except Exception`, skipping the progress reset as well.
         #
-        # So this exit does the cheap half and nothing else: one bulk UPDATE
-        # putting the missing flags back, which is the half that matters. The
-        # rows this run created stay, and the next scan will find their files and
-        # make the same decision with time to do it in. Nothing is announced
-        # either - the socket is going away with everything else, and the
-        # watchdog on the client covers the gap.
-        await rom_handler.restore_present(present_before)
+        # So this exit does the cheap half: one bulk UPDATE putting the missing
+        # flags back, which is the half that matters, and one DELETE for the rows
+        # a rename would have absorbed - the only rows no later scan makes again.
+        # Every other row this run created stays, and the next scan will find
+        # its file and make the same decision with time to do it in. Nothing is
+        # announced either - the socket is going away with everything else, and
+        # the watchdog on the client covers the gap.
+        undone = await _put_back_after_an_unfinished_scan(
+            created_ids, present_before, seen_platform_ids)
         reset_scan_progress()
         logger.info(
             "ROM scan cancelled while shutting down; the missing flags are back "
-            "as they were and the rows this run added were left for the next scan"
+            "as they were, %d row(s) a rename would have absorbed were taken back "
+            "and the rest were left for the next scan",
+            undone,
         )
         raise
     except BaseException:
         # Not swallowed - restored and re-raised. A scan that never works has
         # to look like a scan that failed, not like one that keeps finding
         # nothing.
-        # The flags first: it is the cheaper half and the more important one, so
-        # a failure while removing rows must not leave the library with half its
-        # shelf marked missing.
-        await rom_handler.restore_present(present_before)
-        # And the rows a rename would have absorbed, which is a much shorter list
-        # than "everything this run made" and is the whole of the argument for
-        # removing any of them: adoption can only ever pair a vanished row with a
-        # row the CURRENT run created, so one of those left behind is a row no
-        # future scan will make again - the old row holding the artwork, the
-        # saves and the play history stays missing for good and the shelf shows
-        # the title twice.
         #
-        # A genuinely new ROM carries none of that. The next scan finds the file
-        # and makes the row again, so taking it back buys nothing and costs a
-        # full re-read and re-hash of everything the run had got through. One
-        # transient database error near the end of a long scan used to do exactly
-        # that to the whole library.
-        undone = 0
-        try:
-            pairs = await _renames_this_run(
-                created_ids, present_before, seen_platform_ids)
-            # And not the ones somebody has already played or saved against.
-            # Taking those back is not undoing our own work, it is deleting
-            # theirs - the ordinary exit carries that data across instead, but
-            # this exit has a failure in flight and is not the place to start
-            # moving rows about.
-            touched = await rom_handler.ids_with_player_data([n for _o, n in pairs])
-            for _old_id, new_id in pairs:
-                if new_id in touched:
-                    continue
-                if await rom_handler.delete(new_id):
-                    undone += 1
-        except Exception:  # noqa: BLE001 - the original failure is the one to raise
-            logger.exception("Could not take back the rows this scan had added")
+        # The flags back, and the rows a rename would have absorbed, which is a
+        # much shorter list than "everything this run made" and is the whole of
+        # the argument for removing any of them. A genuinely new ROM carries none
+        # of that: the next scan finds the file and makes the row again, so
+        # taking it back buys nothing and costs a full re-read and re-hash of
+        # everything the run had got through. One transient database error near
+        # the end of a long scan used to do exactly that to the whole library.
+        undone = await _put_back_after_an_unfinished_scan(
+            created_ids, present_before, seen_platform_ids)
         logger.exception(
             "ROM scan failed; the library is back as it was, %d row(s) this run "
             "had added were taken back and nothing was left marked missing",
