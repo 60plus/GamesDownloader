@@ -23,6 +23,10 @@ somebody staring at a control that cannot do what it says.
 Vapor keeps its own copy of this page in its own repository, out of reach from
 here, and had the same clear-metadata mismatch plus a Scrape ALL that called a
 route which does not exist. Both were fixed there and checked in a browser.
+
+Modern's controls moved into one "Manage" menu (the owner, 2026-09-18): an item
+there is `{ ..., show: <check>, ..., run: <handler> }`, and its `show` is what a
+button's v-if was.
 """
 from __future__ import annotations
 
@@ -52,17 +56,17 @@ EXPECTED = {
             # A library game's scrape is admin only, unlike a ROM's. The two sit
             # in views that look alike, which is how this one spent a while
             # under canEdit offering a refusal.
-            "onScrapeClick": "isAdmin",
-            "showEditPanel = !showEditPanel": "canEdit",
-            "onClearMetadata": "isAdmin",
+            "run: onScrapeClick": "isAdmin",
+            "run: toggleEditPanel": "canEdit",
+            "run: onClearMetadataClick": "isAdmin",
         },
     },
     "Modern (and NEON HORIZON through it)": {
         "path": FRONTEND / "src" / "views" / "emulation" / "EmulationGameDetail.vue",
         "controls": {
-            "triggerScrape": "canEdit",
-            "showEditPanel = true": "canEdit",
-            "onClearMetadata": "isAdmin",
+            "run: triggerScrape": "canEdit",
+            "run: openEditPanel": "canEdit",
+            "run: onClearMetadata": "isAdmin",
         },
     },
 }
@@ -75,12 +79,18 @@ def _read(path: pathlib.Path) -> str:
 
 
 def _guard_of(source: str, handler: str) -> str:
-    """The v-if on the element that carries this click handler.
+    """The v-if on the element that carries this click handler, or the `show`
+    of the menu item that runs it.
 
     Reads backwards from the handler to the opening angle bracket of its own
-    tag, which is the whole element and nothing of its neighbours.
+    tag, which is the whole element and nothing of its neighbours - or, for a
+    menu item, to its opening brace; items hold no nested braces.
     """
     at = source.index(handler)
+    if handler.startswith("run: "):
+        item = source[source.rindex("{", 0, at):source.index("}", at)]
+        match = re.search(r"show:\s*([^,]+),", item)
+        return match.group(1) if match else ""
     start = source.rindex("<", 0, at)
     tag = source[start:source.index(">", at)]
     match = re.search(r'v-if="([^"]*)"', tag)
