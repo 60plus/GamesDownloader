@@ -37,7 +37,8 @@ import DownloadDialog from "./components/gog/DownloadDialog.vue";
 import RandomGamePicker from "./components/RandomGamePicker.vue";
 import AmbientBackground from "./components/common/AmbientBackground.vue";
 import GameRequestDialog from "./components/GameRequestDialog.vue";
-import { openMetadataEditor, openCollectionEditor, closeMetadataEditor, closeCollectionEditor, openRomMetadataEditor, closeRomMetadataEditor, openAddFileDialog, closeAddFileDialog } from "./lib/pluginUi";
+import RomManualButton from "./components/roms/RomManualButton.vue";
+import { openMetadataEditor, openCollectionEditor, closeMetadataEditor, closeCollectionEditor, openRomMetadataEditor, closeRomMetadataEditor, openAddFileDialog, closeAddFileDialog, openRomAddFileDialog, closeRomAddFileDialog } from "./lib/pluginUi";
 import { openAbout } from "./lib/about";
 import { watchSaveConflicts } from "./lib/saveConflictBadge";
 
@@ -67,6 +68,9 @@ app.component("AmbientBackground", AmbientBackground);
 // Game request dialog (visible + default-platform + @close) so plugin themes
 // can offer the "Request a game" flow without re-implementing it.
 app.component("GameRequestDialog", GameRequestDialog);
+// A ROM's manual button (path) so a theme with its own ROM page shows the same
+// one the core pages do - one place deciding when it shows and how it opens.
+app.component("RomManualButton", RomManualButton);
 
 // ── Expose plugin API on window for compiled theme plugins ──────────────────
 // Theme plugins compiled on container startup import from window.__GD__
@@ -390,6 +394,11 @@ function createSafeSocketStore() {
     // 'gd-game-updated'.
     openAddFileDialog,
     closeAddFileDialog,
+    // openRomAddFileDialog({rom: {id, title, platform_fs_slug}, onAdded?,
+    // onClosed?}) (GD >= 1.0.36) - the same for a ROM game: an extra, a mod,
+    // the manual or a further disc. Each file also dispatches 'gd-rom-updated'.
+    openRomAddFileDialog,
+    closeRomAddFileDialog,
     // Styled in-app dialogs (same look in every theme) so plugins never have
     // to fall back to the browser-native window.confirm()/alert() popups.
     // confirm(msg, {title?, danger?, confirmText?, cancelText?, image?,

@@ -209,7 +209,7 @@ async def _sync_archive_into_library(
     Replace the platform's loose installer rows with a single row pointing at
     the new zip - so the library shows one download per platform. The archive
     keeps file_type "game" because the games detail pages only render the
-    'game'/'dlc'/'extra' groups; a custom type would be hidden from users.
+    'game'/'dlc'/'extra'/'mod' groups; a custom type would be hidden from users.
     No-op if the game is not published.
     """
     from handler.database.library_handler import LibraryHandler
@@ -515,6 +515,8 @@ _TYPE_GROUPS: tuple[tuple[str, str, str], ...] = (
     ("extra",  "all", "extra"),
     ("bonus",  "all", "extra"),
     ("dlc",    "all", "dlc"),
+    ("mods",   "all", "mod"),
+    ("mod",    "all", "mod"),
 )
 _ALL_GROUPS: tuple[tuple[str, str, str], ...] = _PLATFORM_GROUPS + _TYPE_GROUPS
 _GROUP_FOLDERS: frozenset[str] = frozenset(f for f, _o, _t in _ALL_GROUPS)
@@ -569,11 +571,13 @@ def _game_base_dir(files, title: str | None = None) -> str | None:
 
 def _group_archive_name(title: str, folder: str, out_type: str) -> str:
     """Game files (per platform) -> `{Title}.zip`; extras -> `extras.zip`;
-    dlc -> `dlc.zip`."""
+    dlc -> `dlc.zip`; mods -> `mods.zip`."""
     if out_type == "extra":
         return "extras.zip"
     if out_type == "dlc":
         return "dlc.zip"
+    if out_type == "mod":
+        return "mods.zip"
     return f"{_sanitize_title(title)}.zip"
 
 

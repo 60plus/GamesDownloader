@@ -31,6 +31,7 @@
       <option value="game">{{ t('upload.type_game') }}</option>
       <option value="dlc">DLC</option>
       <option value="extra">{{ t('upload.type_extra') }}</option>
+      <option value="mod">{{ t('upload.type_mod') }}</option>
     </select>
     <button class="add-file-btn" :disabled="busy || !file" @click="submit">
       {{ busy ? `${progress}%` : t('detail.add_file') }}

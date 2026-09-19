@@ -34,7 +34,7 @@ from decorators.auth import protected_route
 from handler.auth.scopes import Scope
 from handler.database.library_handler import LibraryHandler
 from handler.library.ownership import assert_can_upload_into
-from models.library_file import LibraryFile
+from models.library_file import FILE_TYPES, LibraryFile, file_type_of
 from utils.async_utils import fire_task, note_unscanned
 from utils.errors import safe_note, safe_note_ref
 
@@ -49,6 +49,11 @@ _CHUNK_WRITE = 1024 * 256  # 256 KB write buffer
 # four; keeping the map closed is what stops a caller-supplied value from being
 # used as a path segment.
 _OS_FOLDERS = {"windows": "windows", "mac": "mac", "linux": "linux", "all": "."}
+
+# What is not the game has a folder of its own in the game's, whatever its os.
+# `mods`, plural, the way a ROM's mods/ folder is named (the owner, 2026-09-18);
+# extra/ and dlc/ keep the names they have always had on disk.
+_TYPE_FOLDERS = {"extra": "extra", "dlc": "dlc", "mod": "mods"}
 
 
 def _sanitize(title: str) -> str:
@@ -93,10 +98,15 @@ def _dest_dir_for(
             f"Unknown os {os_platform!r} - expected one of "
             + ", ".join(sorted(_OS_FOLDERS))
         )
-    if file_type in ("extra", "extras"):
-        sub = "extra"
-    elif file_type == "dlc":
-        sub = "dlc"
+    # The kind is closed the same way, and for the same reason it is asked
+    # first: it picks the folder, and it arrives from the same untrusted places.
+    kind = file_type_of(file_type)
+    if kind is None:
+        raise ValueError(
+            f"Unknown file_type {file_type!r} - expected one of " + ", ".join(FILE_TYPES)
+        )
+    if kind in _TYPE_FOLDERS:
+        sub = _TYPE_FOLDERS[kind]
     safe_title = _sanitize(game_title)
     if sub == ".":
         dest_dir = Path(GAMES_PATH) / storage_folder / safe_title
@@ -355,7 +365,9 @@ async def _finalize_upload(
         library_game_id=game_id,
         filename=filename,
         display_name=filename,
-        file_type=file_type if file_type not in ("extras",) else "extra",
+        # One of the four, whatever the form called it ("extras", "mods"):
+        # _dest_dir_for has refused anything else before the bytes were taken.
+        file_type=file_type_of(file_type) or "game",
         os=os_platform,
         language=language,
         version=version,

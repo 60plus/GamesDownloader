@@ -198,56 +198,14 @@
                 Torrent
               </button>
 
-              <!-- Edit Metadata -->
-              <button v-if="canEdit"
-              :disabled="metaLocked" class="gd-btn-ghost" :class="{ 'gd-btn--locked': metaLocked }" @click="showEditPanel = !showEditPanel" :title="metaLocked ? t('meta.locked_by_admin') : t('detail.edit_metadata')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                </svg>
-                {{ t('detail.edit_metadata') }}
-              </button>
-
-              <!-- Refresh Metadata (scrape) -->
-              <button v-if="isAdmin" class="gd-btn-ghost" :disabled="scraping" @click="onScrapeClick" :title="t('detail.fetch_metadata_hint')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" :class="{ spin: scraping }">
-                  <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                </svg>
-                {{ scraping ? t('detail.scraping') : t('detail.refresh_metadata') }}
-              </button>
-
-              <!-- Clear Metadata -->
-              <button v-if="isAdmin" class="gd-btn-danger" :disabled="clearing" @click="onClearMetadataClick" :title="t('detail.remove_scraped_hint')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                  <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
-                </svg>
-                {{ clearing ? t('detail.clearing') : t('detail.clear_metadata') }}
-              </button>
-
-              <!-- Package: bundle loose per-platform files into one archive each -->
-              <button v-if="isAdmin && packablePlatforms.length" class="gd-btn-ghost" @click="packageOpen = true" :title="t('packaging.package_now_hint')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <path d="M21 8v13H3V8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>
-                </svg>
-                {{ t('packaging.package_now') }}
-              </button>
-
-              <!-- Unpublish / Republish / Delete -->
-              <button v-if="isAdmin && game.is_active" class="gd-btn-unpublish" @click="unpublishGame" :title="t('detail.unpublish')">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                {{ t('detail.unpublish') }}
-              </button>
-              <button v-if="isAdmin && !game.is_active" class="gd-btn-publish" @click="republishGame" :title="t('detail.publish')">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                {{ t('detail.publish') }}
-              </button>
-              <button v-if="isAdmin" class="gd-btn-danger" @click="deleteGame" :title="t('common.delete')">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
-                {{ t('common.delete') }}
-              </button>
+              <!-- Everything else under one "Manage" menu (the owner,
+                   2026-09-18): the row holds what every account sees. -->
+              <ManageMenu :items="manageItems" />
             </div>
+
+            <!-- The game's files, each with what it is and how big, and a bin
+                 where this account may remove one (the owner, 2026-09-18). -->
+            <GameFilesList :files="game.files || []" class="gd-files-list" @changed="refreshGame" />
           </div>
         </div>
       </div>
@@ -343,18 +301,6 @@
                 <span class="gd-dv gd-owner-cell">
                   <svg class="gd-owner-crown" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm0 2h14v2H5v-2z"/></svg>
                   {{ game.owner_username }}
-                  <!-- Only worth offering while somebody else owns it. An admin
-                       claiming a game they already own would change nothing. -->
-                  <button
-                    v-if="isAdmin && game.published_by && game.published_by !== auth.user?.id"
-                    class="gd-claim"
-                    :disabled="claiming"
-                    :title="t('detail.claim_hint', 'Take this game over: it leaves the uploader quota and they can no longer remove it')"
-                    @click="claimGame"
-                  >
-                    <i class="mdi mdi-account-arrow-left-outline"></i>
-                    {{ t('detail.claim', 'Take over') }}
-                  </button>
                 </span>
               </template>
               <!-- Shown only once a claim has parted the two. Before that the
@@ -440,18 +386,6 @@
 
         </div><!-- /gd-cols -->
 
-        <!-- Add a file to THIS game.
-             Reported by the owner: he uploaded Ion Fury, then its DLC, and got
-             a second library entry - because the only upload dialog in the whole
-             interface began by creating a game. This is the door that never has
-             to ask. For an uploader as well as an admin since 1.0.35: the owner
-             decided an uploader may add a file to any game it can see, and the
-             bytes count against the account that sends them. -->
-        <section v-if="isUploader" class="gd-section">
-          <h2 class="gd-section-title">{{ t('detail.add_file') }}</h2>
-          <AddFileForm :game-id="game.id" @added="fetchGame" />
-        </section>
-
         <!-- Admin: file management -->
         <section v-if="isAdmin" class="gd-section gd-admin-section">
           <h2 class="gd-section-title">
@@ -512,7 +446,7 @@
           <!-- Files for selected OS -->
           <div class="dl-files">
             <div v-for="typeGroup in filesByOsAndType" :key="typeGroup.type" class="dl-type-section">
-              <div class="dl-type-head">{{ typeGroup.type === 'game' ? t('detail.type_game') : typeGroup.type === 'extra' ? t('detail.type_extras') : t('detail.type_dlc') }}</div>
+              <div class="dl-type-head">{{ typeLabel(typeGroup.type) }}</div>
               <div
                 v-for="f in typeGroup.files"
                 :key="f.id"
@@ -563,7 +497,7 @@
 
           <div class="dl-files">
             <div v-for="typeGroup in filesByOsAndType" :key="typeGroup.type" class="dl-type-section">
-              <div class="dl-type-head">{{ typeGroup.type === 'game' ? t('detail.type_game') : typeGroup.type === 'extra' ? t('detail.type_extras') : t('detail.type_dlc') }}</div>
+              <div class="dl-type-head">{{ typeLabel(typeGroup.type) }}</div>
               <div v-for="f in typeGroup.files" :key="f.id" class="dl-file-row">
                 <label class="dl-file-check">
                   <input type="checkbox" :checked="torrentPickerSel.has(f.id)" @change="toggleTorrentFile(f.id)" />
@@ -660,7 +594,10 @@ import { useCollectionsStore } from '@/stores/collections'
 import client from '@/services/api/client'
 import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
 import PackageDialog from '@/components/games/PackageDialog.vue'
-import AddFileForm from '@/components/games/AddFileForm.vue'
+import GameFilesList from '@/components/games/GameFilesList.vue'
+import ManageMenu from '@/components/common/ManageMenu.vue'
+import type { ManageItem } from '@/lib/manageMenu'
+import { openAddFileDialog } from '@/lib/pluginUi'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
 import { resolveDetailRows } from '@/themes/index'
 import { sanitizeHtml } from '@/utils/sanitize'
@@ -688,6 +625,8 @@ interface LibFile {
   file_path?: string
   source: string
   is_available: boolean
+  /** Whether this account's bin would work on it (library_router._mark_removable). */
+  can_delete?: boolean
 }
 
 interface LibGame {
@@ -820,9 +759,18 @@ const filesByOsAndType = computed(() => {
     if (!byType[f.file_type]) byType[f.file_type] = []
     byType[f.file_type].push(f)
   }
-  const typeOrder = ['game', 'dlc', 'extra']
+  const typeOrder = ['game', 'dlc', 'extra', 'mod']
   return typeOrder.filter(t => byType[t]).map(t => ({ type: t, files: byType[t] }))
 })
+
+// A group's heading. The server keeps a file's kind to these four
+// (models/library_file.py FILE_TYPES), so nothing falls through to another's.
+function typeLabel(type: string): string {
+  if (type === 'game') return t('detail.type_game')
+  if (type === 'extra') return t('detail.type_extras')
+  if (type === 'mod') return t('detail.type_mods')
+  return t('detail.type_dlc')
+}
 
 watch(availableOSes, (oses) => {
   if (oses.length && !oses.includes(selectedOs.value)) {
@@ -1261,6 +1209,79 @@ async function fetchGame() {
   }
 }
 
+// After a file was binned: the game again, without the page going back to its
+// loading state around it.
+async function refreshGame() {
+  const id = game.value?.id
+  if (!id) return
+  try {
+    const { data } = await client.get(`/library/games/${id}`)
+    game.value = data
+    fetchPackable(data.id)
+  } catch { /* the page keeps what it had */ }
+}
+
+// The core dialog every skin opens; it stays open for the next file, and the
+// page shows each one as it lands.
+function openAddFile() {
+  if (!game.value) return
+  openAddFileDialog({
+    game: { id: game.value.id, title: game.value.title },
+    onAdded: refreshGame,
+  })
+}
+
+function toggleEditPanel() {
+  showEditPanel.value = !showEditPanel.value
+}
+
+function openPackage() {
+  packageOpen.value = true
+}
+
+// ── Manage menu ───────────────────────────────────────────────────────────────
+// What a plain user is not offered, under one button (the owner, 2026-09-18);
+// the row keeps Download and Torrent. Each item is shown on exactly the check
+// its button had, so an uploader or an editor sees the same button with fewer
+// items in it.
+//
+// Add file: a DLC, an extra, a mod, another build, into THIS game - the door
+// that never has to ask which game. For an uploader as well as an admin: an
+// uploader may add a file to any game it can see, and the bytes count against
+// the account that sends them.
+//
+// Take over: only while somebody else owns the game. An admin claiming a game
+// they already own would change nothing.
+const manageItems = computed<ManageItem[]>(() => {
+  const g = game.value
+  return [
+    { key: 'edit', group: 'metadata', show: canEdit.value,
+      icon: metaLocked.value ? 'mdi-lock-outline' : 'mdi-pencil-outline',
+      label: t('detail.edit_metadata'), disabled: metaLocked.value,
+      title: metaLocked.value ? t('meta.locked_by_admin') : undefined, run: toggleEditPanel },
+    { key: 'scrape', group: 'metadata', show: isAdmin.value, icon: 'mdi-refresh', busy: scraping.value,
+      label: scraping.value ? t('detail.scraping') : t('detail.refresh_metadata'),
+      title: t('detail.fetch_metadata_hint'), run: onScrapeClick },
+    { key: 'clear', group: 'metadata', show: isAdmin.value, icon: 'mdi-eraser', danger: true, busy: clearing.value,
+      label: clearing.value ? t('detail.clearing') : t('detail.clear_metadata'),
+      title: t('detail.remove_scraped_hint'), run: onClearMetadataClick },
+    { key: 'add-file', group: 'files', show: isUploader.value, icon: 'mdi-file-plus-outline',
+      label: t('detail.add_file'), run: openAddFile },
+    { key: 'package', group: 'files', show: isAdmin.value && packablePlatforms.value.length > 0,
+      icon: 'mdi-package-variant-closed', label: t('packaging.package_now'),
+      title: t('packaging.package_now_hint'), run: openPackage },
+    { key: 'unpublish', group: 'publishing', show: isAdmin.value && !!g?.is_active, icon: 'mdi-eye-off-outline',
+      label: t('detail.unpublish'), run: unpublishGame },
+    { key: 'publish', group: 'publishing', show: isAdmin.value && !!g && !g.is_active, icon: 'mdi-eye-outline',
+      label: t('detail.publish'), run: republishGame },
+    { key: 'claim', group: 'publishing', show: isAdmin.value && !!g?.published_by && g.published_by !== auth.user?.id,
+      icon: 'mdi-account-arrow-left-outline', busy: claiming.value,
+      label: t('detail.claim'), title: t('detail.claim_hint'), run: claimGame },
+    { key: 'delete', group: 'danger', show: isAdmin.value, icon: 'mdi-delete-outline', danger: true,
+      label: t('common.delete'), run: deleteGame },
+  ]
+})
+
 watch(() => route.params.id, fetchGame)
 onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 </script>
@@ -1401,6 +1422,7 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 }
 
 .gd-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.gd-files-list { max-width: 640px; margin-top: 10px; }
 /* Specular sheen layer */
 .gd-cover-sheen {
   position: absolute; inset: 0;
@@ -1418,8 +1440,6 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
   object-position: left center;
   filter: drop-shadow(0 2px 18px rgba(0,0,0,.75));
 }
-
-.spin { animation: spin .8s linear infinite; }
 
 /* ── Unified button styles (same as GOG view) ─────────────────────────────── */
 .gd-btn-dl {
@@ -1447,46 +1467,6 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 
 .dl-btn--torrent { background: rgba(20,184,166,.25); color: #2dd4bf; border: 1px solid rgba(20,184,166,.4); }
 .dl-btn--torrent:not(:disabled):hover { background: rgba(20,184,166,.4); }
-
-.gd-btn-ghost {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 10px 18px; border-radius: var(--radius-sm);
-  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.16);
-  color: rgba(255,255,255,.68); font-size: 13px; font-weight: 600; font-family: inherit;
-  cursor: pointer; transition: all .15s; backdrop-filter: blur(6px);
-}
-.gd-btn-ghost:not(:disabled):hover { background: rgba(255,255,255,.13); color: #fff; border-color: rgba(255,255,255,.3); }
-.gd-btn-ghost:disabled { opacity: .5; cursor: not-allowed; }
-
-.gd-btn-danger {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 10px 18px; border-radius: var(--radius-sm);
-  background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35);
-  color: #fca5a5; font-size: 13px; font-weight: 600; font-family: inherit;
-  cursor: pointer; transition: all .15s; backdrop-filter: blur(6px);
-}
-.gd-btn-danger:not(:disabled):hover { background: rgba(239,68,68,.24); border-color: rgba(239,68,68,.6); color: #fecaca; }
-.gd-btn-danger:disabled { opacity: .5; cursor: not-allowed; }
-
-.gd-btn-publish {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 10px 18px; border-radius: var(--radius-sm);
-  background: rgba(20,184,166,.12); border: 1px solid rgba(20,184,166,.35);
-  color: #2dd4bf; font-size: 13px; font-weight: 600; font-family: inherit;
-  cursor: pointer; transition: all .15s; backdrop-filter: blur(6px);
-}
-.gd-btn-publish:not(:disabled):hover { background: rgba(20,184,166,.24); border-color: rgba(20,184,166,.6); color: #5eead4; }
-.gd-btn-publish:disabled { opacity: .5; cursor: not-allowed; }
-
-.gd-btn-unpublish {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 10px 18px; border-radius: var(--radius-sm);
-  background: rgba(239,68,68,.10); border: 1px solid rgba(239,68,68,.3);
-  color: #f87171; font-size: 13px; font-weight: 600; font-family: inherit;
-  cursor: pointer; transition: all .15s; backdrop-filter: blur(6px);
-}
-.gd-btn-unpublish:not(:disabled):hover { background: rgba(239,68,68,.22); border-color: rgba(239,68,68,.55); color: #fca5a5; }
-.gd-btn-unpublish:disabled { opacity: .5; cursor: not-allowed; }
 
 /* legacy alias - kept for upload panel */
 .gd-download-btn {
@@ -1543,6 +1523,7 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 .type-game  { background: color-mix(in srgb, var(--pl) 20%, transparent); color: var(--pl-light); border: 1px solid color-mix(in srgb, var(--pl) 30%, transparent); }
 .type-extra { background: rgba(20,184,166,.2); color: #2dd4bf; border: 1px solid rgba(20,184,166,.3); }
 .type-dlc   { background: rgba(234,179,8,.2); color: #fde047; border: 1px solid rgba(234,179,8,.3); }
+.type-mod   { background: rgba(249,115,22,.2); color: #fdba74; border: 1px solid rgba(249,115,22,.3); }
 .files-size { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .gd-spinner {
   width: 12px; height: 12px; border: 2px solid rgba(255,255,255,.2);
@@ -1762,22 +1743,6 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
 .gd-owner-cell { display: flex; align-items: center; gap: 6px; }
 .gd-owner-crown { color: #f59e0b; flex-shrink: 0; filter: drop-shadow(0 0 4px rgba(245,158,11,.4)); }
 .gd-uploader-icon { color: var(--pl); flex-shrink: 0; opacity: .8; font-size: 15px; }
-.gd-claim {
-  display: inline-flex; align-items: center; gap: 4px;
-  margin-left: 4px; padding: 1px 8px;
-  font: inherit; font-size: 11px; line-height: 18px;
-  color: var(--pl); cursor: pointer;
-  background: color-mix(in srgb, var(--pl) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--pl) 30%, transparent);
-  border-radius: 999px;
-  transition: border-color .15s, background .15s;
-}
-.gd-claim:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--pl) 20%, transparent);
-  border-color: color-mix(in srgb, var(--pl) 50%, transparent);
-}
-.gd-claim:disabled { opacity: .5; cursor: default; }
-.gd-claim .mdi { font-size: 13px; }
 
 .gd-tag-inline { display: flex; flex-wrap: wrap; gap: var(--space-1, 4px); }
 .gd-itag {
@@ -1997,14 +1962,5 @@ onMounted(() => { fetchGame(); fetchTransmissionEnabled() })
   .gd-body { padding: 20px 16px 40px; }
   .gd-cols { gap: var(--space-5, 20px); }
   .gd-dlist { grid-template-columns: 30px auto 1fr; font-size: var(--fs-sm, 12px); }
-}
-
-
-/* Shut rather than broken: amber says somebody else holds this, which is not
-   the same as something having gone wrong. */
-.gd-btn--locked, .gd-btn--locked:hover {
-  background: rgba(245,158,11,.14) !important;
-  border-color: rgba(245,158,11,.4) !important;
-  color: #f59e0b; cursor: not-allowed;
 }
 </style>

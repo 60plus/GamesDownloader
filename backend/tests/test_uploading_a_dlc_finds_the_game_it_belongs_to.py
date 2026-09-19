@@ -242,8 +242,10 @@ def _submit(body: str) -> str:
 
 def test_a_game_can_be_given_a_file_from_its_own_page():
     """The other half of what the owner asked for, and the half that removes the
-    need to type a title at all: the game is the one on screen."""
-    assert "<AddFileForm" in _read(DETAIL), (
+    need to type a title at all: the game is the one on screen. A button on the
+    page opens the core dialog with this game in it (a form at the foot of the
+    page until 2026-09-18, when the owner asked for a button like the others)."""
+    assert "openAddFileDialog(" in _read(DETAIL), (
         "strona gry nadal nie ma sposobu na dodanie do niej pliku"
     )
     assert "uploadFile(" in _submit(_read(FORM)), "przycisk nie wysyla pliku"
@@ -259,7 +261,10 @@ def test_that_way_can_never_make_a_second_entry():
         "tylko innymi drzwiami"
     )
     assert "uploadFile(props.gameId" in fn, "plik nie jest celowany w te gre"
-    assert ':game-id="game.id"' in _read(DETAIL)
+    detail = _read(DETAIL)
+    opener = detail[detail.index("function openAddFile("):]
+    opener = opener[:opener.index("\n}\n")]
+    assert "game: { id: game.value.id" in opener, "okno nie dostaje gry, ktora jest na ekranie"
 
 
 def test_the_picker_is_cleared_after_a_send():

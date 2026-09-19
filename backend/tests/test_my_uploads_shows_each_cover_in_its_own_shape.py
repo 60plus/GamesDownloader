@@ -35,6 +35,8 @@ async def db(monkeypatch):
     async with engine.begin() as conn:
         await conn.run_sync(RomPlatform.__table__.create)
         await conn.run_sync(Rom.__table__.create)
+        from models.rom_added_file import RomAddedFile
+        await conn.run_sync(RomAddedFile.__table__.create)
         from models.library import Library, LibraryMembership
         from models.library_file import LibraryFile
         from models.library_game import LibraryGame

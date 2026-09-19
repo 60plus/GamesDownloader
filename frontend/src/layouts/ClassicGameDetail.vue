@@ -72,6 +72,9 @@
             <button v-if="activeLib === 'roms'" class="cov-btn" :title="t('detail.download_rom')" @click="downloadRom()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </button>
+            <!-- The manual, as an icon like the rest of this row. The shared
+                 component shows nothing for a ROM without one. -->
+            <RomManualButton v-if="activeLib === 'roms'" :rom-id="game?.id" :available="game?.has_manual" compact class="cov-btn" />
             <!-- GOG download -->
             <button v-else-if="activeLib !== 'games'" class="cov-btn" :title="t('common.download')" @click="dlOpen = true">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -83,7 +86,7 @@
             <!-- Add a file to this game: a DLC, an extra, another build. An
                  uploader may add to any game it can see (1.0.35); the form is
                  the core's, opened as a dialog. -->
-            <button v-if="activeLib === 'games' && canUpload" class="cov-btn" @click="openAddFile" :title="t('detail.add_file')">
+            <button v-if="(activeLib === 'games' || activeLib === 'roms') && canUpload" class="cov-btn" @click="openAddFile" :title="t('detail.add_file')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             </button>
             <button v-if="canEdit"
@@ -358,6 +361,17 @@
             </template>
             <div class="icard-row"><span class="icard-label">{{ t('detail.extension') }}: </span><span class="icard-val">{{ game.fs_extension || '-' }}</span></div>
             <div class="icard-row"><span class="icard-label">{{ t('detail.size') }}: </span><span class="icard-val">{{ titleBytes ? formatSize(titleBytes) : '-' }}</span></div>
+            <!-- The extras and mods beside the game, listed the way a GOG or
+                 custom game lists its files, every disc on its own line. Always
+                 there, as in Modern: drawn only while there were extras, binning
+                 the last one took the button away with it (the owner, 2026-09-19). -->
+            <RomFilesList :game-label="romGameLabel" :game-size="titleBytes" :discs="diskSet"
+                          :rom-id="Number(game.id)" @changed="loadGame(props.gameId, true)"
+                          :extras="game.extras || []" always class="cfiles-rom" />
+            <RomDownloadDialog v-model="showRomDownload" :rom-id="game.id"
+                               :title="game.name || (game as any).fs_name || ''" :game-label="romGameLabel"
+                               :game-size="titleBytes" :whole-set="diskSet.length > 1"
+                               :extras="game.extras || []" />
             <div class="icard-row"><span class="icard-label">{{ t('detail.players') }}: </span><span class="icard-val">{{ game.player_count || '-' }}</span></div>
             <template v-if="game.regions?.length">
               <div class="icard-head" style="margin-top:10px">
@@ -396,6 +410,10 @@
                 </span>
               </div>
             </div>
+            <!-- The game's files, each with what it is and how big, and a bin
+                 where this account may remove one (the owner, 2026-09-18). -->
+            <GameFilesList v-if="activeLib === 'games'" :files="(game.files as any) || []"
+                           class="cfiles-rom" @changed="loadGame(props.gameId, true)" />
           </template>
         </div>
 
@@ -565,7 +583,7 @@
         <div class="cd-dl-files">
           <div v-if="!libFilesByOsAndType.length" class="cd-dl-empty">{{ t('detail.no_files') }}</div>
           <div v-for="group in libFilesByOsAndType" :key="group.type" class="cd-dl-type-section">
-            <div class="cd-dl-type-head">{{ group.type === 'game' ? t('detail.type_game') : group.type === 'extra' ? t('detail.type_extras') : t('detail.type_dlc') }}</div>
+            <div class="cd-dl-type-head">{{ libTypeLabel(group.type) }}</div>
             <label v-for="f in group.files" :key="f.id" class="cd-dl-row">
               <input type="checkbox" :checked="libDlSelected.has(f.id)" @change="libToggleSelect(f.id)" />
               <span class="cd-dl-name">{{ f.display_name || f.filename }}</span>
@@ -727,6 +745,10 @@ import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
 import { resolveDetailRows } from '@/themes/index'
 import EmulationRomMetadataPanel from '@/views/emulation/EmulationRomMetadataPanel.vue'
 import DownloadDialog from '@/components/gog/DownloadDialog.vue'
+import RomManualButton from '@/components/roms/RomManualButton.vue'
+import RomDownloadDialog, { type RomExtra } from '@/components/roms/RomDownloadDialog.vue'
+import RomFilesList from '@/components/roms/RomFilesList.vue'
+import GameFilesList from '@/components/games/GameFilesList.vue'
 import { useThemeStore } from '@/stores/theme'
 import { useCollectionsStore } from '@/stores/collections'
 import { useNotifications } from '@/composables/useNotifications'
@@ -738,7 +760,7 @@ import { useI18n } from '@/i18n'
 import { sanitizeHtml } from '@/utils/sanitize'
 import { getEjsCore } from '@/utils/ejsCores'
 import { romActions } from '@/lib/romSourceActions'
-import { openAddFileDialog } from '@/lib/pluginUi'
+import { openAddFileDialog, openRomAddFileDialog } from '@/lib/pluginUi'
 import { formatBytes } from '@/utils/format'
 const formatSize = (b: number | null | undefined) => formatBytes(b, '-')
 
@@ -762,9 +784,18 @@ const canUpload = computed(() =>
 function openAddFile() {
   if (!game.value) return
   const id = props.gameId
+  // A ROM game takes an extra, a mod, the manual or a further disc (1.0.36).
+  if (props.activeLib === 'roms') {
+    openRomAddFileDialog({
+      rom: { id: Number((game.value as any).id ?? id), title: (game.value as any).title,
+             platform_fs_slug: (game.value as any).platform_fs_slug },
+      onAdded: () => loadGame(id, true),
+    })
+    return
+  }
   openAddFileDialog({
     game: { id: (game.value as any).id ?? id, title: (game.value as any).title },
-    onAdded: () => loadGame(id),
+    onAdded: () => loadGame(id, true),
   })
 }
 // A locked entry is the admin's alone, so there is nothing here for anyone
@@ -825,6 +856,9 @@ interface GameData {
   hltb_main_s?: number; hltb_complete_s?: number
   summary?: string; wheel_path?: string; video_path?: string
   support_path?: string; bezel_path?: string; steamgrid_path?: string
+  has_manual?: boolean
+  // ROMs only: the files in the game's extras/ and mods/.
+  extras?: RomExtra[]
   // Library games only. published_by is what a claim moves; uploader_username
   // is sent only once a claim has parted the two.
   published_by?: number | null; owner_username?: string | null
@@ -1043,8 +1077,17 @@ const libFilesByOsAndType = computed(() => {
     if (!byType[f.file_type]) byType[f.file_type] = []
     byType[f.file_type].push(f)
   }
-  return (['game', 'dlc', 'extra'] as const).filter(t => byType[t]).map(t => ({ type: t, files: byType[t] }))
+  return (['game', 'dlc', 'extra', 'mod'] as const).filter(t => byType[t]).map(t => ({ type: t, files: byType[t] }))
 })
+
+// A group's heading. The server keeps a file's kind to these four
+// (models/library_file.py FILE_TYPES), so nothing falls through to another's.
+function libTypeLabel(type: string): string {
+  if (type === 'game') return t('detail.type_game')
+  if (type === 'extra') return t('detail.type_extras')
+  if (type === 'mod') return t('detail.type_mods')
+  return t('detail.type_dlc')
+}
 
 watch(libAvailableOSes, (oses) => {
   if (oses.length && !oses.includes(libDlOs.value as any)) libDlOs.value = oses[0]
@@ -1201,6 +1244,13 @@ async function scrapeGame(preserveExternal: boolean) {
 
 async function downloadRom(diskId?: number) {
   if (!game.value) return
+  // With extras or mods beside it, the whole game's download is a choice of
+  // files, the way a GOG or custom game offers its own. One disc asked for by
+  // its own button is still just that disc.
+  if (!diskId && game.value.extras?.length) {
+    showRomDownload.value = true
+    return
+  }
   // Was: fetch the whole file into a blob and save that. It worked, but it read
   // the entire ROM into memory first - fine for a floppy image, fatal for a
   // disc. A short-lived ticket lets the browser stream it to disk instead.
@@ -1230,6 +1280,9 @@ async function onDeleteClick() {
   // Counted here and asked about below: the data files a sheet names go
   // with the file or stay with it, so they belong to the second question.
   let trackFiles = 0
+  // And what the game keeps in extras/ and mods/, which goes with the file too
+  // (the owner's decision D) and is named rather than counted with the tracks.
+  let extras: string[] = []
   const lines = [t('detail.delete_body').replace('{name}', game.value.title)]
   let onDisk = (game.value.files?.length ?? 0) > 0
 
@@ -1240,6 +1293,7 @@ async function onDeleteClick() {
       if (p.disks.length > 1) lines.push(t('detail.delete_rom_disks').replace('{n}', String(p.disks.length)))
       if (p.saves > 0) lines.push(t('detail.delete_rom_saves').replace('{n}', String(p.saves)))
       trackFiles = p.files?.length ?? 0
+      extras = p.extras ?? []
     } catch {
       notifyError(t('detail.delete_failed'))
       return
@@ -1258,6 +1312,11 @@ async function onDeleteClick() {
   if (onDisk) {
     const fileLines = [isRom ? t('detail.delete_rom_files_body') : t('detail.delete_files_body')]
     if (trackFiles) fileLines.push(t('detail.delete_rom_tracks').replace('{n}', String(trackFiles)))
+    if (extras.length) {
+      const names = extras.slice(0, 5).join(', ') + (extras.length > 5 ? ', …' : '')
+      fileLines.push(t('detail.delete_rom_extras')
+        .replace('{n}', String(extras.length)).replace('{names}', names))
+    }
     withFiles = await gdConfirm(
       fileLines.join('\n\n'),
       {
@@ -1396,21 +1455,29 @@ async function computeHashes() {
 
 // ── API ──────────────────────────────────────────────────────────────────────
 
-async function loadGame(id: string | number) {
+// `quiet`: the same game again after a file was added or binned, without the
+// pane going back to its spinner - which closed Show details and reset the
+// carousel after every bin (1.0.36 audit).
+async function loadGame(id: string | number, quiet = false) {
   if (!id) return
-  loading.value = true
-  error.value   = ''
-  coverFailed.value = false
-  coverTried.value  = 0
-  logoFailed.value  = false
-  slideIdx.value    = 0
-  game.value = null
+  if (!quiet) {
+    loading.value = true
+    error.value   = ''
+    coverFailed.value = false
+    coverTried.value  = 0
+    logoFailed.value  = false
+    slideIdx.value    = 0
+    game.value = null
+  }
   try {
     let endpoint: string
     if (props.activeLib === 'roms')  endpoint = `/roms/${id}`
     else if (props.activeLib === 'games') endpoint = `/library/games/${id}`
     else endpoint = `/gog/library/games/${id}`
     const { data } = await client.get(endpoint)
+    // A quiet refresh answered after the reader moved to another game is the
+    // old game's; shown, it would sit under the new one's selection.
+    if (quiet && String(id) !== String(props.gameId)) return
     if (props.activeLib === 'roms') {
       // Normalize ROM data to GameData shape
       game.value = {
@@ -1429,9 +1496,10 @@ async function loadGame(id: string | number) {
       if (props.activeLib === 'games') { loadGameCollections(data.id); fetchPackable(data.id) }
     }
   } catch (e: any) {
-    error.value = e?.response?.data?.detail || t('detail.load_failed')
+    // A quiet refresh that fails keeps what the page already shows.
+    if (!quiet) error.value = e?.response?.data?.detail || t('detail.load_failed')
   } finally {
-    loading.value = false
+    if (!quiet) loading.value = false
   }
 }
 
@@ -1539,7 +1607,15 @@ const diskSetBytes = computed(() =>
 // What the game weighs, which for a title split across discs is all of them.
 // The row names disc one, so its size alone answered a question nobody asked.
 const titleBytes = computed(() =>
-  diskSet.value.length > 1 ? diskSetBytes.value : (game.value?.fs_size_bytes || 0))
+  diskSet.value.length > 1 ? diskSetBytes.value
+    : (game.value?.fs_size_bytes || 0) + ((game.value as any)?.tracks_bytes || 0))
+// The game as one entry in its file list and download picker, however many
+// discs it came on: they download together, as one archive.
+const romGameLabel = computed(() =>
+  diskSet.value.length > 1
+    ? t('detail.all_discs', { n: diskSet.value.length })
+    : ((game.value as any)?.fs_name || ''))
+const showRomDownload = ref(false)
 
 // Which disk the machine starts from. Null means the one this entry names,
 // which is disk 1 for every ordinary set.
@@ -2010,6 +2086,7 @@ onUnmounted(() => window.removeEventListener('message', onPlayerMessage))
 
 /* Disks of a multi-floppy title */
 .cdisks { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 0 4px; }
+.cfiles-rom { margin: 6px 0 4px; }
 .cdisk {
   display: inline-flex; align-items: stretch; border-radius: 10px; overflow: hidden;
   background: color-mix(in srgb, var(--pl) 16%, transparent);

@@ -90,6 +90,7 @@ async def used_bytes(user_id: int | None) -> int:
     from models.library_file import LibraryFile
     from models.library_game import LibraryGame
     from models.rom import Rom
+    from models.rom_added_file import RomAddedFile
 
     async with async_session_factory() as session:
         games = await session.scalar(
@@ -120,7 +121,16 @@ async def used_bytes(user_id: int | None) -> int:
                 Rom.missing_from_fs.is_(False),
             )
         )
-    return int(games or 0) + int(roms or 0)
+        # And a third shape: the files an account put beside a ROM game, in its
+        # extras/ or mods/ ("Add file" on a ROM, open to uploaders since
+        # 2026-09-18). They have no Rom row of their own, so each has one in
+        # rom_added_files; a row whose file went over FTP is forgotten when the
+        # game's page next lists its files (roms_router._mark_extras).
+        added = await session.scalar(
+            select(func.coalesce(func.sum(RomAddedFile.size_bytes), 0))
+            .where(RomAddedFile.published_by == user_id)
+        )
+    return int(games or 0) + int(roms or 0) + int(added or 0)
 
 
 async def in_flight_bytes(user_id: int | None, *, except_torrent_id: int | None = None) -> int:
@@ -563,7 +573,7 @@ async def _owned_roms(user_id: int) -> list[dict]:
         # route will refuse.
         return can_delete_rom_set(_AS_AN_UPLOADER, user_id, row, sets.get(row.id, [row]))
 
-    return [
+    listed = [
         {
             "kind": "rom",
             "id": r.id,
@@ -583,6 +593,8 @@ async def _owned_roms(user_id: int) -> list[dict]:
             # the whole disc set - so a disc of mine inside somebody else's set
             # is charged to me and still not mine to remove.
             "can_delete": _may_remove(r),
+            # The row is the ROM itself. See _add_rom_files for the other kind.
+            "files_only": False,
             "in_default_library": False,
             "metadata_locked": bool(r.metadata_locked),
             "library": {
@@ -593,6 +605,82 @@ async def _owned_roms(user_id: int) -> list[dict]:
         }
         for r in rows
     ]
+    await _add_rom_files(user_id, listed)
+    return listed
+
+
+async def _add_rom_files(user_id: int, listed: list[dict]) -> None:
+    """Put the files this account added beside ROM games on the list.
+
+    The bar counts them (used_bytes), so the list has to show them. On the row
+    of a ROM already listed as this account's they are more of that row. Added
+    to a ROM that is not listed - somebody else's, or this account's own whose
+    file has gone missing - they are a row of their own, marked `files_only`:
+    the game is not this account's to delete, but its files are its to take
+    back ("Remove my files", roms_router.remove_my_rom_files), the way a DLC
+    added to somebody else's game is listed.
+    """
+    from handler.database.session import async_session_factory
+    from handler.metadata.rom_platform_map import rom_cover_aspect
+    from models.rom import Rom
+    from models.rom_added_file import RomAddedFile
+    from models.rom_platform import RomPlatform
+
+    async with async_session_factory() as session:
+        added = (await session.execute(
+            select(RomAddedFile.rom_id,
+                   func.coalesce(func.sum(RomAddedFile.size_bytes), 0),
+                   func.count(RomAddedFile.id))
+            .where(RomAddedFile.published_by == user_id)
+            .group_by(RomAddedFile.rom_id)
+        )).all()
+        if not added:
+            return
+        by_id = {g["id"]: g for g in listed}
+        elsewhere = [rom_id for rom_id, _s, _n in added if rom_id not in by_id]
+        roms = {}
+        if elsewhere:
+            roms = {r.id: r for r in (await session.execute(
+                select(Rom.id, Rom.name, Rom.fs_name, Rom.slug, Rom.cover_path,
+                       Rom.cover_type, Rom.cover_aspect, Rom.metadata_locked,
+                       RomPlatform.slug.label("platform_slug"),
+                       RomPlatform.fs_slug.label("platform_fs_slug"),
+                       RomPlatform.name.label("platform_name"),
+                       RomPlatform.custom_name)
+                .select_from(Rom)
+                .outerjoin(RomPlatform, RomPlatform.id == Rom.platform_id)
+                .where(Rom.id.in_(elsewhere))
+            )).all()}
+
+    for rom_id, size, count in added:
+        size, count = int(size or 0), int(count or 0)
+        if rom_id in by_id:
+            by_id[rom_id]["size_bytes"] += size
+            by_id[rom_id]["file_count"] += count
+            continue
+        r = roms.get(rom_id)
+        if r is None:
+            continue    # the ROM went and its rows with it (ON DELETE CASCADE)
+        listed.append({
+            "kind": "rom",
+            "id": r.id,
+            "title": r.name or r.fs_name,
+            "slug": r.slug,
+            "cover_path": r.cover_path,
+            "aspect": rom_cover_aspect(r.cover_type, r.cover_aspect, r.platform_fs_slug),
+            "source": "rom",
+            "size_bytes": size,
+            "file_count": count,
+            "can_delete": False,
+            "files_only": True,
+            "in_default_library": False,
+            "metadata_locked": bool(r.metadata_locked),
+            "library": {
+                "slug": r.platform_slug or "roms",
+                "name": r.custom_name or r.platform_name or "ROMs",
+                "icon": None, "color": None, "order": 50,
+            },
+        })
 
 
 async def _attach_library(games: list[dict]) -> None:

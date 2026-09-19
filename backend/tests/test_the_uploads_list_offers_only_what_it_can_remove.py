@@ -56,6 +56,8 @@ async def db(monkeypatch):
     async with engine.begin() as conn:
         await conn.run_sync(RomPlatform.__table__.create)
         await conn.run_sync(Rom.__table__.create)
+        from models.rom_added_file import RomAddedFile
+        await conn.run_sync(RomAddedFile.__table__.create)
         # `owned_games` answers about BOTH kinds and attaches the shelf each
         # game sits on, so the game side has to exist even when this file only
         # asks about ROMs.

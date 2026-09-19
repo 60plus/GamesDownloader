@@ -114,6 +114,9 @@ async def db(monkeypatch):
         from models.rom_platform import RomPlatform
         await conn.run_sync(RomPlatform.__table__.create)
         await conn.run_sync(Rom.__table__.create)
+        # The files added beside ROM games, the third thing the sum reads.
+        from models.rom_added_file import RomAddedFile
+        await conn.run_sync(RomAddedFile.__table__.create)
         # The listing names the shelf each game sits on, so a fixture without
         # this table tests the sum and skips everything the list does.
         from models.library import Library, LibraryMembership
@@ -315,9 +318,11 @@ async def claimable(monkeypatch):
         await conn.run_sync(LibraryGame.__table__.create)
         await conn.run_sync(LibraryFile.__table__.create)
         from models.rom import Rom
+        from models.rom_added_file import RomAddedFile
         from models.rom_platform import RomPlatform
         await conn.run_sync(RomPlatform.__table__.create)
         await conn.run_sync(Rom.__table__.create)
+        await conn.run_sync(RomAddedFile.__table__.create)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
     async with maker() as session:

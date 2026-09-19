@@ -308,6 +308,15 @@
   "triggered_by",
   "updated_at"
  ],
+ "rom_added_files": [
+  "created_at",
+  "id",
+  "published_by",
+  "rel_path",
+  "rom_id",
+  "size_bytes",
+  "updated_at"
+ ],
  "rom_platforms": [
   "cover_path",
   "created_at",

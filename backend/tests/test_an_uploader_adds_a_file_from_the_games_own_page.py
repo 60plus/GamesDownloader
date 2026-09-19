@@ -12,9 +12,12 @@ game pages and had nothing. So the form becomes one core component:
   AddFileForm            the file, the platform, the type, progress and the
                          server's refusal; it only ever uploads into the game it
                          is given, never creates one;
-  Modern                 shows it on the page, for an uploader and an admin;
-  Vapor, Classic         open it as a dialog, `__GD__.ui.openAddFileDialog` -
-                         the same door the metadata editors go through.
+  Modern, Vapor, Classic open it as a dialog, `__GD__.ui.openAddFileDialog` -
+                         the same door the metadata editors go through. Modern
+                         showed it inline at the foot of the page until the
+                         owner asked for a button like the others (2026-09-18),
+                         and the same evening that button went into the page's
+                         one "Manage" menu with the other editing controls.
 
 These read the source, as the other frontend tests here do.
 """
@@ -67,15 +70,19 @@ def test_the_form_clears_the_picker_and_shows_the_servers_refusal():
 
 # ── Where it is shown ────────────────────────────────────────────────────────
 
-def test_modern_shows_it_to_an_uploader_and_an_admin():
+def test_modern_offers_it_to_an_uploader_and_an_admin():
+    """THE OWNER, 2026-09-18: a button, the way the ROM pages and Vapor have
+    it, rather than a form at the foot of the page - now an item of the page's
+    "Manage" menu. It opens the one dialog every skin uses."""
     body = _read(SRC / "views" / "games" / "GamesGameDetail.vue")
-    at = body.index("<AddFileForm")
-    opening = body[:at]
-    section = opening[opening.rindex("<section"):]
-    assert 'v-if="isUploader"' in section, "formularz nie jest dla uploadera"
-    assert 'v-if="isAdmin"' not in section, "formularz nadal siedzi w sekcji tylko dla admina"
-    assert '@added="fetchGame"' in body[at:at + 200]
+    assert "<AddFileForm" not in body, "formularz nadal stoi na dole strony"
+    at = body.index("run: openAddFile")
+    item = body[body.rindex("{", 0, at):at]
+    assert "show: isUploader.value," in item, "pozycja nie jest dla uploadera"
     assert "const isUploader = computed(() => ['admin','uploader']" in body
+    fn = body[body.index("function openAddFile("):]
+    fn = fn[:fn.index("\n}\n")]
+    assert "openAddFileDialog(" in fn and "onAdded: refreshGame" in fn
     assert "submitAddFile" not in body, "stara kopia formularza zostala obok wspolnego"
 
 

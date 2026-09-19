@@ -31,6 +31,19 @@
       </div>
     </div>
   </Teleport>
+  <!-- Add a file to a ROM game, for every skin's ROM page. -->
+  <Teleport to="body">
+    <div v-if="addFileRom" class="puh-backdrop" @mousedown.self="closeRomAddFileDialog()">
+      <div class="puh-dialog glass" role="dialog" :aria-label="t('detail.add_file')">
+        <div class="puh-head">
+          <span class="puh-title">{{ t('detail.add_file_to', { title: addFileRom.title || '' }) }}</span>
+          <button class="puh-close" :title="t('common.close')" @click="closeRomAddFileDialog()">&times;</button>
+        </div>
+        <RomAddFileForm :rom-id="addFileRom.id" :platform-fs-slug="addFileRom.platform_fs_slug"
+                        @added="onRomFileAdded" />
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -39,6 +52,7 @@ import LibraryMetadataPanel from '@/components/games/LibraryMetadataPanel.vue'
 import CollectionMetadataPanel from '@/components/collections/CollectionMetadataPanel.vue'
 import EmulationRomMetadataPanel from '@/views/emulation/EmulationRomMetadataPanel.vue'
 import AddFileForm from '@/components/games/AddFileForm.vue'
+import RomAddFileForm from '@/components/roms/RomAddFileForm.vue'
 import { useI18n } from '@/i18n'
 import {
   pluginUiState,
@@ -46,10 +60,32 @@ import {
   closeCollectionEditor,
   closeRomMetadataEditor,
   closeAddFileDialog,
+  closeRomAddFileDialog,
 } from '@/lib/pluginUi'
 
 const { t } = useI18n()
 const addFileGame = computed(() => pluginUiState.addFileDialog?.game)
+const addFileRom = computed(() => pluginUiState.romAddFileDialog?.rom)
+
+// The same as a game's: the page is told, and so is anything following the
+// snapshot+event pattern, which refetches the ROM on gd-rom-updated.
+//
+// A further disc (`scanning`) is registered by a scan that runs after the
+// upload answers, so the page is told again while that scan runs - from here,
+// which stays mounted when the dialog is closed; the form's own timers went
+// with it, in the ordinary case of closing it after "done" (1.0.36 audit).
+function onRomFileAdded(scanning = false) {
+  const req = pluginUiState.romAddFileDialog
+  const id = addFileRom.value?.id
+  const tell = () => {
+    req?.onAdded?.()
+    document.documentElement.dispatchEvent(new CustomEvent('gd-rom-updated', {
+      detail: { id },
+    }))
+  }
+  tell()
+  if (scanning) for (const ms of [4000, 12000, 30000]) setTimeout(tell, ms)
+}
 
 // Stays open for the next file; the page is told so it can show the new one,
 // and so is anything following the snapshot+event pattern.

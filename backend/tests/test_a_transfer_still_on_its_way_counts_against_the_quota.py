@@ -55,9 +55,10 @@ async def db(monkeypatch):
     async with engine.begin() as conn:
         from models.library import Library, LibraryMembership
         from models.rom import Rom
+        from models.rom_added_file import RomAddedFile
         from models.rom_platform import RomPlatform
         for table in (User, LibraryGame, LibraryFile, TorrentDownload,
-                      RomPlatform, Rom, Library, LibraryMembership):
+                      RomPlatform, Rom, RomAddedFile, Library, LibraryMembership):
             await conn.run_sync(table.__table__.create)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 

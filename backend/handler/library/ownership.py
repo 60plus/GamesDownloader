@@ -165,6 +165,55 @@ def can_replace_file(
     return bool(owner) and owner == user_id
 
 
+def can_remove_file(
+    scopes: Iterable[Scope], user_id: int | None, game: Any, file_row: Any,
+) -> bool:
+    """Whether this caller may remove one file of this game, from the disk too.
+
+    The bin beside a file (the owner, 2026-09-18). An administrator, any file;
+    otherwise the account the file counts against (`charged_to`) - the sentence
+    the quota sums with and "Remove my files" removes by, so the three never
+    disagree about what is yours. A file somebody else added to your game is
+    theirs; it goes with the game, not one at a time.
+    """
+    held = set(scopes)
+    if Scope.LIBRARY_ADMIN in held:
+        return True
+    if Scope.LIBRARY_UPLOAD not in held or not user_id:
+        return False
+    owner = charged_to(file_row, game)
+    return bool(owner) and owner == user_id
+
+
+def can_touch_added_file(
+    scopes: Iterable[Scope], user_id: int | None, row: Any | None, folder_owners: set,
+) -> bool:
+    """Whether this caller may replace or remove one file beside a ROM game.
+
+    The ROM side of `can_replace_file` and `can_remove_file` together, with
+    ROMS_WRITE as the administrator's permission as everywhere in the ROM API.
+    An administrator, any file; otherwise the account that added it (`row`,
+    models/rom_added_file.py).
+
+    A file with no row was put there over FTP, or fetched by a scrape, and
+    counts against nobody: it is the folder's. So the owner of the game may -
+    when every game in that folder is theirs (`folder_owners`, the owners of
+    its games, rom_handler.owners_in_folder). Asking only about the one game
+    let an uploader who got a game of their own into somebody else's folder,
+    a further disc sent `into` it, bin or overwrite that folder's files (1.0.36
+    audit).
+    """
+    held = set(scopes)
+    if Scope.ROMS_WRITE in held:
+        return True
+    if Scope.LIBRARY_UPLOAD not in held or not user_id:
+        return False
+    if row is not None:
+        owner = getattr(row, "published_by", None)
+        return bool(owner) and owner == user_id
+    return set(folder_owners) == {user_id}
+
+
 def can_touch_download(scopes: Iterable[Scope], user_id: int | None, job: Any) -> bool:
     """Whether this caller may pause, resume, retry or cancel this download.
 

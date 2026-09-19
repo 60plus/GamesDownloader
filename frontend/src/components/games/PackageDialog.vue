@@ -19,6 +19,7 @@
               <svg v-else-if="groupKind(g) === 'mac'" viewBox="0 0 24 24" fill="currentColor"><path d="M16.7 12.6c0-2 1.6-3 1.7-3-.9-1.4-2.4-1.6-2.9-1.6-1.2-.1-2.4.7-3 .7s-1.6-.7-2.6-.7c-1.3 0-2.6.8-3.3 2-1.4 2.5-.4 6.1 1 8.1.7 1 1.4 2.1 2.5 2.1 1 0 1.4-.7 2.6-.7s1.5.7 2.6.6c1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3s-2.1-.8-2.1-3zM14.8 6.3c.5-.7.9-1.6.8-2.6-.8 0-1.8.6-2.4 1.3-.5.6-1 1.5-.8 2.5.9 0 1.8-.5 2.4-1.2z"/></svg>
               <svg v-else-if="groupKind(g) === 'linux'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9l2.5 2.5L7 14"/><path d="M12 14h5"/><path d="M9 21h6"/></svg>
               <svg v-else-if="groupKind(g) === 'dlc'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19.4 13a1.7 1.7 0 000-3l-1-.1a1.7 1.7 0 01-1.2-2.4l.4-.9a1.7 1.7 0 00-2.2-2.2l-.9.4A1.7 1.7 0 0112 3.6L11.9 3a1.7 1.7 0 00-3 0l-.1 1A1.7 1.7 0 016.4 5.2l-.9-.4a1.7 1.7 0 00-2.2 2.2l.4.9A1.7 1.7 0 013.6 12L3 12.1a1.7 1.7 0 000 3l1 .1a1.7 1.7 0 011.2 2.4l-.4.9a1.7 1.7 0 002.2 2.2l.9-.4a1.7 1.7 0 012.4 1.2l.1 1a1.7 1.7 0 003 0"/></svg>
+              <svg v-else-if="groupKind(g) === 'mod'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L3 17.8V21h3.2l6.3-6.3a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/></svg>
               <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 8v13H4V8"/><rect x="2" y="3" width="20" height="5"/><path d="M10 12h4"/></svg>
             </span>
             <span>{{ groupLabel(g) }}</span>
@@ -79,12 +80,14 @@ function groupKind(g: string): string {
   const k = (g || '').toLowerCase()
   if (k === 'windows' || k === 'mac' || k === 'linux') return k
   if (k === 'dlc') return 'dlc'
+  if (k === 'mods' || k === 'mod') return 'mod'
   return 'extra'
 }
 function groupLabel(g: string): string {
   const k = (g || '').toLowerCase()
   if (_OS[k]) return `${t('packaging.group_game')} - ${_OS[k]}`
   if (k === 'dlc') return 'DLC'
+  if (k === 'mods' || k === 'mod') return t('detail.type_mods')
   return 'Extras'
 }
 

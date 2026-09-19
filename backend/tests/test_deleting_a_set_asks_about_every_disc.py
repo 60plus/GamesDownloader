@@ -152,7 +152,95 @@ def route(monkeypatch):
     monkeypatch.setattr(R.rom_removal, "delete_save_files", lambda *a, **k: 0)
     monkeypatch.setattr(R.rom_removal, "delete_media_dir", lambda *a, **k: False)
     monkeypatch.setattr(R.rom_removal, "spoken_for_elsewhere", lambda *a, **k: set())
+
+    # No other game in the folder unless a test says so.
+    handlers.survivor = None
+    handlers.handed = []
+
+    async def _another(_fs_path, _exclude, **_k):
+        return handlers.survivor
+
+    async def _hand_to(from_ids, to_id, **_k):
+        handlers.handed.append((sorted(from_ids), to_id))
+        return 0
+
+    monkeypatch.setattr(R.rom_handler, "another_in_folder", _another)
+    monkeypatch.setattr(R.rom_added_file_handler, "hand_to", _hand_to)
+
+    # The files that go with a set, and the file of each disc: an uploader's
+    # delete always takes them (the owner, 2026-09-19), so every route test
+    # reaches this part. Recorded, never touching a disk.
+    handlers.taken = []
+
+    async def _nothing(*_a, **_k):
+        return []
+
+    monkeypatch.setattr(R, "removable_tracks", _nothing)
+    monkeypatch.setattr(R, "_extras_going_with", _nothing)
+    monkeypatch.setattr(R, "_playlists_naming", lambda *a, **k: [])
+    monkeypatch.setattr(R, "subchannel_files_for", lambda *a, **k: [])
+    monkeypatch.setattr(R.rom_removal, "delete_rom_file",
+                        lambda disk, **_k: handlers.taken.append(disk.id) or True)
     return R, handlers
+
+
+@pytest.mark.asyncio
+async def test_files_added_to_a_game_that_shares_its_folder_stay_counted(route):
+    """In a folder two games share, the extras and mods are the folder's and
+    stay when one game goes. Their rows went with the game's row (ON DELETE
+    CASCADE), so the bytes stayed on the disk and counted against nobody, and
+    the account that added them could no longer remove them (1.0.36 audit).
+    They go to the game that stays."""
+    R, handlers = route
+    handlers.rows = [_Rom(id=1, published_by=UPLOADER_ID, disk_group=None)]
+    handlers.survivor = 40
+
+    await R.delete_rom(_request(UPLOADER_SCOPES, UPLOADER_ID), rom_id=1)
+
+    assert handlers.handed == [([1], 40)]
+    assert handlers.deleted == [1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scopes,uid,files_go", [
+    (UPLOADER_SCOPES, UPLOADER_ID, True),
+    (ADMIN_SCOPES, 1, False),
+], ids=["uploader", "admin"])
+async def test_an_uploader_removing_a_rom_always_takes_its_files(route, scopes, uid, files_go):
+    """The owner, 2026-09-19: an uploader's delete takes the file too, and only
+    an administrator may keep it. Removed with the file kept, the ROM stopped
+    counting against the uploader while it stayed on the disk, and the next
+    scan brought it back owned by nobody (1.0.36 audit)."""
+    R, handlers = route
+    handlers.rows = [_Rom(id=1, published_by=UPLOADER_ID, disk_group=None)]
+
+    await R.delete_rom(_request(scopes, uid), rom_id=1, delete_files=False)
+
+    assert bool(handlers.taken) is files_go
+    assert handlers.deleted == [1]
+
+
+@pytest.mark.asyncio
+async def test_a_row_removed_in_bulk_hands_its_added_files_on_too(route):
+    """Removing missing rows and applying exclusions delete one row at a time
+    through _take_the_bytes_too, and the same cascade takes the added-file rows."""
+    R, handlers = route
+    handlers.rows = [_Rom(id=5, fs_path="/l/psx/Hacks", disk_group=None)]
+    handlers.survivor = 6
+
+    await R._take_the_bytes_too(5, "psx")
+
+    assert handlers.handed == [([5], 6)]
+
+
+@pytest.mark.asyncio
+async def test_a_game_alone_in_its_folder_hands_nothing_on(route):
+    R, handlers = route
+    handlers.rows = [_Rom(id=1, published_by=UPLOADER_ID, disk_group=None)]
+
+    await R.delete_rom(_request(UPLOADER_SCOPES, UPLOADER_ID), rom_id=1)
+
+    assert handlers.handed == []
 
 
 @pytest.mark.asyncio

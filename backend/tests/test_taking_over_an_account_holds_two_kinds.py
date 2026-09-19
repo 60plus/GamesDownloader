@@ -182,7 +182,8 @@ def test_a_game_and_a_rom_of_the_same_number_are_different_rows():
 def rom_claim(monkeypatch):
     from endpoints.roms import roms_router as R
 
-    state = SimpleNamespace(row=SimpleNamespace(id=5, published_by=7), written=[])
+    state = SimpleNamespace(row=SimpleNamespace(id=5, published_by=7), written=[],
+                            handed=[], added_by={})
 
     async def _get_by_id(_rom_id):
         return state.row
@@ -190,8 +191,14 @@ def rom_claim(monkeypatch):
     async def _set_published_by(rom_id, user_id):
         state.written.append((rom_id, user_id))
 
+    async def _hand_over(rom_id, from_user, to_user, **_k):
+        # The files `from_user` added beside this ROM (models/rom_added_file.py).
+        state.handed.append((rom_id, from_user, to_user))
+        return state.added_by.get(from_user, 0)
+
     monkeypatch.setattr(R.rom_handler, "get_by_id", _get_by_id)
     monkeypatch.setattr(R.rom_handler, "set_published_by", _set_published_by)
+    monkeypatch.setattr(R.rom_added_file_handler, "hand_over", _hand_over)
     return R, state
 
 
@@ -220,6 +227,29 @@ async def test_a_rom_still_held_by_that_account_is_claimed(rom_claim):
 
     assert not out.get("skipped")
     assert state.written == [(5, 1)]
+
+
+@pytest.mark.asyncio
+async def test_the_files_that_account_added_to_somebody_elses_rom_are_taken_over(rom_claim):
+    """The list also shows a ROM the account only ADDED files to ("Add file",
+    2026-09-18). Taking that over is taking over those files, as with a DLC on
+    somebody else's game; the ROM itself stays whose it is."""
+    R, state = rom_claim
+    state.row = SimpleNamespace(id=5, published_by=9)
+    state.added_by = {7: 2}
+
+    out = await R.claim_rom(_admin_request(), rom_id=5, from_user_id=7)
+
+    assert not out.get("skipped")
+    assert state.handed == [(5, 7, 1)] and state.written == []
+
+
+@pytest.mark.asyncio
+async def test_a_claimed_rom_takes_its_owners_added_files_along(rom_claim):
+    """Or the account keeps paying for files beside a game it no longer holds."""
+    R, state = rom_claim
+    await R.claim_rom(_admin_request(), rom_id=5, from_user_id=7)
+    assert state.handed == [(5, 7, 1)]
 
 
 @pytest.mark.asyncio

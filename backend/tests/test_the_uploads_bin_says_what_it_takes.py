@@ -83,6 +83,9 @@ def preview(monkeypatch):
     monkeypatch.setattr(R.rom_removal, "spoken_for_elsewhere", lambda *a, **k: set())
     monkeypatch.setattr(R, "_playlists_naming", lambda *a, **k: [])
     monkeypatch.setattr(R, "subchannel_files_for", lambda *a, **k: [])
+    # Nothing beside these games in extras/ or mods/
+    # (test_a_games_extras_and_mods_are_offered.py).
+    monkeypatch.setattr(R, "_extras_going_with", tracks)
     return R, rows
 
 

@@ -357,6 +357,14 @@ export async function clearGameMetadata(kind: GameKind, id: number | string): Pr
   }
 }
 
+/** Remove one file of a game, from the disk too - the bin beside a file
+ *  (1.0.36). The server decides who may: an administrator, or the account the
+ *  file counts against; the game page marks each file `can_delete` with the
+ *  same rule, so a bin is drawn only where pressing it works. */
+export async function removeFile(fileId: number | string): Promise<void> {
+  await client.delete(`/library/files/${fileId}`);
+}
+
 // >>> EVERY FUNCTION A THEME MAY CALL HAS TO BE LISTED HERE, BY HAND.
 // The core screens import this module as a namespace (`import * as libActions`)
 // and see every export; a theme only ever sees THIS object, through
@@ -380,6 +388,7 @@ const libraryActions = {
   gogSyncStatus,
   gogClearMetadata,
   clearGameMetadata,
+  removeFile,
 };
 
 export default libraryActions;

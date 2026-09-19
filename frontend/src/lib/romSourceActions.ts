@@ -298,6 +298,97 @@ export async function cancelChdJob(jobId: number): Promise<void> {
   await client.delete(`/roms/convert-chd/jobs/${jobId}`);
 }
 
+/** Hand the browser a link to save, without leaving the page: the answer is
+ *  an attachment, so following it starts a download rather than navigating. */
+function saveFrom(url: string): void {
+  const a = document.createElement("a");
+  a.href = url;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/** Download a ROM, and any of the extras and mods beside it.
+ *
+ *  `game` saves the game itself - every disc of a title as one archive when
+ *  `wholeSet` is set, the way the Download button always has. `paths` are the
+ *  extras and mods to save, as the ROM's `extras` list names them. Each goes
+ *  through a short-lived ticket of its own, one after another, since a browser
+ *  starts the downloads it is handed one at a time. */
+export async function downloadRomFiles(
+  romId: number,
+  opts: { game?: boolean; wholeSet?: boolean; paths?: string[] } = {},
+): Promise<void> {
+  const wait = () => new Promise((r) => setTimeout(r, 400));
+  if (opts.game) {
+    const whole = opts.wholeSet ? "?whole_set=1" : "";
+    const { data } = await client.post(`/roms/${romId}/download-ticket${whole}`);
+    saveFrom(data.url);
+    await wait();
+  }
+  for (const path of opts.paths || []) {
+    const { data } = await client.post(`/roms/${romId}/extra-ticket`, { path });
+    saveFrom(data.url);
+    await wait();
+  }
+}
+
+export type RomFileKind = "extra" | "mod" | "manual" | "game";
+
+/** Add a file to a ROM game from its page (1.0.36).
+ *
+ *  An extra, a mod or the manual goes into the game's own folder, and a game
+ *  lying loose gets one first. A further disc or file of the game (`game`) goes
+ *  through the platform upload with `into`, which scans it in and makes it the
+ *  uploader's: that answer carries `saved` and `rejected` like "Add ROMs" does
+ *  (lib/uploadResult.ts says what to show). A name already there is refused
+ *  with 409 unless `overwrite` is set. */
+export async function addRomFile(
+  romId: number,
+  file: File,
+  opts: {
+    kind: RomFileKind;
+    platformFsSlug?: string | null;
+    overwrite?: boolean;
+    onProgress?: (percent: number) => void;
+  },
+): Promise<any> {
+  const progress = opts.onProgress
+    ? (ev: any) => { if (ev.total) opts.onProgress!(Math.round((ev.loaded / ev.total) * 100)); }
+    : undefined;
+  const fd = new FormData();
+  if (opts.kind === "game") {
+    if (!opts.platformFsSlug) throw new Error("platformFsSlug is required for a game file");
+    fd.append("files", file);
+    fd.append("into", String(romId));
+    const { data } = await client.post(`/roms/platforms/${opts.platformFsSlug}/upload`, fd, {
+      headers: { "Content-Type": "multipart/form-data" },
+      onUploadProgress: progress,
+    });
+    return data;
+  }
+  fd.append("file", file);
+  fd.append("kind", opts.kind);
+  if (opts.overwrite) fd.append("overwrite", "true");
+  const { data } = await client.post(`/roms/${romId}/files`, fd, {
+    headers: { "Content-Type": "multipart/form-data" },
+    onUploadProgress: progress,
+  });
+  return data;
+}
+
+/** Remove one extra or mod beside a ROM game - the bin beside it. Only a file
+ *  the page lists, and only for whoever may (the page marks `can_delete`). */
+export async function removeRomExtra(romId: number, path: string): Promise<void> {
+  await client.delete(`/roms/${romId}/extra`, { params: { path } });
+}
+
+/** Take this account's own files away from a ROM game ("Remove my files"). */
+export async function removeMyRomFiles(romId: number): Promise<void> {
+  await client.delete(`/roms/${romId}/my-files`);
+}
+
 /** The `window.__GD__.roms` namespace (general ROM primitives).
  *
  *  The conversion is here rather than left to each theme to reach for by URL:
@@ -308,6 +399,12 @@ export const romActions = {
   convertToChd,
   listChdJobs,
   cancelChdJob,
+  // A ROM and the extras and mods beside it, as the download picker saves them.
+  downloadFiles: downloadRomFiles,
+  // Adding a file to a game from its page, and the bin beside one (1.0.36).
+  addFile: addRomFile,
+  removeExtra: removeRomExtra,
+  removeMyFiles: removeMyRomFiles,
 };
 
 export default {

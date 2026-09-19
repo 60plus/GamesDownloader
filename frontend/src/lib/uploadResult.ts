@@ -35,6 +35,7 @@ export function reasonKey(r: UploadRejection): string {
     case 'extension_not_recognised': return 'library.reject_extension';
     case 'already_here':             return 'library.reject_already_here';
     case 'subchannel_too_large':     return 'library.reject_subchannel';
+    case 'no_folder_of_its_own':     return 'library.reject_no_folder';
     default:                         return 'library.reject_other';
   }
 }

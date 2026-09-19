@@ -37,7 +37,7 @@ from typing import Any
 import httpx
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from config import BASE_PATH, GAMES_PATH
 from utils.paths import is_within_allowed_roots
@@ -49,7 +49,7 @@ from handler.filesystem.exclusions import is_excluded_dir, parse_patterns
 from handler.library import quota
 from handler.library.metadata_lock import assert_unlocked
 from handler.library.ownership import assert_can_delete, claim_writes
-from models.library_file import LibraryFile
+from models.library_file import FILE_TYPES, LibraryFile, file_type_of
 from models.library_game import LibraryGame
 
 logger = logging.getLogger(__name__)
@@ -104,12 +104,10 @@ def _detect_os(folder_name: str) -> str:
 
 
 def _detect_type(folder_name: str) -> str:
-    name = folder_name.lower()
-    if name in ("extras", "extra", "bonus"):
-        return "extra"
-    if name in ("dlc",):
-        return "dlc"
-    return "game"
+    # extras/, extra/, bonus/, dlc/, mods/ and mod/ say what is in them; any
+    # other folder (windows/, a build's own subfolder) holds the game.
+    kind = file_type_of(folder_name)
+    return kind if kind in ("extra", "dlc", "mod") else "game"
 
 
 def _is_game_file(name: str) -> bool:
@@ -118,6 +116,10 @@ def _is_game_file(name: str) -> bool:
 
 # Folder names that act as OS/type containers in the OS-first layout
 _OS_CONTAINER_NAMES = {"windows", "win", "mac", "macos", "osx", "linux"}
+# Not mods/: inside a game's folder it holds the game's mods (_detect_type), but
+# at the top of a library it has long been a folder of its own that people
+# exclude by name, and reading it as a container would turn every subfolder of
+# it into a game on the next scan.
 _TYPE_CONTAINER_NAMES = {"extras", "extra", "bonus", "dlc"}
 _STRUCTURAL_NAMES = _OS_CONTAINER_NAMES | _TYPE_CONTAINER_NAMES
 
@@ -260,6 +262,17 @@ class GameUpdateBody(BaseModel):
     os_linux: bool | None = None
     is_active: bool | None = None
 
+def _one_of_the_file_types(value: str | None) -> str | None:
+    """A file's kind as one of FILE_TYPES, or refused. Every screen groups
+    files by those four and drew anything else as a DLC."""
+    if value is None:
+        return None
+    kind = file_type_of(value)
+    if kind is None:
+        raise ValueError(f"file_type must be one of {', '.join(FILE_TYPES)}")
+    return kind
+
+
 class FileUpdateBody(BaseModel):
     display_name: str | None = None
     file_type: str | None = None
@@ -267,6 +280,11 @@ class FileUpdateBody(BaseModel):
     language: str | None = None
     version: str | None = None
     is_available: bool | None = None
+
+    @field_validator("file_type")
+    @classmethod
+    def known_file_type(cls, value: str | None) -> str | None:
+        return _one_of_the_file_types(value)
 
 class FileCreateBody(BaseModel):
     filename: str
@@ -278,6 +296,11 @@ class FileCreateBody(BaseModel):
     file_path: str
     size_bytes: int | None = None
     source: str = "custom"
+
+    @field_validator("file_type")
+    @classmethod
+    def known_file_type(cls, value: str | None) -> str | None:
+        return _one_of_the_file_types(value)
 
 class GameAccessBody(BaseModel):
     game_id: int
@@ -704,8 +727,26 @@ async def get_library_game(request: Request, game_id: int) -> dict:
             )).scalar_one_or_none()
 
     cat_origin = (await _catalog_origin_map([game])).get(game.id)
-    return _game_to_dict(game, owner_username=owner_name, gog_game=gog_game,
-                         catalog_origin=cat_origin, uploader_username=uploader_name)
+    out = _game_to_dict(game, owner_username=owner_name, gog_game=gog_game,
+                        catalog_origin=cat_origin, uploader_username=uploader_name)
+    _mark_removable(request, game, out["files"])
+    return out
+
+
+def _mark_removable(request: Request, game, listed: list[dict]) -> None:
+    """Say beside each listed file whether its bin would work for this caller.
+
+    Asked with the rule the route asks (`can_remove_file`), per file, so the
+    page draws a bin exactly where pressing it will not answer 403.
+    """
+    from handler.library.ownership import can_remove_file
+
+    scopes = getattr(request.state, "scopes", set())
+    user_id = getattr(getattr(request.state, "user", None), "id", None)
+    rows = {f.id: f for f in (getattr(game, "files", None) or [])}
+    for entry in listed:
+        row = rows.get(entry.get("id"))
+        entry["can_delete"] = bool(row) and can_remove_file(scopes, user_id, game, row)
 
 
 # ── Games - lookup by GOG game ID ─────────────────────────────────────────────
@@ -1122,6 +1163,11 @@ async def delete_library_game(
     if not game or await _visible_or_none(request, game) is None:
         raise HTTPException(status_code=404, detail="Game not found")
     assert_can_delete(request, game)
+    # Only an administrator may keep the files (the owner, 2026-09-19). An
+    # uploader's entry removed with its files kept stopped counting against
+    # them while the bytes stayed on the server - a way round the upload limit.
+    if Scope.LIBRARY_ADMIN not in getattr(request.state, "scopes", set()):
+        delete_files = True
 
     gog_game_id = game.gog_game_id
 
@@ -2374,13 +2420,38 @@ async def update_library_file(request: Request, file_id: int, body: FileUpdateBo
     return _file_to_dict(updated, include_path=True)
 
 
-@protected_route(library_router.delete, "/files/{file_id}", scopes=[Scope.LIBRARY_ADMIN])
+# Declared against the uploader's permission on purpose, like the game's own
+# delete and "Remove my files": "an administrator, or the account the file
+# counts against" is not something scopes can say, so `can_remove_file` below
+# is the other half (OWNER_GUARDED in test_library_scopes.py).
+@protected_route(library_router.delete, "/files/{file_id}", scopes=[Scope.LIBRARY_UPLOAD])
 async def delete_library_file(request: Request, file_id: int) -> dict:
+    """Remove one file of a game, from the disk too - the bin beside a file.
+
+    It used to be an administrator's and took only the ROW, leaving the bytes
+    on the disk counted against nobody and back as a file on the next scan.
+    Nothing in the interface called it; the bin does now, for anybody the rule
+    lets remove that file.
+    """
+    from handler.library.ownership import can_remove_file
+
     f = await _lib.get_file_by_id(file_id)
     if not f:
         raise HTTPException(status_code=404, detail="File not found")
+    game = await _lib.get_by_id(f.library_game_id)
+    if not game or await _visible_or_none(request, game) is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    user_id = getattr(getattr(request.state, "user", None), "id", None)
+    if not can_remove_file(getattr(request.state, "scopes", set()), user_id, game, f):
+        raise HTTPException(
+            status_code=403,
+            detail="Only an administrator, or the account that added this file, may remove it.",
+        )
+    removed = _delete_files_on_disk([f])
     await _lib.delete_file(f)
-    return {"ok": True}
+    logger.info("Account %s removed file %d (%s) of game %d", user_id, f.id,
+                getattr(f, "filename", "?"), game.id)
+    return {"ok": True, "files_deleted": removed}
 
 
 # ── Download (streaming) ──────────────────────────────────────────────────────

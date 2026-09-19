@@ -63,9 +63,10 @@ async def shelf(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool)
     async with engine.begin() as conn:
         from models.rom import Rom
+        from models.rom_added_file import RomAddedFile
         from models.rom_platform import RomPlatform
         for table in (Library, LibraryGame, LibraryFile, LibraryMembership, UserLibraryAccess,
-                      UserGameAccess, RomPlatform, Rom):
+                      UserGameAccess, RomPlatform, Rom, RomAddedFile):
             await conn.run_sync(table.__table__.create)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -170,6 +171,31 @@ async def test_deleting_a_game_the_caller_cannot_see_answers_404_not_403(shelf):
     with pytest.raises(HTTPException) as visible:
         await delete_library_game.__wrapped__(_request(BOB), 40)
     assert visible.value.status_code == 403, "gra widoczna, ale cudza - nadal nie do usuniecia"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uid,scopes,admin,files_go", [
+    (ALICE, UPLOADER, False, True),
+    (ADMIN_ID, ADMIN, True, False),
+], ids=["uploader", "admin"])
+async def test_an_uploader_removing_a_game_always_takes_its_files(
+        shelf, monkeypatch, uid, scopes, admin, files_go):
+    """The owner, 2026-09-19: "uploader zawsze kasuje tez plik, a wybor zostaje
+    tylko adminowi". Removing an entry and keeping its files freed the space it
+    counted against the uploader while the bytes stayed on the server, and the
+    next scan brought them back owned by nobody - a way round the upload limit
+    (1.0.36 audit). An administrator keeps the choice."""
+    from endpoints.library import library_router as L
+
+    taken = []
+    monkeypatch.setattr(L, "_delete_files_on_disk", lambda files: taken.extend(f.id for f in files) or len(files))
+
+    await L.delete_library_game.__wrapped__(_request(uid, scopes, admin=admin), 40, delete_files=False)
+
+    assert bool(taken) is files_go, (
+        "uploader zostawil pliki na dysku i zwolnil limit" if files_go
+        else "admin nie moze juz zostawic plikow"
+    )
 
 
 # ── Replacing ────────────────────────────────────────────────────────────────

@@ -106,17 +106,18 @@
                 </button>
                 <!-- A game this account only ADDED files to - a DLC on somebody
                      else's game - keeps the bin: it takes out this account's own
-                     files and leaves the game. A ROM set it does not wholly own
-                     stays locked, as it was. -->
+                     files and leaves the game. So does a ROM it only added files
+                     beside (files_only). A ROM set it does not wholly own stays
+                     locked, as it was. -->
                 <button
                   class="mup-act mup-act--danger"
-                  :class="{ 'mup-act--locked': g.kind === 'rom' && g.can_delete === false }"
+                  :class="{ 'mup-act--locked': g.kind === 'rom' && g.can_delete === false && !g.files_only }"
                   :title="g.can_delete !== false
                     ? t('common.delete', 'Delete')
-                    : g.kind === 'game'
+                    : g.kind === 'game' || g.files_only
                       ? t('uploads.remove_mine', 'Remove my files')
                       : t('uploads.shared_game', 'This game holds files from another account, so only an administrator can remove it.')"
-                  :disabled="busy === g.id || (g.kind === 'rom' && g.can_delete === false)"
+                  :disabled="busy === g.id || (g.kind === 'rom' && g.can_delete === false && !g.files_only)"
                   @click="onBin(g)"
                 >
                   <i class="mdi mdi-trash-can-outline"></i>
@@ -164,6 +165,9 @@ interface OwnedGame {
   // On a game this account owns: how many files OTHER accounts added to it.
   // Deleting the game takes them too, so the question says how many.
   others_file_count?: number;
+  // A ROM that is somebody else's, listed because this account added files
+  // beside it (1.0.36): its bin takes those files and leaves the game.
+  files_only?: boolean;
   library: Shelf;
 }
 interface ShelfGroup extends Shelf { games: OwnedGame[]; bytes: number }
@@ -286,6 +290,12 @@ async function removalDetail(g: OwnedGame): Promise<string> {
       parts.push(t("uploads.delete_extra_files", "{n} more files on disk go with them.")
         .replace("{n}", String(extra)));
     }
+    // What the game keeps in extras/ and mods/ goes too (the owner's decision D).
+    const extras = (data.extras ?? []).length;
+    if (extras) {
+      parts.push(t("uploads.delete_extras", "The game's extras and mods go too: {n}.")
+        .replace("{n}", String(extras)));
+    }
     if (data.saves) {
       parts.push(t("uploads.delete_saves", "{n} saved games go too, including other people's.")
         .replace("{n}", String(data.saves)));
@@ -320,6 +330,8 @@ async function remove(g: OwnedGame) {
 // added files, it takes out those files and leaves the game.
 function onBin(g: OwnedGame) {
   if (g.kind === "game" && g.can_delete === false) return removeMine(g);
+  // A ROM this account only added files beside (1.0.36): the same.
+  if (g.files_only) return removeMine(g);
   return remove(g);
 }
 
@@ -337,7 +349,7 @@ async function removeMine(g: OwnedGame) {
   if (!ok) return;
   busy.value = g.id;
   try {
-    await client.delete(`/library/games/${g.id}/my-files`);
+    await client.delete(g.kind === "rom" ? `/roms/${g.id}/my-files` : `/library/games/${g.id}/my-files`);
     await load();
   } finally {
     busy.value = null;

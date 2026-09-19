@@ -7,6 +7,23 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import Base
 
+# What a file of a game can be: the game itself, a DLC, an extra (a manual, a
+# soundtrack, wallpapers) or a mod. Every screen groups and labels files by
+# these four, so a value outside them is not stored - it used to be, from any
+# upload form, and every screen then drew it as a DLC.
+FILE_TYPES = ("game", "dlc", "extra", "mod")
+
+# Other names for the same four: the folders a scan meets (extras/, bonus/,
+# mods/) and what GOG calls its extras.
+_FILE_TYPE_ALIASES = {"extras": "extra", "bonus": "extra", "mods": "mod"}
+
+
+def file_type_of(value: str | None) -> str | None:
+    """The kind *value* names, or None when it names none of the four."""
+    name = (value or "").strip().lower()
+    name = _FILE_TYPE_ALIASES.get(name, name)
+    return name if name in FILE_TYPES else None
+
 
 class LibraryFile(Base):
     __tablename__ = "library_files"
@@ -20,7 +37,7 @@ class LibraryFile(Base):
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # ── Classification ────────────────────────────────────────────────────────
-    file_type: Mapped[str]       = mapped_column(String(16),  default="game")  # game|extra|dlc
+    file_type: Mapped[str]       = mapped_column(String(16),  default="game")  # FILE_TYPES
     os:        Mapped[str]       = mapped_column(String(16),  default="all")   # windows|mac|linux|all
     language:  Mapped[str | None] = mapped_column(String(8),  nullable=True)
     version:   Mapped[str | None] = mapped_column(String(64), nullable=True)

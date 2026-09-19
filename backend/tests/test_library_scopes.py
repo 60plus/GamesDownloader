@@ -66,6 +66,13 @@ OWNER_GUARDED: dict[str, str] = {
         "the game and everybody else's files, and answers 404 for a game the "
         "caller cannot see. Covered by "
         "test_an_uploader_may_add_to_a_game_somebody_else_added.py.",
+    "DELETE /library/files/{file_id}":
+        "Declares LIBRARY_UPLOAD because the owner decided (2026-09-18) on a bin "
+        "beside each file of a game, for administrators and for the account a "
+        "file counts against. The handler answers 404 for a game the caller "
+        "cannot see and asks ownership.can_remove_file of the loaded file - "
+        "LIBRARY_ADMIN, or charged_to(file, game) is the caller, the sentence the "
+        "quota sums with. Covered by test_a_single_file_of_a_game_can_be_removed.py.",
 }
 
 # POST that does not change the library, and is meant to be within a plain

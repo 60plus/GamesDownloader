@@ -48,12 +48,37 @@ export interface AddFileRequest {
   onClosed?: () => void
 }
 
+export interface RomAddFileRequest {
+  /** The ROM the file goes beside. `platform_fs_slug` lets it take a further
+   *  disc too; without it the dialog offers extras, mods and the manual. */
+  rom: { id: number; title?: string; platform_fs_slug?: string | null }
+  /** After a file landed, so the page can refetch the ROM and its files. */
+  onAdded?: () => void
+  onClosed?: () => void
+}
+
 export const pluginUiState = reactive({
   metadataEditor: null as MetadataEditorRequest | null,
   collectionEditor: null as CollectionEditorRequest | null,
   romEditor: null as RomEditorRequest | null,
   addFileDialog: null as AddFileRequest | null,
+  romAddFileDialog: null as RomAddFileRequest | null,
 })
+
+/** Open the "add a file to this ROM game" dialog (1.0.36): an extra, a mod, the
+ *  manual or a further disc, by administrators and uploaders alike. The form is
+ *  the core's, so every skin sends the same request and shows the same refusal.
+ *  It stays open after a file lands, for the next one. */
+export function openRomAddFileDialog(req: RomAddFileRequest): void {
+  if (!req || !req.rom || !req.rom.id) return
+  pluginUiState.romAddFileDialog = { ...req }
+}
+
+export function closeRomAddFileDialog(): void {
+  const req = pluginUiState.romAddFileDialog
+  pluginUiState.romAddFileDialog = null
+  req?.onClosed?.()
+}
 
 /** Open the "add a file to this game" dialog (1.0.35). For a skin that draws its
  *  own game page: an uploader may add a file to any game it can see, and the

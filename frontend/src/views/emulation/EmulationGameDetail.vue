@@ -98,6 +98,20 @@
                 </svg>
                 {{ t('detail.download_rom') }}
               </button>
+              <!-- The booklet from the box. Shown only when a scrape fetched
+                   one; the component decides that, and every theme uses it. -->
+              <RomManualButton :rom-id="rom?.id" :available="rom?.has_manual" class="gd-manual-cover" />
+              <!-- What the game is on disk, listed the way a GOG or custom game
+                   lists its files: every disc on its own line, then the extras
+                   and mods beside it, which Download offers with the game.
+                   Always there to open - this page names the files nowhere else. -->
+              <RomFilesList v-if="rom" :game-label="romGameLabel" :game-size="titleBytes"
+                            :discs="diskSet" always :rom-id="rom.id" @changed="refreshRom"
+                            :extras="rom.extras || []" class="gd-files-cover" />
+              <RomDownloadDialog v-if="rom" v-model="showRomDownload" :rom-id="rom.id"
+                                 :title="rom.name || rom.fs_name" :game-label="romGameLabel"
+                                 :game-size="titleBytes" :whole-set="diskSet.length > 1"
+                                 :extras="rom.extras || []" />
             </div>
           </div>
 
@@ -204,63 +218,11 @@
               <span v-for="l in (rom.languages || []).slice(0, 4)" :key="l" class="gd-region-tag gd-tag--lang">{{ l }}</span>
             </div>
 
-            <!-- Actions (edit controls only - Play/Download are under the cover) -->
+            <!-- What only an administrator, an uploader or an editor may do,
+                 under one "Manage" menu (the owner, 2026-09-18). Play,
+                 Download and the manual are under the cover, for everyone. -->
             <div class="gd-actions">
-              <button v-if="canEdit"
-              :disabled="metaLocked" class="gd-btn-ghost" :class="{ 'gd-btn--locked': metaLocked }" @click="showEditPanel = true" :title="metaLocked ? t('meta.locked_by_admin') : t('detail.edit_metadata')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                </svg>
-                {{ t('detail.edit_metadata') }}
-              </button>
-
-              <button v-if="canEdit" class="gd-btn-ghost" :disabled="scraping" @click="triggerScrape" :title="t('detail.scrape')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" :class="{ spin: scraping }">
-                  <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                </svg>
-                {{ scraping ? t('detail.scraping') : t('detail.scrape') }}
-              </button>
-
-              <!-- Only for a file that is not identified by hash: either the
-                   scan skipped it for its size, or its format carries none.
-                   For everything else there is nothing to ask for. -->
-              <button v-if="isAdmin && rom && rom.has_hashes === false" class="gd-btn-ghost"
-                :disabled="hashing" @click="computeHashes" :title="t('detail.compute_hashes_hint')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" :class="{ spin: hashing }">
-                  <path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/>
-                </svg>
-                {{ hashing ? t('detail.computing_hashes') : t('detail.compute_hashes') }}
-              </button>
-
-              <!-- Clearing asks the API for ROMS_WRITE, which the admin alone
-                   has, unlike editing and scraping beside it. Under canEdit an
-                   editor was shown a button that could only answer 403. -->
-              <button v-if="isAdmin" class="gd-btn-danger" :disabled="clearing" @click="onClearMetadata" :title="t('detail.clear_metadata')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                  <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
-                </svg>
-                {{ clearing ? t('detail.clearing') : t('detail.clear') }}
-              </button>
-
-              <!-- Admin, not editor: this is the one action here with nothing
-                   behind it. A cleared scrape can be scraped again. -->
-              <button v-if="isAdmin" class="gd-btn-danger" :disabled="deleting" @click="onDelete" :title="t('detail.delete_rom')">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                  <line x1="12" y1="11" x2="12" y2="17"/>
-                </svg>
-                {{ deleting ? t('detail.deleting') : t('common.delete') }}
-              </button>
-            </div>
-
-            <!-- File info row -->
-            <div class="gd-file-info-row">
-              <span class="gd-file-name">{{ rom.fs_name }}</span>
-              <span class="gd-file-size">{{ formatSize(titleBytes) }}</span>
+              <ManageMenu :items="manageItems" />
             </div>
 
             <!-- Disks of a title split across floppies. Playing always inserts
@@ -292,46 +254,10 @@
                 </button>
               </div>
 
-              <!-- A playlist is what lets the emulator offer the swap itself
-                   rather than making somebody come back here between discs.
-                   Offered only when the discs have none: one may have come
-                   down beside them, or been written by hand on a handheld, and
-                   writing over it would be the wrong answer. -->
-              <button
-                v-if="isAdmin && diskSet.length > 1 && !rom?.playlist"
-                class="gd-disk-m3u"
-                :disabled="writingPlaylist"
-                :title="t('detail.write_playlist_hint')"
-                @click="writePlaylist"
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
-                  <line x1="8" y1="18" x2="14" y2="18"/><circle cx="4" cy="6" r="1"/>
-                  <circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>
-                </svg>
-                {{ writingPlaylist ? t('detail.writing_playlist') : t('detail.write_playlist') }}
-              </button>
-              <span v-else-if="rom?.playlist" class="gd-disk-m3u gd-disk-m3u--have" :title="rom.playlist">
+              <!-- Writing one and converting to CHD are in the Manage menu. -->
+              <span v-if="rom?.playlist" class="gd-disk-m3u gd-disk-m3u--have" :title="rom.playlist">
                 {{ t('detail.has_playlist') }}
               </span>
-
-              <!-- CHD is one file per disc where a rip is a sheet and its
-                   tracks, about half the size, and the emulator opens it
-                   without unpacking anything. Offered only where it would
-                   work: a title already in CHD, or a zipped cartridge ROM,
-                   does not get the button. -->
-              <button
-                v-if="isAdmin && rom?.chd_convertible"
-                class="gd-disk-m3u"
-                :disabled="converting"
-                :title="t('detail.convert_chd_hint')"
-                @click="convertToChd"
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-                  <path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/>
-                </svg>
-                {{ t('detail.convert_chd') }}
-              </button>
 
             </div>
 
@@ -426,13 +352,6 @@
                 <span class="gd-dk">{{ t('detail.owner') }}</span>
                 <span class="gd-dv gd-owner-cell">
                   {{ rom.owner_username }}
-                  <button
-                    v-if="isAdmin && rom.published_by && rom.published_by !== auth.user?.id"
-                    class="gd-claim"
-                    :disabled="claiming"
-                    :title="t('detail.claim_hint')"
-                    @click="claimRom"
-                  >{{ t('detail.claim') }}</button>
                 </span>
               </template>
               <template v-if="rom.uploader_username">
@@ -691,6 +610,12 @@ import EmulationRomMetadataPanel from './EmulationRomMetadataPanel.vue'
 import PluginDetailValue from '@/components/games/PluginDetailValue.vue'
 import { resolveDetailRows } from '@/themes/index'
 import HeroBackground from '@/components/common/HeroBackground.vue'
+import RomManualButton from '@/components/roms/RomManualButton.vue'
+import RomDownloadDialog, { type RomExtra } from '@/components/roms/RomDownloadDialog.vue'
+import RomFilesList from '@/components/roms/RomFilesList.vue'
+import ManageMenu from '@/components/common/ManageMenu.vue'
+import type { ManageItem } from '@/lib/manageMenu'
+import { openRomAddFileDialog } from '@/lib/pluginUi'
 import { getEjsCore } from '@/utils/ejsCores'
 import { ratingVal } from '@/utils/rating'
 import { formatBytes } from '@/utils/format'
@@ -706,6 +631,8 @@ const themeStore = useThemeStore()
 
 const isAdmin  = computed(() => auth.user?.role === 'admin')
 const canEdit  = computed(() => ['admin', 'uploader', 'editor'].includes(auth.user?.role as string))
+// Who may add a file beside the game: the accounts that may upload at all.
+const canUpload = computed(() => ['admin', 'uploader'].includes(auth.user?.role as string))
 // A locked entry is the admin's alone, so there is nothing here for anyone
 // else to open. Refusing at the button matters beyond tidiness: opening the
 // editor fires searches at the metadata providers, and some of them charge
@@ -741,6 +668,9 @@ interface RomDetail {
   fs_name_no_ext: string | null
   fs_extension: string
   fs_size_bytes: number
+  /** What the tracks of a disc kept as a sheet add: fs_size_bytes is the
+   *  sheet alone, a few kilobytes of text. */
+  tracks_bytes?: number
   /** Whether this file is identified by checksum at all. False when the scan
    *  skipped it for its size, or when its format carries none. */
   has_hashes?: boolean
@@ -755,6 +685,8 @@ interface RomDetail {
   /** Whether every disc is something chdman can be handed. Asked of the files
    *  rather than of their names, so a zipped cartridge ROM says no. */
   chd_convertible?: boolean
+  /** The files in the game's extras/ and mods/, read off its folder. */
+  extras?: RomExtra[]
   name: string
   slug: string | null
   summary: string | null
@@ -795,6 +727,7 @@ interface RomDetail {
   steamgrid_path:  string | null
   video_path:      string | null
   picto_path:      string | null
+  has_manual?:     boolean
   igdb_id:         number | null
   ss_id:           string | null
   launchbox_id:    string | null
@@ -856,7 +789,15 @@ const diskSetBytes = computed(() =>
 // The row names disc one, so showing its size alone answered a question
 // nobody asked: a four disc set read as 480 MB when it is nearer 1.5 GB.
 const titleBytes = computed(() =>
-  diskSet.value.length > 1 ? diskSetBytes.value : (rom.value?.fs_size_bytes || 0))
+  diskSet.value.length > 1 ? diskSetBytes.value
+    : (rom.value?.fs_size_bytes || 0) + (rom.value?.tracks_bytes || 0))
+// The game as one entry in its file list and download picker, however many
+// discs it came on: they download together, as one archive.
+const romGameLabel = computed(() =>
+  diskSet.value.length > 1
+    ? t('detail.all_discs', { n: diskSet.value.length })
+    : (rom.value?.fs_name || ''))
+const showRomDownload = ref(false)
 
 // Which disk the machine should start from, chosen from that list. Null means
 // the one the entry itself names, which is disk 1 for every ordinary set.
@@ -1040,14 +981,19 @@ const coverAspect = computed(() => {
 
 
 // ── Carousel ───────────────────────────────────────────────────────────────────
+// One whole picture per click, like Classic. The row holds the trailer's
+// picture too, so the last stop counts slides, not screenshots. And a slide's
+// offsetLeft counts from the wrapper, arrow and gap included, so a stop is
+// measured from the first slide instead.
 function slideTo(idx: number) {
-  const max = Math.max(0, (rom.value?.screenshots || []).length - 3)
+  const max = Math.max(0, carouselSlides.value.length - 3)
   carouselIdx.value = Math.max(0, Math.min(idx, max))
   nextTick(() => {
     const el = carouselEl.value
     if (!el) return
-    const child = el.children[carouselIdx.value] as HTMLElement
-    if (child) el.scrollTo({ left: child.offsetLeft - 2, behavior: 'smooth' })
+    const first = el.children[0] as HTMLElement | undefined
+    const child = el.children[carouselIdx.value] as HTMLElement | undefined
+    if (first && child) el.scrollTo({ left: child.offsetLeft - first.offsetLeft, behavior: 'smooth' })
   })
 }
 
@@ -1086,8 +1032,91 @@ async function fetchRom() {
   }
 }
 
+// After a file was added or binned: the ROM again, without the page going back
+// to its loading state around it.
+async function refreshRom() {
+  const id = rom.value?.id
+  if (!id) return
+  try {
+    const { data } = await client.get(`/roms/${id}`)
+    rom.value = data
+  } catch { /* the page keeps what it had */ }
+}
+
+// "Add file" (1.0.36): the core dialog every skin opens, for administrators and
+// uploaders alike; the bytes count against the account that sends them.
+function openAddFile() {
+  if (!rom.value) return
+  openRomAddFileDialog({
+    rom: { id: rom.value.id, title: rom.value.name || rom.value.fs_name,
+           platform_fs_slug: rom.value.platform_fs_slug },
+    onAdded: refreshRom,
+  })
+}
+
+function openEditPanel() {
+  showEditPanel.value = true
+}
+
+// ── Manage menu ───────────────────────────────────────────────────────────────
+// What a plain user is not offered, under one button (the owner, 2026-09-18).
+// Each item is shown on exactly the check its button had, so an uploader or an
+// editor sees the same button with fewer items in it:
+//
+//   edit, scrape     LIBRARY_WRITE, which an editor has
+//   clear, delete    ROMS_WRITE, the admin's alone - under canEdit an editor
+//                    was once shown a Clear that could only answer 403. Delete
+//                    is the one action here with nothing behind it; a cleared
+//                    scrape can be scraped again
+//   hashes           only for a file the scan did not identify by hash: it
+//                    skipped it for its size, or the format carries none
+//   playlist         lets the emulator offer the disc swap itself. Only while
+//                    the discs have none: one may have come down beside them,
+//                    or been written by hand on a handheld
+//   chd              one file per disc, about half the size, opened without
+//                    unpacking. Only where it would work: a title already in
+//                    CHD, or a zipped cartridge, is not offered it
+//   claim            only while somebody else owns the ROM
+const manageItems = computed<ManageItem[]>(() => {
+  const r = rom.value
+  return [
+    { key: 'edit', group: 'metadata', show: canEdit.value,
+      icon: metaLocked.value ? 'mdi-lock-outline' : 'mdi-pencil-outline',
+      label: t('detail.edit_metadata'), disabled: metaLocked.value,
+      title: metaLocked.value ? t('meta.locked_by_admin') : undefined, run: openEditPanel },
+    { key: 'scrape', group: 'metadata', show: canEdit.value, icon: 'mdi-refresh', busy: scraping.value,
+      label: scraping.value ? t('detail.scraping') : t('detail.scrape'), run: triggerScrape },
+    { key: 'clear', group: 'metadata', show: isAdmin.value, icon: 'mdi-eraser', danger: true, busy: clearing.value,
+      label: clearing.value ? t('detail.clearing') : t('detail.clear_metadata'), run: onClearMetadata },
+    { key: 'add-file', group: 'files', show: canUpload.value, icon: 'mdi-file-plus-outline',
+      label: t('detail.add_file'), run: openAddFile },
+    { key: 'hashes', group: 'files', show: isAdmin.value && r?.has_hashes === false, icon: 'mdi-pound',
+      busy: hashing.value, label: hashing.value ? t('detail.computing_hashes') : t('detail.compute_hashes'),
+      title: t('detail.compute_hashes_hint'), run: computeHashes },
+    { key: 'playlist', group: 'files', show: isAdmin.value && diskSet.value.length > 1 && !r?.playlist,
+      icon: 'mdi-playlist-play', busy: writingPlaylist.value,
+      label: writingPlaylist.value ? t('detail.writing_playlist') : t('detail.write_playlist'),
+      title: t('detail.write_playlist_hint'), run: writePlaylist },
+    { key: 'chd', group: 'files', show: isAdmin.value && !!r?.chd_convertible, icon: 'mdi-disc',
+      busy: converting.value, label: t('detail.convert_chd'),
+      title: t('detail.convert_chd_hint'), run: convertToChd },
+    { key: 'claim', group: 'publishing', show: isAdmin.value && !!r?.published_by && r.published_by !== auth.user?.id,
+      icon: 'mdi-account-arrow-left-outline', busy: claiming.value,
+      label: t('detail.claim'), title: t('detail.claim_hint'), run: claimRom },
+    { key: 'delete', group: 'danger', show: isAdmin.value, icon: 'mdi-delete-outline', danger: true,
+      busy: deleting.value, label: deleting.value ? t('detail.deleting') : t('detail.delete_rom'), run: onDelete },
+  ]
+})
+
 async function downloadRom(diskId?: number) {
   if (!rom.value) return
+  // With extras or mods beside it, the whole game's download is a choice of
+  // files, the way a GOG or custom game offers its own. One disc asked for by
+  // its own button is still just that disc.
+  if (!diskId && rom.value.extras?.length) {
+    showRomDownload.value = true
+    return
+  }
   // Saving a file means navigating the browser, and a navigation sends no
   // Authorization header - pointing it straight at the authenticated route
   // only ever produced "Not authenticated". Ask for a short-lived ticket over
@@ -1222,7 +1251,7 @@ async function computeHashes() {
 async function onDelete() {
   if (!rom.value) return
   const id = rom.value.id
-  let preview: { disks: { name: string }[]; files: string[]; saves: number; on_disk: boolean }
+  let preview: { disks: { name: string }[]; files: string[]; extras?: string[]; saves: number; on_disk: boolean }
   try {
     preview = (await client.get(`/roms/${id}/removal`)).data
   } catch {
@@ -1259,6 +1288,15 @@ async function onDelete() {
     const fileLines = [t('detail.delete_rom_files_body')]
     if (preview.files?.length) {
       fileLines.push(t('detail.delete_rom_tracks').replace('{n}', String(preview.files.length)))
+    }
+    // What the game keeps in extras/ and mods/ goes with the file (the owner's
+    // decision D), so it is named here, a few of them, rather than counted
+    // among the data files the sheets name.
+    const extras = preview.extras ?? []
+    if (extras.length) {
+      const names = extras.slice(0, 5).join(', ') + (extras.length > 5 ? ', …' : '')
+      fileLines.push(t('detail.delete_rom_extras')
+        .replace('{n}', String(extras.length)).replace('{names}', names))
     }
     withFiles = await gdConfirm(fileLines.join('\n\n'), {
       danger: true,
@@ -1395,6 +1433,10 @@ onUnmounted(() => {
 .gd-btn-dl--cover {
   width: 100%; justify-content: center; font-size: 13px; padding: 9px 0;
 }
+/* The manual sits under the download, the same width, so the column stays one
+   stack of buttons rather than two sizes of them. */
+.gd-manual-cover { width: 100%; }
+.gd-files-cover { width: 100%; }
 .gd-cover-frame {
   position: relative; width: clamp(200px, 22vw, 300px); aspect-ratio: 3/4;
   border-radius: var(--radius, 12px); overflow: hidden;
@@ -1610,32 +1652,6 @@ onUnmounted(() => {
 }
 .gd-btn-dl:hover { background: var(--pl-light); transform: translateY(-1px); }
 
-.gd-btn-ghost {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 10px 18px; border-radius: var(--radius-sm);
-  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.16);
-  color: rgba(255,255,255,.68); font-size: 13px; font-weight: 600; font-family: inherit;
-  cursor: pointer; transition: all .15s; backdrop-filter: blur(6px);
-}
-.gd-btn-ghost:not(:disabled):hover { background: rgba(255,255,255,.13); color: #fff; border-color: rgba(255,255,255,.3); }
-.gd-btn-ghost:disabled { opacity: .5; cursor: not-allowed; }
-
-.gd-btn-danger {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 10px 18px; border-radius: var(--radius-sm);
-  background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.35);
-  color: #f87171; font-size: 13px; font-weight: 600; font-family: inherit;
-  cursor: pointer; transition: all .15s; backdrop-filter: blur(6px);
-}
-.gd-btn-danger:not(:disabled):hover { background: rgba(239,68,68,.18); color: #fca5a5; }
-.gd-btn-danger:disabled { opacity: .5; cursor: not-allowed; }
-
-.gd-file-info-row {
-  display: flex; gap: 10px; align-items: center; margin-top: 2px;
-}
-.gd-file-name { font-size: 11px; color: rgba(255,255,255,.3); font-family: monospace; }
-.gd-file-size { font-size: 11px; color: rgba(255,255,255,.28); }
-
 /* Disks of a multi-floppy title */
 .gd-disks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
 .gd-disks-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: rgba(255,255,255,.32); margin-right: 2px; }
@@ -1659,17 +1675,12 @@ onUnmounted(() => {
 /* Glass like every other chip on this page, never a solid fill. */
 .gd-disk-m3u {
   display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px;
-  border-radius: 6px; cursor: pointer;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--pl) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--pl) 26%, transparent);
   color: rgba(255,255,255,.72); font-size: 11px; font-weight: 600;
-  transition: background .15s, color .15s;
 }
-.gd-disk-m3u:hover:not(:disabled) { background: color-mix(in srgb, var(--pl) 26%, transparent); color: #fff; }
-.gd-disk-m3u:disabled { opacity: .55; cursor: default; }
 .gd-disk-m3u--have { cursor: default; opacity: .62; background: none; }
-
-.spin { animation: gd-spin .8s linear infinite; }
 
 /* ══ SEPARATOR ═════════════════════════════════════════════════════════════════ */
 .gd-separator { height: 1px; background: linear-gradient(to right, transparent, rgba(255,255,255,.07) 30%, rgba(255,255,255,.07) 70%, transparent); }
@@ -1749,20 +1760,6 @@ onUnmounted(() => {
 }
 .gd-dk, .gd-dv { padding: 10px 14px; font-size: 13px; }
 .gd-owner-cell { display: flex; align-items: center; gap: 6px; }
-.gd-claim {
-  margin-left: 2px; padding: 0 8px;
-  font: inherit; font-size: 11px; line-height: 17px;
-  color: var(--pl); cursor: pointer;
-  background: color-mix(in srgb, var(--pl) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--pl) 30%, transparent);
-  border-radius: 999px;
-  transition: border-color .15s, background .15s;
-}
-.gd-claim:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--pl) 20%, transparent);
-  border-color: color-mix(in srgb, var(--pl) 50%, transparent);
-}
-.gd-claim:disabled { opacity: .5; cursor: default; }
 .gd-dk {
   color: var(--muted); font-weight: 700; font-size: 11px;
   text-transform: uppercase; letter-spacing: .6px;
@@ -1831,14 +1828,5 @@ onUnmounted(() => {
   .gd-content { padding: var(--space-4, 16px); }
   .gd-cols { gap: var(--space-5, 20px); }
   .gd-dlist { grid-template-columns: 30px auto 1fr; font-size: var(--fs-sm, 12px); }
-}
-
-
-/* Shut rather than broken: amber says somebody else holds this, which is not
-   the same as something having gone wrong. */
-.gd-btn--locked, .gd-btn--locked:hover {
-  background: rgba(245,158,11,.14) !important;
-  border-color: rgba(245,158,11,.4) !important;
-  color: #f59e0b; cursor: not-allowed;
 }
 </style>
