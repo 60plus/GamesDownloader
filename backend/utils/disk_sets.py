@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from typing import NamedTuple
 
 # "(Disk 1 of 2)", "[Disk 2]", "Disk 3", "Disc 1". The separators around it are
 # swallowed too, so removing the marker does not leave "Game  ()" behind.
@@ -58,12 +59,10 @@ def _identify(stem: str) -> tuple[str, int, bool] | None:
     carrying the word "disk" means what it says, a bare trailing letter is a
     guess that has to be corroborated by the rest of the set.
     """
-    for pattern, to_number in ((_MARKER, int), (_LETTER_MARKER, _letter_number)):
-        m = pattern.search(stem)
-        if m:
-            title = (stem[: m.start()] + stem[m.end():]).strip()
-            if title:   # a file called just "Disk 1" says nothing about what it is
-                return _norm(title), to_number(m.group(1)), True
+    # A file called just "Disk 1" says nothing about what it is, so it is not one.
+    disk = marked_disk(stem)
+    if disk is not None:
+        return disk.title, disk.number, True
     m = _TRAILING_LETTER.search(stem)
     if m:
         title = stem[: m.start()].strip()
@@ -108,6 +107,52 @@ def group_disks(stems: Iterable[str]) -> dict[str, tuple[str, int]]:
         for number, stem in members.items():
             out[stem] = (title, number)
     return out
+
+
+class MarkedDisk(NamedTuple):
+    title: str    # normalised, what disks of one set share
+    number: int
+    prefix: str   # the name as written up to the marker, for finding the rest
+
+
+def marked_disk(stem: str) -> MarkedDisk | None:
+    """What a name that SAYS it is a disk is a disk of, or None.
+
+    Only a name carrying the word. A bare trailing letter is a guess that needs
+    the rest of its set in view to be believed, and a file arriving on its own
+    has nothing in view.
+    """
+    for pattern, to_number in ((_MARKER, int), (_LETTER_MARKER, _letter_number)):
+        m = pattern.search(stem)
+        if m:
+            title = (stem[: m.start()] + stem[m.end():]).strip()
+            if title:
+                return MarkedDisk(_norm(title), to_number(m.group(1)), stem[: m.start()])
+    return None
+
+
+def without_disk_marker(name: str) -> str:
+    """*name* with `(Disc 2)`, `Disk 1 of 2` and the like taken out of it.
+
+    The same two expressions the grouping identifies a disk with, so the folder
+    a disc goes in and the set it belongs to cannot drift apart. Case and the
+    rest of the name are left exactly as they were: this answers what a folder
+    is called, not what sorts with what.
+
+    A bare trailing letter is left alone on purpose. `Ishar 2 (Silmarils) A` is
+    disk A only when B and C are beside it, which is a question about a
+    directory - a name on its own has no way to tell that from a title ending
+    in a roman numeral.
+    """
+    for pattern in (_MARKER, _LETTER_MARKER):
+        m = pattern.search(name)
+        if m:
+            without = (name[: m.start()] + name[m.end():]).strip()
+            # A file called nothing but "Disk 1" keeps its name: there is no
+            # title in there to fall back to.
+            if without:
+                return without
+    return name.strip()
 
 
 def sort_key(name: str) -> tuple:

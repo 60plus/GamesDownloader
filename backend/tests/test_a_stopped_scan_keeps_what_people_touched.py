@@ -30,6 +30,11 @@ import types
 import pytest
 
 
+async def _nothing_moved(*_a, **_k):
+    """Nothing in these trees moved: every file found is new."""
+    return []
+
+
 def _fake_async(value):
     async def _f(*a, **k):
         return value
@@ -62,7 +67,7 @@ def scan(tmp_path, monkeypatch):
         seen.next_id += 1
         return types.SimpleNamespace(id=seen.next_id)
 
-    async def _groups(platform_id, assignments, **k):
+    async def _groups(platform_id, _fs_path, assignments, **k):
         seen.grouped.append(platform_id)
 
     async def _touched(ids, **k):
@@ -78,6 +83,8 @@ def scan(tmp_path, monkeypatch):
     monkeypatch.setattr(scanner.rom_handler, "delete", _delete)
     monkeypatch.setattr(scanner.rom_handler, "ids_with_player_data", _touched)
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name", _fake_async(None))
+    monkeypatch.setattr(scanner.rom_handler, "rows_named_in",
+                        _nothing_moved)
     monkeypatch.setattr(scanner.rom_handler, "upsert", _upsert)
     monkeypatch.setattr(scanner.rom_handler, "apply_disk_groups", _groups)
     monkeypatch.setattr(scanner.rom_handler, "missing_with_hashes", _fake_async([]))

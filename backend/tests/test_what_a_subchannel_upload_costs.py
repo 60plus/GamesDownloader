@@ -84,8 +84,14 @@ def route(tmp_path, monkeypatch):
         # In the shelf's own folder: the file a replacement would replace.
         return SimpleNamespace(id=1, fs_name=fs_name, published_by=ME, fs_path=str(shelf))
 
+    async def nowhere_else(_fs_slug, _prefix):
+        # No disc of that name in any game's folder: the shelf, searched
+        # anyway, is the only place these tests put one.
+        return []
+
     monkeypatch.setattr(R.rom_platform_handler, "get_by_slug", platform)
-    monkeypatch.setattr(R.rom_handler, "get_by_fs_name", my_disc)
+    monkeypatch.setattr(R.rom_handler, "any_row_named", my_disc)
+    monkeypatch.setattr(R.rom_handler, "files_starting_with", nowhere_else)
     monkeypatch.setattr(R.rom_handler, "max_rom_id", nothing)
     monkeypatch.setattr(R, "_get_roms_path", roms_path)
     monkeypatch.setattr(quota, "ceiling_for", ceiling)

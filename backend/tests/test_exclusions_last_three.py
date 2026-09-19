@@ -149,7 +149,7 @@ def test_disc_grouping_is_told_which_files_were_excluded():
     # Anchored on the CALL, not on the first occurrence of the name - that one
     # is the def, four hundred lines earlier, and a window around it would be
     # reading the wrong code entirely.
-    call = source.index("assignments.update(plan_disk_assignments(")
+    call = source.index("plans.append((str(kept[0].parent), plan_disk_assignments(")
     window = source[call - 300:call]
     assert "excluded_files" in window, (
         "grupowanie plyt liczy sie po plikach wykluczonych, wiec wykluczenie "

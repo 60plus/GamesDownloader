@@ -26,6 +26,7 @@ import pytest
 from fastapi import BackgroundTasks
 
 from handler.auth.scopes import Scope
+from utils.game_folders import game_dir
 
 UPLOADER_ID = 7
 SCOPES = {Scope.LIBRARY_UPLOAD, Scope.ROMS_READ}
@@ -69,12 +70,15 @@ def route(tmp_path, monkeypatch):
             # setdefault, not assignment: a file that already has a row keeps
             # it, which is what a re-upload over an existing ROM looks like.
             # With the file name and folder a real row carries: the stamp only
-            # lands on a row holding exactly the uploaded name, in the shelf.
+            # lands on a row holding exactly the uploaded name, in the folder
+            # the upload wrote it to - the game's own, inside the platform's.
             state.rows.setdefault(
-                name, SimpleNamespace(id=100 + len(state.rows), fs_name=name,
-                                      fs_path=str(tmp_path / "psx"), published_by=None))
+                name, SimpleNamespace(
+                    id=100 + len(state.rows), fs_name=name,
+                    fs_path=str(game_dir(str(tmp_path), "psx", name)),
+                    published_by=None))
 
-    async def get_by_fs_name(_platform_id, name):
+    async def any_row_named(_platform_id, name):
         return state.rows.get(name)
 
     async def set_owner(rom_id, user_id):
@@ -98,7 +102,7 @@ def route(tmp_path, monkeypatch):
 
     monkeypatch.setattr(quota, "reservation_for", no_live_limit)
     monkeypatch.setattr(rsh, "scan_after_write", scan_after_write)
-    monkeypatch.setattr(R.rom_handler, "get_by_fs_name", get_by_fs_name)
+    monkeypatch.setattr(R.rom_handler, "any_row_named", any_row_named)
     monkeypatch.setattr(R.rom_handler, "set_owner", set_owner)
     monkeypatch.setattr(R.rom_platform_handler, "get_by_slug", get_by_slug)
     from handler.clamav import clamav_handler as clam
@@ -137,7 +141,7 @@ async def test_an_uploaded_rom_records_who_uploaded_it(route):
     out = await _upload(R, state, ["Sonic.bin"])
 
     assert out["saved"] == ["Sonic.bin"]
-    assert (tmp_path / "psx" / "Sonic.bin").is_file()
+    assert (game_dir(str(tmp_path), "psx", "Sonic.bin") / "Sonic.bin").is_file()
     assert state.stamped == [(100, UPLOADER_ID)], (
         "wgrany ROM nie ma wlasciciela, wiec nie liczy sie do limitu i "
         "wgrywajacy go nie skasuje"
@@ -200,8 +204,10 @@ async def test_the_stamp_asks_for_another_scan_when_the_row_is_missing(route):
         if scans["n"] >= 2:
             for name in state.pending:
                 state.rows.setdefault(
-                    name, SimpleNamespace(id=100 + len(state.rows), fs_name=name,
-                                          fs_path=str(_tmp / "psx"), published_by=None))
+                    name, SimpleNamespace(
+                        id=100 + len(state.rows), fs_name=name,
+                        fs_path=str(game_dir(str(_tmp), "psx", name)),
+                        published_by=None))
 
     import pytest as _pytest
     monkeypatch = _pytest.MonkeyPatch()
@@ -271,6 +277,6 @@ def test_the_download_path_also_scans_more_than_once():
     # The lookup INSIDE the loop, the one a repeated scan can change. The function
     # also asks, once and before any scan, whether the name had a row already -
     # a different question, and the reason this anchors on the assignment.
-    assert body.index("range(3)") < body.index("rom = await rom_handler.get_by_fs_name"), (
+    assert body.index("range(3)") < body.index("rom = await rom_handler.any_row_named"), (
         "petla nie obejmuje wyszukania wiersza, wiec powtorka niczego nie zmienia"
     )

@@ -315,6 +315,16 @@ async def _run(job: _ChdJob) -> None:
         _announce(job)
 
 
+def converting(rom_ids) -> bool:
+    """Whether a conversion is queued or running for any of these ROMs.
+
+    It writes nothing into the game's folder until its last copy, so this is
+    the only way a folder move can tell it is under way (game_folder._busy).
+    """
+    wanted = set(rom_ids)
+    return any(job.rom_id in wanted and not job.terminal for job in _jobs.values())
+
+
 def list_jobs() -> list[dict]:
     return [job.as_dict() for job in _jobs.values()]
 

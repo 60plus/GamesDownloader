@@ -19,6 +19,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+
+from utils.game_folders import game_dir
 from fastapi import BackgroundTasks, HTTPException
 
 from handler.auth.scopes import Scope
@@ -38,6 +40,12 @@ class _Upload:
         chunk = self._data[self._at:self._at + size]
         self._at += len(chunk)
         return chunk
+
+
+def _landed(tmp_path, name):
+    """Where an upload puts a file: inside the game's own folder, one level
+    below the platform's."""
+    return game_dir(str(tmp_path), "psx", name) / name
 
 
 @pytest.fixture
@@ -73,7 +81,7 @@ def route(tmp_path, monkeypatch):
         # before writing any file, not only when one is already there.
         return None
 
-    monkeypatch.setattr(R.rom_handler, "get_by_fs_name", no_row)
+    monkeypatch.setattr(R.rom_handler, "any_row_named", no_row)
 
     async def newest_rom_id():
         return 0
@@ -113,7 +121,7 @@ async def test_the_file_after_one_that_used_the_budget_exactly_is_refused(route)
     out = await _upload(R, [_Upload("exact.bin", BUDGET), _Upload("free.bin", BUDGET * 4)])
 
     assert out.status_code == 413
-    assert not (tmp_path / "psx" / "free.bin").exists(), (
+    assert not _landed(tmp_path, "free.bin").exists(), (
         "plik po tym, ktory wyczerpal pule co do bajta, poszedl na dysk bez "
         "zadnej kontroli"
     )
@@ -127,7 +135,7 @@ async def test_a_file_that_fits_exactly_is_still_allowed(route):
     out = await _upload(R, [_Upload("exact.bin", BUDGET)])
 
     assert out["saved"] == ["exact.bin"]
-    assert (tmp_path / "psx" / "exact.bin").stat().st_size == BUDGET
+    assert _landed(tmp_path, "exact.bin").stat().st_size == BUDGET
 
 
 @pytest.mark.asyncio
@@ -139,8 +147,8 @@ async def test_the_budget_is_spent_across_the_whole_request(route):
                             _Upload("b.bin", BUDGET // 2 + 1)])
 
     assert out.status_code == 413
-    assert (tmp_path / "psx" / "a.bin").exists()
-    assert not (tmp_path / "psx" / "b.bin").exists()
+    assert _landed(tmp_path, "a.bin").exists()
+    assert not _landed(tmp_path, "b.bin").exists()
 
 
 @pytest.mark.asyncio
@@ -151,7 +159,7 @@ async def test_the_part_that_did_not_fit_leaves_nothing_behind(route):
 
     assert (await _upload(R, [_Upload("toobig.bin", BUDGET * 3)])).status_code == 413
 
-    assert not (tmp_path / "psx" / "toobig.bin").exists()
+    assert not _landed(tmp_path, "toobig.bin").exists()
 
 
 # ── The refusal is RETURNED, not raised ──────────────────────────────────────
@@ -178,7 +186,7 @@ async def test_a_file_the_library_will_never_register_is_refused(route):
 
     assert out["saved"] == []
     assert out["rejected"] and out["rejected"][0]["filename"] == "blob.dat"
-    assert not (tmp_path / "psx" / "blob.dat").exists(), (
+    assert not _landed(tmp_path, "blob.dat").exists(), (
         "plik, ktorego biblioteka nigdy nie zarejestruje, zostal na dysku"
     )
 
@@ -188,7 +196,7 @@ async def test_a_recognised_extension_is_still_accepted(route):
     R, tmp_path = route
     out = await _upload(R, [_Upload("game.iso", 10)])
     assert out["saved"] == ["game.iso"]
-    assert (tmp_path / "psx" / "game.iso").is_file()
+    assert _landed(tmp_path, "game.iso").is_file()
 
 
 @pytest.mark.asyncio

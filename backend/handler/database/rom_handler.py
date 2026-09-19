@@ -31,7 +31,7 @@ SCRAPED_METADATA_FIELDS = (
     "media_source",
     "background_path", "screenshots",
     "support_path", "wheel_path", "bezel_path", "steamgrid_path",
-    "video_path", "picto_path",
+    "video_path", "picto_path", "manual_path",
     "ss_id", "igdb_id", "launchbox_id",
     "ss_metadata", "igdb_metadata", "launchbox_metadata",
     "hltb_id", "hltb_main_s", "hltb_extra_s", "hltb_complete_s",
@@ -211,6 +211,7 @@ _METADATA_FIELDS: frozenset[str] = frozenset({
     "media_source",
     "background_path", "screenshots",
     "support_path", "wheel_path", "bezel_path", "steamgrid_path", "video_path", "picto_path",
+    "manual_path",
     "ss_id", "igdb_id", "launchbox_id", "ss_metadata", "igdb_metadata",
     "developer_ss_id", "publisher_ss_id",
     "hltb_id", "hltb_main_s", "hltb_extra_s", "hltb_complete_s",
@@ -353,6 +354,14 @@ class RomHandler(DBBaseHandler):
         The hash identifies the dump exactly; the filename survives a re-scan;
         the title is the last resort and only within the right platform, since
         the same title exists on several.
+
+        DELIBERATELY WITHOUT A DIRECTORY, unlike every other lookup here: the
+        archive carries a file name and no folder, so asking where the file
+        sits is asking something the caller cannot answer. What it must not do
+        is guess. Two games can hold a `disc1.bin`, and handing somebody's
+        hours to whichever row came back first is worse than reporting that the
+        save could not be placed - so an ambiguous name is treated as no match
+        and the title is tried instead.
         """
         # platform is eager-loaded: the caller writes the save under the
         # platform's folder, and by then this session is closed - a lazy load
@@ -367,11 +376,12 @@ class RomHandler(DBBaseHandler):
         if platform_id is None:
             return None
         if fs_name:
-            hit = (await session.execute(
+            candidates = (await session.execute(
                 base.where(Rom.platform_id == platform_id, Rom.fs_name == fs_name)
-            )).scalars().first()
-            if hit:
-                return hit
+                .limit(2)
+            )).scalars().all()
+            if len(candidates) == 1:
+                return candidates[0]
         if name:
             return (await session.execute(
                 base.where(
@@ -386,9 +396,88 @@ class RomHandler(DBBaseHandler):
         self,
         platform_id: int,
         fs_name: str,
+        fs_path: str,
         *,
         session: AsyncSession = None,
     ) -> Rom | None:
+        """The row for the file sitting at `fs_path/fs_name`, or None.
+
+        The directory is required, and that is the whole point. A platform
+        already holds more than one directory - the scan reads `{platform}/`
+        and `{platform}/roms/` as a union - so a name on its own does not name
+        a file, and answering as though it did hands back whichever row the
+        database happened to return first.
+        """
+        result = await session.execute(
+            select(Rom).where(
+                Rom.platform_id == platform_id,
+                Rom.fs_name == fs_name,
+                Rom.fs_path == fs_path,
+            )
+        )
+        return result.scalars().first()
+
+    @begin_session
+    async def rows_named_in(
+        self,
+        platform_id: int,
+        fs_name: str,
+        directories,
+        *,
+        session: AsyncSession = None,
+    ) -> list[Rom]:
+        """Rows carrying this file name in any of *directories*.
+
+        Asked by the scan about a file it has no row for, with the directory
+        above and the directories below as the places the file could have moved
+        out of. The caller decides what to make of the answer; this only says
+        which rows are near enough to be worth asking about.
+        """
+        wanted = [d for d in directories if d]
+        if not wanted:
+            return []
+        result = await session.execute(
+            select(Rom).where(
+                Rom.platform_id == platform_id,
+                Rom.fs_name == fs_name,
+                Rom.fs_path.in_(wanted),
+            )
+        )
+        return list(result.scalars().all())
+
+    @begin_session
+    async def move_row_to(
+        self, rom_id: int, fs_path: str, *, session: AsyncSession = None,
+    ) -> None:
+        """Write a ROM's new folder onto the row it already has.
+
+        The file moved and the game did not. Saves, play history, collections
+        and the owner all key on this id, so the alternative - a new row for
+        the new folder and the old one left missing - is the same game twice
+        over, with the hours on the copy that reads as gone.
+        """
+        await session.execute(
+            update(Rom).where(Rom.id == rom_id).values(
+                fs_path=fs_path, missing_from_fs=False)
+        )
+
+    @begin_session
+    async def any_row_named(
+        self,
+        platform_id: int,
+        fs_name: str,
+        *,
+        session: AsyncSession = None,
+    ) -> Rom | None:
+        """Any row on this platform carrying this file name, directory ignored.
+
+        A deliberately weaker question than the one above, and the name says so
+        rather than leaving it to be assumed. It is what the upload gate and the
+        download stamp ask: not "which file is this" but "is this name already
+        spoken for anywhere here", which is how a copy under `roms/` or the same
+        name in other letter case is caught before it is written over somebody's
+        ROM and their saves go with it.
+        """
         result = await session.execute(
             select(Rom).where(
                 Rom.platform_id == platform_id,
@@ -396,6 +485,122 @@ class RomHandler(DBBaseHandler):
             )
         )
         return result.scalars().first()
+
+    @begin_session
+    async def files_starting_with(
+        self,
+        fs_slug: str,
+        prefix: str,
+        *,
+        session: AsyncSession = None,
+    ) -> list[tuple[str, str]]:
+        """(file name, folder) of every row on this platform whose file name
+        starts with *prefix*, whatever folder it is in.
+
+        Platform-wide on purpose, and the only question here that has to be:
+        it is what a file asks before it is written - where does its game
+        already live? The same file, or another disc of the same title, is
+        looked for in order to learn its folder, so the folder cannot be part
+        of the question. The caller decides which of the answers is its game.
+
+        Rows whose file has gone are left out: a folder that is not there any
+        more is nobody's home. The prefix is matched as written - % and _ are
+        not wildcards here - and the escape is a slash, a character no file
+        name can hold, because MariaDB otherwise takes a backslash as its
+        escape and `AC\\DC` would miss itself.
+        """
+        pattern = prefix.replace("/", "//").replace("%", "/%").replace("_", "/_") + "%"
+        result = await session.execute(
+            select(Rom.fs_name, Rom.fs_path)
+            .join(RomPlatform, RomPlatform.id == Rom.platform_id)
+            .where(
+                RomPlatform.fs_slug == fs_slug,
+                Rom.fs_name.like(pattern, escape="/"),
+                ~Rom.missing_from_fs,
+            )
+            .order_by(Rom.id)
+        )
+        return [(name, path) for name, path in result.all()]
+
+    @begin_session
+    async def rows_in_folder_besides(
+        self,
+        platform_id: int,
+        fs_path: str,
+        exclude_ids,
+        *,
+        session: AsyncSession = None,
+    ) -> int:
+        """How many ROM rows sit in this folder that are not among *exclude_ids*.
+
+        Asked before a game takes its folder's extras/ and mods/ with it: two
+        games put in one folder over FTP share those, and they are then not one
+        game's to delete.
+        """
+        query = select(func.count(Rom.id)).where(
+            Rom.platform_id == platform_id,
+            Rom.fs_path == fs_path,
+        )
+        excluded = [int(i) for i in exclude_ids]
+        if excluded:
+            query = query.where(Rom.id.not_in(excluded))
+        return int((await session.execute(query)).scalar() or 0)
+
+    @begin_session
+    async def another_in_folder(
+        self, fs_path: str, exclude_ids, *, session: AsyncSession = None,
+    ) -> int | None:
+        """A game in this folder that is not among *exclude_ids*, or None.
+
+        Of any platform and missing or not: a row that lost its file still
+        holds that game's saves. Asked before a folder is renamed after one
+        game, and before a game's added-file rows go with its row - so a game,
+        never a track row, and one still on the disk when there is one. The
+        lowest id is usually a track, and added files handed to a track went
+        with it when a conversion took the tracks away (1.0.36 audit, round 2).
+        """
+        query = select(Rom.id).where(Rom.fs_path == fs_path, Rom.track_of.is_(None))
+        excluded = [int(i) for i in exclude_ids]
+        if excluded:
+            query = query.where(Rom.id.not_in(excluded))
+        found = (await session.execute(
+            query.order_by(Rom.missing_from_fs, Rom.id).limit(1))).scalar()
+        return int(found) if found is not None else None
+
+    @begin_session
+    async def names_in_folder(
+        self, fs_path: str, exclude_ids=(), *, session: AsyncSession = None,
+    ) -> set[str]:
+        """The file names, lowercased, of the ROM rows in this folder that are
+        not among *exclude_ids*. What a file on a shared shelf may be told
+        apart from: another game's entry, or a name another game shares."""
+        query = select(Rom.fs_name).where(Rom.fs_path == fs_path)
+        excluded = [int(i) for i in exclude_ids]
+        if excluded:
+            query = query.where(Rom.id.not_in(excluded))
+        return {name.lower() for name in (await session.execute(query)).scalars().all() if name}
+
+    @begin_session
+    async def manual_claimed(
+        self, fs_path: str, manual_path: str, exclude_ids=(), *, session: AsyncSession = None,
+    ) -> bool:
+        """Whether a ROM in this folder, other than *exclude_ids*, already has
+        this file as its manual (the path kept relative to the folder)."""
+        query = select(func.count(Rom.id)).where(
+            Rom.fs_path == fs_path, Rom.manual_path == manual_path)
+        excluded = [int(i) for i in exclude_ids]
+        if excluded:
+            query = query.where(Rom.id.not_in(excluded))
+        return bool((await session.execute(query)).scalar())
+
+    @begin_session
+    async def owners_in_folder(self, fs_path: str, *, session: AsyncSession = None) -> set:
+        """Who owns each game in this folder: `published_by` of every row but
+        the track rows, which go with their sheet. None for a game nobody owns."""
+        result = await session.execute(
+            select(Rom.published_by).where(Rom.fs_path == fs_path, Rom.track_of.is_(None))
+        )
+        return set(result.scalars().all())
 
     @begin_session
     async def count_for_platform(self, platform_id: int, *, session: AsyncSession = None) -> int:
@@ -477,7 +682,8 @@ class RomHandler(DBBaseHandler):
         await session.execute(stmt)
 
     @begin_session
-    async def clear_container_hashes(self, platform_id: int, fs_name: str, *,
+    async def clear_container_hashes(self, platform_id: int, fs_name: str,
+                                     fs_path: str, *,
                                      drop_sha1: bool = False,
                                      session: AsyncSession = None) -> None:
         """Null the CRC and MD5 on a row whose format has no container hash worth keeping.
@@ -499,7 +705,11 @@ class RomHandler(DBBaseHandler):
             values["sha1_hash"] = None
         await session.execute(
             update(Rom)
-            .where(Rom.platform_id == platform_id, Rom.fs_name == fs_name)
+            .where(Rom.platform_id == platform_id, Rom.fs_name == fs_name,
+                   # The directory, or this clears the digests of every file of
+                   # that name on the platform - including a game in another
+                   # folder that nobody converted and whose hashes were right.
+                   Rom.fs_path == fs_path)
             .values(**values)
         )
 
@@ -566,6 +776,13 @@ class RomHandler(DBBaseHandler):
                 delete(Rom).where(
                     Rom.platform_id == rom.platform_id,
                     Rom.track_of == old_name,
+                    # In this sheet's own directory. A sheet names the files
+                    # beside it and nothing else, so a track anywhere else was
+                    # never this one's - and a DELETE that ignores the folder
+                    # takes the identically named track of the game next door,
+                    # its saves and its play history with it, while its files
+                    # stay on the disk with no row pointing at them.
+                    Rom.fs_path == rom.fs_path,
                 )
             )
 
@@ -599,11 +816,12 @@ class RomHandler(DBBaseHandler):
     async def apply_disk_groups(
         self,
         platform_id: int,
+        fs_path: str,
         assignments: dict[str, tuple[str | None, int | None, bool, str | None]],
         *,
         session: AsyncSession = None,
     ) -> None:
-        """Record which ROMs belong with which, for a whole platform.
+        """Record which ROMs belong with which, for one directory.
 
         Written after the directory walk rather than during it, because whether
         a file is one of a set depends on what else is beside it: the first disk
@@ -611,12 +829,16 @@ class RomHandler(DBBaseHandler):
 
         Every ROM found on disk gets an entry, including the ones that belong to
         no set - clearing their fields is what lets a title stop being a set
-        when its other disks are deleted.
+        when its other disks are deleted. That clearing is why the directory is
+        an argument rather than a nicety: a plan drawn from one folder, applied
+        by name across the platform, hands another game's disc its membership
+        and then takes the membership off a third.
         """
         for fs_name, (group, number, extra, track_of) in assignments.items():
             await session.execute(
                 update(Rom)
-                .where(Rom.platform_id == platform_id, Rom.fs_name == fs_name)
+                .where(Rom.platform_id == platform_id, Rom.fs_name == fs_name,
+                       Rom.fs_path == fs_path)
                 .values(disk_group=group, disk_number=number, extra_disk=extra,
                         track_of=track_of)
             )
@@ -648,6 +870,12 @@ class RomHandler(DBBaseHandler):
             select(Rom).where(
                 Rom.platform_id == platform_id,
                 Rom.fs_name == fs_name,
+                # The directory, because two of them can hold one name. Without
+                # it the second file found takes the first file's row, rewrites
+                # its path onto its own folder and reports itself present: one
+                # game disappears from the library with its file still on the
+                # disk, and the row that survives carries the other game's saves.
+                Rom.fs_path == fs_path,
             )
         )
         rom = existing.scalars().first()
@@ -759,7 +987,12 @@ class RomHandler(DBBaseHandler):
             return rom
         found = await session.execute(
             select(Rom).where(
-                Rom.platform_id == rom.platform_id, Rom.fs_name == rom.track_of
+                Rom.platform_id == rom.platform_id, Rom.fs_name == rom.track_of,
+                # Beside it. A sheet names the files in its own directory, so a
+                # track resolved to a namesake in another folder hands every
+                # caller the wrong game: the download zips somebody else's
+                # files and the delete removes them.
+                Rom.fs_path == rom.fs_path,
             )
         )
         return found.scalars().first() or rom
@@ -847,15 +1080,34 @@ class RomHandler(DBBaseHandler):
             if fs_name and Path(fs_name).stem.lower() in asked
         }
 
-    async def _tracks_of(self, platform_id: int, fs_names, session: AsyncSession) -> list[Rom]:
+    async def _tracks_of(self, platform_id: int, fs_path: str, fs_names,
+                         session: AsyncSession) -> list[Rom]:
         if not fs_names:
             return []
         result = await session.execute(
             select(Rom)
-            .where(Rom.platform_id == platform_id, Rom.track_of.in_(list(fs_names)))
+            .where(Rom.platform_id == platform_id, Rom.track_of.in_(list(fs_names)),
+                   Rom.fs_path == fs_path)
             .order_by(Rom.fs_name)
         )
         return list(result.scalars().all())
+
+    @begin_session
+    async def track_bytes(
+        self, platform_id: int, fs_path: str, fs_names, *, session: AsyncSession = None
+    ) -> dict[str, int]:
+        """What the track files of each sheet in *fs_names* weigh, by sheet name.
+
+        A sheet is a few kilobytes of text and its tracks are the disc, so this
+        is what a disc weighs on the game's page. Counted from the same rows the
+        download takes (rom_with_tracks), leaving out a track that is gone the
+        way the download does. A sheet with no tracks is not in the answer.
+        """
+        weights: dict[str, int] = {}
+        for track in await self._tracks_of(platform_id, fs_path, list(fs_names), session):
+            if not track.missing_from_fs:
+                weights[track.track_of] = weights.get(track.track_of, 0) + (track.fs_size_bytes or 0)
+        return weights
 
     @begin_session
     async def disk_set(self, rom_id: int, *, session: AsyncSession = None) -> list[Rom]:
@@ -880,14 +1132,21 @@ class RomHandler(DBBaseHandler):
         if rom.disk_group:
             result = await session.execute(
                 select(Rom)
-                .where(Rom.platform_id == rom.platform_id, Rom.disk_group == rom.disk_group)
+                .where(Rom.platform_id == rom.platform_id,
+                       Rom.disk_group == rom.disk_group,
+                       # The discs of one title sit together, and the scan works
+                       # the grouping out one directory at a time, so a set
+                       # cannot span two. Without this a second copy of the same
+                       # title elsewhere - a re-rip, another region - merges into
+                       # one six-disc set that the delete takes whole.
+                       Rom.fs_path == rom.fs_path)
                 .order_by(Rom.disk_number, Rom.fs_name)
             )
             disks = list(result.scalars().all())
         else:
             disks = [rom]
         return disks + await self._tracks_of(
-            rom.platform_id, [d.fs_name for d in disks], session
+            rom.platform_id, rom.fs_path, [d.fs_name for d in disks], session
         )
 
     @begin_session
@@ -902,7 +1161,8 @@ class RomHandler(DBBaseHandler):
         if rom is None:
             return []
         rom = await self._sheet_of(rom, session)
-        return [rom] + await self._tracks_of(rom.platform_id, [rom.fs_name], session)
+        return [rom] + await self._tracks_of(
+            rom.platform_id, rom.fs_path, [rom.fs_name], session)
 
     @begin_session
     async def all_for_platform(

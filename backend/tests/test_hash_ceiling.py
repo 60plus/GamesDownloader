@@ -29,6 +29,11 @@ GIB = 1024 ** 3
 
 # ── the decision ─────────────────────────────────────────────────────────────
 
+async def _nothing_moved(*_a, **_k):
+    """Nothing in these trees moved: every file found is new."""
+    return []
+
+
 def test_no_ceiling_means_hash_everything():
     """The default. A hash is how a ROM gets identified, so nothing is skipped
     until somebody says so."""
@@ -121,6 +126,8 @@ async def test_a_real_scan_skips_the_large_file_and_hashes_the_small_one(
     monkeypatch.setattr(scanner.rom_handler, "mark_all_missing", _nothing)
     monkeypatch.setattr(scanner.rom_handler, "present_ids", _no_present)
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name", _nothing)
+    monkeypatch.setattr(scanner.rom_handler, "rows_named_in",
+                        _nothing_moved)
     monkeypatch.setattr(scanner.rom_handler, "apply_disk_groups", _nothing)
     monkeypatch.setattr(scanner.rom_handler, "clear_container_hashes", _nothing)
     monkeypatch.setattr(scanner.rom_handler, "upsert", _upsert_rom)
@@ -442,6 +449,7 @@ async def test_a_file_that_grew_past_the_ceiling_loses_its_old_checksums(
     monkeypatch.setattr(scanner.rom_handler, "present_ids", _no_present)
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name",
                         lambda *a, **k: _as_awaitable(_Existing()))
+    monkeypatch.setattr(scanner.rom_handler, "rows_named_in", _nothing_moved)
     monkeypatch.setattr(scanner.rom_handler, "apply_disk_groups", _nothing)
     monkeypatch.setattr(scanner.rom_handler, "clear_container_hashes",
                         lambda *a, **k: _as_awaitable(cleared.append(k) or None))
@@ -508,7 +516,16 @@ async def test_the_rom_page_learns_whether_the_file_is_identified_by_hash(
     async def _get(rom_id):
         return rom
 
+    async def _no_rows(_fs_path, **_k):
+        # Nobody added a file beside it (test_a_file_can_be_added_to_a_rom.py).
+        return []
+
+    async def _owners(_fs_path, **_k):
+        return {None}
+
     monkeypatch.setattr(rom_handler, "get_with_platform", _get)
+    monkeypatch.setattr(roms_router.rom_added_file_handler, "in_folder", _no_rows)
+    monkeypatch.setattr(rom_handler, "owners_in_folder", _owners)
 
     out = await roms_router.get_rom.__wrapped__(None, 7)
     assert out["has_hashes"] is expected

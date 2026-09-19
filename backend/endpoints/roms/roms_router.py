@@ -18,30 +18,37 @@ import zipfile
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
+from typing import Annotated
+from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from config import ROMS_PATH, config_manager
 from decorators.auth import protected_route
 from handler.auth.scopes import Scope as Scopes
+from handler.database.rom_added_file_handler import rom_added_file_handler
 from handler.database.rom_handler import rom_handler, rom_platform_handler
 from handler.database.save_state_handler import save_state_handler
 from handler.filesystem.rom_scanner import (
+    playlists_naming,
     SHEET_EXTENSIONS,
     scan_roms_path,
     subchannel_files_for,
     tracks_referenced_by,
 )
-from handler.roms import chd_jobs, rom_removal
+from handler.roms import chd_jobs, game_extras, game_folder, rom_removal
 from handler.roms.chd_convert import convertible_disc, disc_inside_archive
+from handler.metadata import manuals
 from handler.metadata.rom_scrape_handler import scrape_roms_batch
 from handler.library.metadata_lock import assert_unlocked
 from handler.library.ownership import assert_can_delete_rom_set, claim_writes
 from handler.metadata.rom_platform_map import PLATFORM_MAP, get_cover_aspect as _get_cover_aspect
 from utils import download_tickets
+from utils.disk_sets import marked_disk
+from utils.game_folders import game_dir, platform_dirs, shelves_of
 from utils.ranged_file import content_disposition
 from utils.ratings import rom_rating_agg_of
 from utils.async_utils import note_unscanned
@@ -809,7 +816,7 @@ async def search_roms_metadata(
     import asyncio
     from handler.config.config_handler import config_handler
     from handler.metadata import screenscraper_handler, igdb_rom_handler
-    from handler.metadata.rom_platform_map import get_ss_id, get_igdb_id
+    from handler.metadata.rom_platform_map import get_ss_id, igdb_platform_ids
 
     ss_user = await config_handler.get("screenscraper_username") or ""
     ss_pass = await config_handler.get("screenscraper_password") or ""
@@ -817,7 +824,7 @@ async def search_roms_metadata(
     igdb_sec = await config_handler.get("igdb_client_secret") or ""
 
     ss_system_id     = get_ss_id(platform_slug)   if platform_slug else None
-    igdb_platform_id = get_igdb_id(platform_slug) if platform_slug else None
+    igdb_platform_id = igdb_platform_ids(platform_slug) if platform_slug else None
 
     async def _empty() -> list:
         return []
@@ -971,6 +978,24 @@ async def search_roms_metadata(
 
 # ── ROM detail ────────────────────────────────────────────────────────────────
 
+async def _track_weights(platform_id: int, sheets) -> dict[tuple[str, str], int]:
+    """What the tracks of each of these discs weigh, by (folder, file name).
+
+    A disc kept as a sheet is a few kilobytes of text naming the files that are
+    the disc, and the page put the sheet's own size on it. Only sheets are
+    asked about: nothing else has tracks, and most games are one file.
+    """
+    wanted: dict[str, list[str]] = {}
+    for disc in sheets:
+        if Path(disc.fs_name).suffix.lower() in _scanner.SHEET_EXTENSIONS:
+            wanted.setdefault(disc.fs_path, []).append(disc.fs_name)
+    weights: dict[tuple[str, str], int] = {}
+    for folder, names in wanted.items():
+        for name, size in (await rom_handler.track_bytes(platform_id, folder, names)).items():
+            weights[(folder, name)] = size
+    return weights
+
+
 @protected_route(router.get, "/{rom_id}", scopes=[Scopes.ROMS_READ])
 async def get_rom(request: Request, rom_id: int) -> dict:
     rom = await rom_handler.get_with_platform(rom_id)
@@ -981,21 +1006,24 @@ async def get_rom(request: Request, rom_id: int) -> dict:
     # Most of them just boot the same game, but not all - a fair few sets put a
     # level editor or a second scenario on a later disk, which is worth being
     # able to start directly.
-    disks: list[dict] = []
-    if rom.disk_group:
-        disks = [
-            {
-                "id": d.id,
-                "number": d.disk_number,
-                "name": d.fs_name,
-                # What loading the whole set would cost. The page puts it on
-                # the button, because holding every disc at once is the price
-                # of letting the emulator switch between them.
-                "size": d.fs_size_bytes,
-                "current": d.id == rom.id,
-            }
-            for d in await rom_handler.get_disk_set(rom.platform_id, rom.disk_group)
-        ]
+    set_rows = (await rom_handler.get_disk_set(rom.platform_id, rom.disk_group)
+                if rom.disk_group else [])
+    # What each disc weighs is what its download holds: a sheet and its tracks.
+    tracks = await _track_weights(rom.platform_id, set_rows or [rom])
+    disks: list[dict] = [
+        {
+            "id": d.id,
+            "number": d.disk_number,
+            "name": d.fs_name,
+            # What loading the whole set would cost. The page puts it on
+            # the button, because holding every disc at once is the price
+            # of letting the emulator switch between them - and lists it
+            # beside each disc under Show details.
+            "size": (d.fs_size_bytes or 0) + tracks.get((d.fs_path, d.fs_name), 0),
+            "current": d.id == rom.id,
+        }
+        for d in set_rows
+    ]
     # Whether these discs already have a playlist, which is what decides if the
     # page offers to write one. Only asked for a title that has discs to switch
     # between, so an ordinary game costs no filesystem call at all.
@@ -1014,6 +1042,28 @@ async def get_rom(request: Request, rom_id: int) -> dict:
     chd_convertible = await asyncio.to_thread(
         lambda: all(convertible_disc(Path(rom.fs_path) / n) for n in convert_names)
     )
+
+    # Whether the game has a manual, asked of the disk rather than of the column:
+    # a row can outlive its file - somebody tidied extras/ over FTP - and a
+    # button that opens nothing is worse than no button. Only whether: where it
+    # is on the server's disk is none of the page's business.
+    has_manual = (
+        bool(rom.manual_path)
+        and await asyncio.to_thread(
+            manuals.resolve_manual, rom, await _get_roms_path()) is not None
+    )
+
+    # The extras and mods beside the game, read off its folder - they are put
+    # there over FTP and have no rows. Paths relative to the game's folder, the
+    # way a ticket names them; where that folder is stays on the server.
+    extras = []
+    if rom.platform is not None:
+        extras = await asyncio.to_thread(
+            partial(game_extras.extras_of, rom, library_root=await _get_roms_path(),
+                    fs_slug=rom.platform.fs_slug))
+    # Whose bin works where, and the rows of files that went over FTP forgotten.
+    if rom.fs_path:
+        await _mark_extras(request, rom, extras)
 
     # Who owns this ROM and who fetched it, looked up only when there is
     # something to look up. Most ROMs were found on the disk by a scan and have
@@ -1036,6 +1086,9 @@ async def get_rom(request: Request, rom_id: int) -> dict:
 
     return {
         "disks":           disks,
+        # The tracks of a game on one disc kept as a sheet: fs_size_bytes is
+        # the sheet alone, and the page shows the two together.
+        "tracks_bytes":    tracks.get((rom.fs_path, rom.fs_name), 0),
         "playlist":        playlist,
         "published_by":      rom.published_by,
         "owner_username":    owner_name,
@@ -1099,6 +1152,10 @@ async def get_rom(request: Request, rom_id: int) -> dict:
         "steamgrid_path":  rom.steamgrid_path,
         "video_path":      rom.video_path,
         "picto_path":      rom.picto_path,
+        # Whether the game has a manual; the page asks for a ticket to open it.
+        "has_manual":      has_manual,
+        # [{kind: extra|mod, path, name, size}]; each downloads through a ticket.
+        "extras":          extras,
         "is_identified":   rom.is_identified,
         "igdb_id":         rom.igdb_id,
         "ss_id":           rom.ss_id,
@@ -1336,6 +1393,12 @@ async def update_rom_metadata(
 
     if data:
         await rom_handler.update_metadata(rom_id, data)
+        if "name" in data:
+            # The folder is named after the game, so a title that changes and a
+            # folder that does not means the shelf reads one way and the disk
+            # another. Whole game or nothing; see the module.
+            from handler.roms.game_folder import follow_title
+            await follow_title(rom_id)
 
     updated = await rom_handler.get_with_platform(rom_id)
     if updated is None:
@@ -1611,7 +1674,7 @@ async def get_rom_all_media(
     import asyncio
     from handler.config.config_handler import config_handler
     from handler.metadata import screenscraper_handler, igdb_rom_handler
-    from handler.metadata.rom_platform_map import get_ss_id, get_igdb_id as _get_igdb_id
+    from handler.metadata.rom_platform_map import get_ss_id, igdb_platform_ids
 
     rom = await rom_handler.get_with_platform(rom_id)
     if rom is None:
@@ -1645,7 +1708,7 @@ async def get_rom_all_media(
         if _id:
             return await igdb_rom_handler.get_game_by_id(_id, client_id=igdb_cid, client_secret=igdb_sec)
         elif igdb_query:
-            igdb_plat_id = _get_igdb_id(slug) if slug else None
+            igdb_plat_id = igdb_platform_ids(slug) if slug else None
             return await igdb_rom_handler.search_game(
                 igdb_query, igdb_plat_id, client_id=igdb_cid, client_secret=igdb_sec)
         return None
@@ -2068,6 +2131,489 @@ async def download_rom_with_ticket(
     return await _rom_file_response(rom_id)
 
 
+@protected_route(router.post, "/{rom_id}/manual-ticket", scopes=[Scopes.ROMS_READ])
+async def rom_manual_ticket(request: Request, rom_id: int) -> dict:
+    """A short-lived link to this game's manual, for the browser to open.
+
+    The manual lives beside the game in its extras (the owner's decision), in
+    the ROM tree rather than under /resources, and nothing serves that tree by
+    path. Opening it is a navigation, which carries no Authorization header -
+    the reason ROM downloads go through a ticket, and so does this. Its own
+    kind, so a manual ticket opens a manual and nothing else.
+    """
+    rom = await rom_handler.get_by_id(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    found = await asyncio.to_thread(manuals.resolve_manual, rom, await _get_roms_path())
+    if found is None:
+        raise HTTPException(status_code=404, detail="This game has no manual")
+    user_id = request.state.user.id
+    expires_at, sig = download_tickets.issue(rom_id, user_id, kind="manual")
+    return {
+        "url": f"/api/roms/{rom_id}/manual/{user_id}/{expires_at}/{sig}",
+        "expires_at": expires_at,
+    }
+
+
+# Not @protected_route for the same reason as the download above: the browser
+# navigates here, and the ticket stands in for the session.
+@router.get("/{rom_id}/manual/{user_id}/{expires_at}/{sig}")
+async def rom_manual_with_ticket(
+    rom_id: int, user_id: int, expires_at: int, sig: str
+) -> FileResponse:
+    """The manual, for the browser's own PDF viewer.
+
+    Checked for being a PDF on the way out as well as on the way in. The folder
+    it sits in is one people write to over FTP, so what is at that path now is
+    not necessarily what the scraper checked; anything that does not open like a
+    PDF is refused rather than served. It goes out as application/pdf with
+    nosniff whatever it contains, so it is never rendered as a page.
+    """
+    if not download_tickets.valid(rom_id, user_id, expires_at, sig, kind="manual"):
+        raise HTTPException(status_code=403, detail="This link has expired")
+    rom = await rom_handler.get_by_id(rom_id)
+    if rom is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    found = await asyncio.to_thread(manuals.resolve_manual, rom, await _get_roms_path())
+    if found is None:
+        raise HTTPException(status_code=404, detail="This game has no manual")
+
+    def _opens_like_a_pdf() -> bool:
+        with open(found, "rb") as fh:
+            return manuals.is_pdf(fh.read(8))
+
+    if not await asyncio.to_thread(_opens_like_a_pdf):
+        raise HTTPException(status_code=415, detail="The manual is not a PDF")
+    return FileResponse(
+        found,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": content_disposition(found.name, inline=True),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+class ExtraTicketBody(BaseModel):
+    #: The file, relative to the game's folder, as the game's page lists it.
+    path: str
+
+
+def _extra_kind(path: str) -> str:
+    """The ticket kind for one file: its path is part of what is signed, so a
+    ticket for one extra is not a pass to another, and none of these is a pass
+    to the game or its manual."""
+    return f"extra:{path}"
+
+
+@protected_route(router.post, "/{rom_id}/extra-ticket", scopes=[Scopes.ROMS_READ])
+async def rom_extra_ticket(request: Request, rom_id: int, body: ExtraTicketBody) -> dict:
+    """A short-lived link to one file from the game's extras/ or mods/.
+
+    Only a file the game's page offers gets one (game_extras): the folder is
+    written to over FTP, so what is asked for is checked against the disk now,
+    not against a list the page fetched earlier.
+    """
+    rom = await rom_handler.get_with_platform(rom_id)
+    if rom is None or rom.platform is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    found = await asyncio.to_thread(
+        partial(game_extras.extra_path, rom, body.path, library_root=await _get_roms_path(),
+                fs_slug=rom.platform.fs_slug))
+    if found is None:
+        raise HTTPException(status_code=404, detail="This game has no such file")
+    user_id = request.state.user.id
+    expires_at, sig = download_tickets.issue(rom_id, user_id, kind=_extra_kind(body.path))
+    return {
+        "url": (f"/api/roms/{rom_id}/extra/{user_id}/{expires_at}/{sig}"
+                f"?path={quote(body.path, safe='')}"),
+        "expires_at": expires_at,
+    }
+
+
+# Not @protected_route, like the download and the manual: the browser navigates
+# here, and the ticket - which names this file - stands in for the session.
+@router.get("/{rom_id}/extra/{user_id}/{expires_at}/{sig}")
+async def rom_extra_with_ticket(
+    rom_id: int, user_id: int, expires_at: int, sig: str, path: str,
+) -> FileResponse:
+    """One extra or mod, as a download. Never shown in place: whatever the
+    file is, it goes out as an attachment the browser saves."""
+    if not download_tickets.valid(rom_id, user_id, expires_at, sig, kind=_extra_kind(path)):
+        raise HTTPException(status_code=403, detail="This link has expired")
+    rom = await rom_handler.get_with_platform(rom_id)
+    if rom is None or rom.platform is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    found = await asyncio.to_thread(
+        partial(game_extras.extra_path, rom, path, library_root=await _get_roms_path(),
+                fs_slug=rom.platform.fs_slug))
+    if found is None:
+        raise HTTPException(status_code=404, detail="This game has no such file")
+    return FileResponse(
+        found,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": content_disposition(found.name),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+# ── Adding a file beside a game, and taking one away ─────────────────────────
+#
+# The owner (2026-09-18): "Add file" on a ROM, the way a GOG or custom game has
+# it, for administrators and uploaders alike, and a bin beside each file. What
+# an uploader adds counts against them, so each file added here gets a row
+# (models/rom_added_file.py); what is put in over FTP has none and counts
+# against nobody. A further disc goes through the platform upload instead
+# (upload_roms, `into`), which registers it and makes it the uploader's.
+
+#: Which folder of the game each kind goes into. The manual is always the
+#: game's extras/Manual.pdf, the name the scraper gives it.
+_ADDED_FOLDERS = {"extra": "extras", "mod": "mods", "manual": "extras"}
+
+
+def _refused(status_code: int, reason: str, detail: str) -> HTTPException:
+    """A refusal the screen can put into its own words.
+
+    The server names the reason and the screen says it (lib/uploadResult.ts is
+    the pattern): the name rides in X-GD-Reason for RomAddFileForm, and the
+    sentence stays in `detail` for anything that does not know the name.
+    """
+    return HTTPException(status_code=status_code, detail=detail, headers={"X-GD-Reason": reason})
+
+
+def _added_file_name(filename: str | None, kind: str) -> str | None:
+    """The name a file added to a game is written under, or None to refuse it.
+
+    Only the last part of what the browser sent, and never a name the list
+    beside the game would not show (game_extras._offered): hidden, or a
+    transfer's .part. A file nobody can see is a file nobody can remove.
+    """
+    if kind == "manual":
+        return manuals.MANUAL_NAME
+    name = Path((filename or "").replace("\\", "/")).name
+    if not name or name in (".", "..") or name.startswith(".") or name.lower().endswith(".part"):
+        return None
+    # A control character: NUL fails the write with a 500, and a line break
+    # makes a file whose download header the server then refuses to send.
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+        return None
+    return name
+
+
+async def _write_added_file(upload, part: Path, *, remaining: int, reservation,
+                            name: str, must_be_pdf: bool) -> int:
+    """Stream the upload into its .part, inside the account's limit.
+
+    `remaining` is the room when the request arrived and `reservation` sees the
+    account's other transfers as they grow, the two checks every ROM upload
+    makes (upload_roms). A manual is looked at in its first chunk: anything but
+    a PDF is refused before the rest of it crosses the wire.
+    """
+    written = 0
+    with open(part, "wb") as fh:
+        while chunk := await upload.read(256 * 1024):
+            if must_be_pdf and written == 0 and not manuals.is_pdf(chunk):
+                raise _refused(400, "not_pdf", "A manual has to be a PDF.")
+            written += len(chunk)
+            if written > remaining:
+                raise _refused(413, "no_room",
+                               f"{name} exceeds the space left for this account ({remaining} bytes).")
+            if not await reservation.take(len(chunk)):
+                raise _refused(413, "no_room",
+                               f"{name} does not fit beside this account's other uploads.")
+            fh.write(chunk)
+    if must_be_pdf and written == 0:
+        raise _refused(400, "not_pdf", "A manual has to be a PDF.")
+    return written
+
+
+async def _refuse_if_infected(part: Path, name: str, actor: str | None) -> None:
+    """ClamAV on the .part, when upload scanning is on, before it takes a name."""
+    try:
+        from handler.clamav import clamav_handler as _clam
+
+        if not await _clam.is_upload_scanning_enabled():
+            return
+        res = await _clam.scan_file(str(part))
+        note_unscanned(res, "ROM file", name)
+        if res.get("status") == "FOUND":
+            threat = res.get("threat") or "unknown"
+            await _clam.quarantine_or_delete(str(part), threat, triggered_by=actor)
+            logger.warning("ClamAV blocked a file added to a ROM: %s (threat=%s)", name, threat)
+            raise _refused(422, "threat", f"{name} was refused by the virus scan.")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("ClamAV scan failed for %s; allowing it", part)
+
+
+def _unlink_added(path: Path, folder: Path) -> bool:
+    """Remove one file beside a game, and any subfolder of extras/ or mods/ it
+    leaves empty - never the game's folder itself. Never through a link."""
+    if not game_extras._really_here(path, folder):
+        return False
+    try:
+        os.unlink(path)
+    except OSError:
+        logger.warning("Could not remove %s", path, exc_info=True)
+        return False
+    cur = path.parent
+    while cur != folder and folder in cur.parents:
+        try:
+            cur.rmdir()
+        except OSError:
+            break
+        cur = cur.parent
+    return True
+
+
+async def _forget_manual(rom_id: int, rel_path: str) -> None:
+    """A removed manual is no longer the game's: the button goes with it."""
+    for member in await rom_handler.disk_set(rom_id):
+        if getattr(member, "manual_path", None) == rel_path:
+            await rom_handler.update_metadata(member.id, dict(manual_path=None))
+
+
+async def _mark_extras(request: Request, rom, extras: list[dict]) -> None:
+    """Say beside each listed file whether its bin would work for this caller.
+
+    And forget the rows of files that went over FTP: a row is what the quota
+    sums, and a file that is not there any more must stop costing anybody.
+    Only while the folder itself is there: storage gone offline, or the moment
+    between a folder's rename and its rows catching up, reads every file as
+    missing, and a page view forgot every charge for good (1.0.36 audit).
+    """
+    from handler.library.ownership import can_touch_added_file
+
+    folder = Path(rom.fs_path)
+    rows = await rom_added_file_handler.in_folder(str(folder))
+    gone = []
+    if await asyncio.to_thread(folder.is_dir):
+        gone = [r.id for r in rows if not (folder / r.rel_path).is_file()]
+    if gone:
+        await rom_added_file_handler.forget(gone)
+    by_path = {r.rel_path: r for r in rows if r.id not in gone}
+    state = getattr(request, "state", None)
+    scopes = getattr(state, "scopes", set())
+    user_id = getattr(getattr(state, "user", None), "id", None)
+    owners = await rom_handler.owners_in_folder(str(folder))
+    for entry in extras:
+        entry["can_delete"] = can_touch_added_file(scopes, user_id, by_path.get(entry.get("path")), owners)
+
+
+@protected_route(router.post, "/{rom_id}/files", scopes=[Scopes.LIBRARY_UPLOAD, Scopes.ROMS_READ])
+async def add_rom_file(
+    request: Request,
+    rom_id: int,
+    file: UploadFile = File(...),
+    kind: str = Form("extra"),
+    overwrite: bool = Form(False),
+) -> dict:
+    """Add an extra, a mod or the manual to this game's folder.
+
+    A game lying loose on its shelf is given a folder of its own first
+    (game_folder.own_folder_held); when it cannot have one nothing is written.
+    A name already there is replaced only when asked, and only by whoever may
+    (ownership.can_touch_added_file). Written to a .part and renamed once it is
+    whole and clean, like every other upload.
+    """
+    from handler.library import quota
+    from handler.library.ownership import can_touch_added_file
+    from handler.roms.rom_source_handler import max_rom_bytes
+
+    if kind not in _ADDED_FOLDERS:
+        raise _refused(400, "bad_kind", "kind must be extra, mod or manual")
+    name = _added_file_name(file.filename, kind)
+    if name is None:
+        raise _refused(400, "bad_name", "That name cannot be added to a game.")
+    rom = await rom_handler.get_with_platform(rom_id)
+    if rom is None or rom.platform is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+
+    user = getattr(request.state, "user", None)
+    user_id = getattr(user, "id", None)
+    scopes = getattr(request.state, "scopes", set())
+    try:
+        remaining = await quota.ceiling_for(user, max_rom_bytes())
+    except HTTPException as full:
+        # No room at all: the quota's own sentence, under the same name as the
+        # refusal a file too big for what is left gets further down.
+        if full.status_code == 413:
+            raise _refused(413, "no_room", str(full.detail)) from full
+        raise
+    reservation = await quota.reservation_for(user)
+    reservation.open()
+    roms_base = await _get_roms_path()
+    part: Path | None = None
+    try:
+        # The folder is chosen, and the .part made in it, under the lock a
+        # rename after a title holds: once the .part is there that rename sees
+        # a transfer in progress and leaves the folder alone.
+        async with game_folder.folder_moves:
+            folder = await game_folder.own_folder_held(rom_id, roms_base=roms_base)
+            if folder is None:
+                raise _refused(409, "no_folder",
+                               "This game has no folder of its own, and none could be made for it.")
+            # Where this game's manual lives, asked the scrape's way: a plain
+            # Manual.pdf in a folder of its own, named after the game where
+            # others share the folder - or a second region's manual was refused
+            # as already there, or replaced the first one's (1.0.36 audit).
+            here = await rom_handler.get_with_platform(rom_id)
+            if here is None or here.platform is None:
+                raise HTTPException(status_code=404, detail="ROM not found")
+            manual_rel = manuals.stored_path(
+                await manuals.manual_home(here, here.name, Path(roms_base) / here.platform.fs_slug),
+                folder)
+            if kind == "manual":
+                rel, name = manual_rel, Path(manual_rel).name
+            else:
+                rel = f"{_ADDED_FOLDERS[kind]}/{name}"
+            dest = folder / rel
+            row = next((r for r in await rom_added_file_handler.in_folder(str(folder))
+                        if r.rel_path == rel), None)
+            if dest.is_symlink() or dest.exists():
+                if dest.is_symlink() or not dest.is_file():
+                    raise _refused(409, "not_a_file", f"Something that is not a file is called {rel}.")
+                if not overwrite:
+                    raise _refused(409, "already_here", f"{rel} is already there.")
+                owners = await rom_handler.owners_in_folder(str(folder))
+                if not can_touch_added_file(scopes, user_id, row, owners):
+                    raise _refused(403, "not_yours",
+                                   "Only an administrator, or the account that added this file, "
+                                   "may replace it.")
+                # What the file being replaced already costs this account comes
+                # back, or swapping a file near the limit could never fit.
+                if row is not None and user_id and row.published_by == user_id:
+                    remaining += int(row.size_bytes or 0)
+                    reservation.give_back(int(row.size_bytes or 0))
+            # A link called extras/ pointing somewhere else, or a FILE called
+            # extras, is not this game's folder to write into.
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                inside = dest.parent.resolve() == (folder.resolve() / _ADDED_FOLDERS[kind])
+            except OSError:
+                inside = False
+            if not inside:
+                raise _refused(409, "not_a_file", f"{_ADDED_FOLDERS[kind]}/ of this game is not a folder.")
+            candidate = dest.with_name(dest.name + ".part")
+            try:
+                candidate.open("xb").close()
+            except FileExistsError:
+                raise _refused(409, "busy", f"{rel} is already being sent.")
+            part = candidate
+
+        # The manual's own name is the manual, whichever kind it came as. Asked
+        # without regard to case: on a mount that ignores it, manual.pdf is the
+        # same file (round 2).
+        is_manual = kind == "manual" or rel.lower() == manual_rel.lower()
+        written = await _write_added_file(file, part, remaining=remaining, reservation=reservation,
+                                          name=name, must_be_pdf=is_manual)
+        await _refuse_if_infected(part, name, getattr(user, "username", None))
+        os.replace(part, dest)
+        part = None
+        await rom_added_file_handler.record(rom.id, str(folder), rel, written, user_id)
+        if is_manual:
+            from handler.metadata.rom_scrape_handler import with_manual
+
+            for member in await rom_handler.disk_set(rom_id):
+                if not getattr(member, "track_of", None):
+                    # Written to the row, never sent to the page: the page is
+                    # told only whether there is a manual (has_manual). Marked
+                    # as a person's, or a forced scrape - which replaces what a
+                    # provider gave - fetched its own copy over it (1.0.36 audit).
+                    await rom_handler.update_metadata(member.id, dict(
+                        manual_path=rel, media_source=with_manual(member, "manual_path")))
+        logger.info("Account %s added %s (%d B) to ROM %d", user_id, rel, written, rom_id)
+        return {"ok": True, "path": rel, "size_bytes": written, "folder": folder.name}
+    finally:
+        if part is not None:
+            part.unlink(missing_ok=True)
+        reservation.close()
+
+
+@protected_route(router.delete, "/{rom_id}/extra", scopes=[Scopes.ROMS_READ])
+async def remove_rom_extra(request: Request, rom_id: int, path: str) -> dict:
+    """Remove one extra or mod of this game - the bin beside it.
+
+    Only a file the page lists (game_extras.extra_path), so the bin can never
+    reach the game itself, a hidden file or anything through a link. Whoever
+    may: ownership.can_touch_added_file. Declared against the weakest
+    permission, like the ROM's own delete, because "an administrator, or the
+    account that added it" is decided in here.
+    """
+    from handler.library.ownership import can_touch_added_file
+
+    rom = await rom_handler.get_with_platform(rom_id)
+    if rom is None or rom.platform is None:
+        raise HTTPException(status_code=404, detail="ROM not found")
+    found = await asyncio.to_thread(
+        partial(game_extras.extra_path, rom, path, library_root=await _get_roms_path(),
+                fs_slug=rom.platform.fs_slug))
+    if found is None:
+        raise HTTPException(status_code=404, detail="This game has no such file")
+    folder = Path(rom.fs_path)
+    row = next((r for r in await rom_added_file_handler.in_folder(str(folder))
+                if r.rel_path == path), None)
+    user_id = getattr(getattr(request.state, "user", None), "id", None)
+    owners = await rom_handler.owners_in_folder(str(folder))
+    if not can_touch_added_file(getattr(request.state, "scopes", set()), user_id, row, owners):
+        raise HTTPException(
+            status_code=403,
+            detail="Only an administrator, or the account that added this file, may remove it.")
+    # A row goes only with its file: one that could not be removed keeps
+    # counting, or it stays on the disk costing nobody (1.0.36 audit, round 2).
+    if not await asyncio.to_thread(_unlink_added, found, folder) and await asyncio.to_thread(
+            lambda: found.exists() or found.is_symlink()):
+        raise HTTPException(status_code=409, detail="The file could not be removed.")
+    if row is not None:
+        await rom_added_file_handler.forget([row.id])
+    await _forget_manual(rom_id, path)
+    logger.info("Account %s removed %s from ROM %d", user_id, path, rom_id)
+    return {"ok": True}
+
+
+@protected_route(router.delete, "/{rom_id}/my-files", scopes=[Scopes.ROMS_READ])
+async def remove_my_rom_files(request: Request, rom_id: int) -> dict:
+    """Take the caller's own files away from this game and leave the game.
+
+    What "Remove my files" does for a game (library_router.remove_my_files):
+    the files counted against the caller, from the disk too, and nobody else's.
+
+    Under the lock a rename after a title holds, with the folder read again
+    inside it: moved mid-way, the files stayed where they were and their rows
+    were forgotten. And a row goes only with its file - one that could not be
+    removed keeps counting, or it would stay on the disk costing nobody (1.0.36
+    audit).
+    """
+    user_id = getattr(getattr(request.state, "user", None), "id", None)
+    if not user_id:
+        raise HTTPException(status_code=403, detail="Not signed in")
+    async with game_folder.folder_moves:
+        rom = await rom_handler.get_with_platform(rom_id)
+        if rom is None:
+            raise HTTPException(status_code=404, detail="ROM not found")
+        folder = Path(rom.fs_path)
+        # Storage gone offline reads every file as gone (round 2).
+        if not await asyncio.to_thread(folder.is_dir):
+            raise HTTPException(status_code=409, detail="The game's folder cannot be read.")
+        mine = await rom_added_file_handler.of_rom(rom_id, user_id)
+        done: list[int] = []
+        deleted = 0
+        for row in mine:
+            path = folder / row.rel_path
+            if await asyncio.to_thread(_unlink_added, path, folder):
+                deleted += 1
+            elif await asyncio.to_thread(lambda p=path: p.exists() or p.is_symlink()):
+                continue
+            done.append(row.id)
+            await _forget_manual(rom_id, row.rel_path)
+        await rom_added_file_handler.forget(done)
+    logger.info("Account %s removed %d of its files from ROM %d", user_id, len(done), rom_id)
+    return {"ok": True, "removed": len(done), "files_deleted": deleted}
+
+
 class _ZipStream:
     """A sink zipfile writes into that hands the bytes straight on.
 
@@ -2419,40 +2965,11 @@ def _set_loads_whole(disc_names) -> bool:
     return all(Path(n).suffix.lower() in allowed for n in names)
 
 
-def _playlists_naming(directory, disc_names) -> list[Path]:
-    """Every playlist in *directory* that names any of these discs.
-
-    By content rather than by name, because the useful question is whether the
-    discs have a playlist, not whether they have ours. One that came down
-    beside them, or that somebody wrote by hand on a handheld, counts the same:
-    for the button, because writing a second one over the top would be the
-    wrong answer; and for deletion, because a playlist naming discs that are
-    gone is just as broken whoever wrote it.
-    """
-    discs = {n.lower() for n in disc_names}
-    if len(discs) < 2:
-        return []
-    try:
-        candidates = sorted(Path(directory).glob("*.m3u"))
-    except OSError:
-        return []
-    out = []
-    for entry in candidates:
-        try:
-            lines = entry.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            continue
-        # A line may carry a `path|Label` suffix, and may be written with
-        # either separator by whatever wrote it. Only the file name is
-        # compared. GD never writes a label - PCSX-ReARMed hands the whole
-        # line to the filesystem - but other tools do.
-        named = {
-            line.split("|", 1)[0].strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
-            for line in lines if line.strip() and not line.startswith("#")
-        }
-        if named & discs:
-            out.append(entry)
-    return out
+# Moved to the scanner, where subchannel_files_for lives: the same question
+# about the same directory, and the deletion, the page and the folder a
+# renamed game moves into all have to ask it. Kept under the old private
+# name so everything below reads as it did.
+_playlists_naming = playlists_naming
 
 
 def _existing_playlist(directory, disc_names) -> str | None:
@@ -2631,6 +3148,25 @@ async def removable_tracks(members) -> list[Path]:
 # removes their own ROMs could not ask - and asked a one-sentence question
 # instead, for an act that takes every disc of the title and every account's
 # saves for all of them.
+async def _extras_going_with(members) -> list[Path]:
+    """The extras and mods that go when this set is deleted with its files -
+    the owner's decision D. Nothing when another game shares the folder, and a
+    loose game only its own manual (game_extras.removable_extras)."""
+    if not members:
+        return []
+    platform = await rom_platform_handler.get_by_id(members[0].platform_id)
+    if platform is None:
+        return []
+    folder = members[0].fs_path
+    others = await rom_handler.rows_in_folder_besides(
+        members[0].platform_id, folder, [m.id for m in members])
+    # The manual is kept on the disc that stands for the game on the shelf.
+    lead = next((m for m in members if getattr(m, "manual_path", None)), members[0])
+    return await asyncio.to_thread(partial(
+        game_extras.removable_extras, lead, library_root=await _get_roms_path(),
+        fs_slug=platform.fs_slug, folder_shared=others > 0))
+
+
 @protected_route(router.get, "/{rom_id}/removal", scopes=[Scopes.ROMS_READ])
 async def rom_removal_preview(request: Request, rom_id: int) -> dict:
     """What deleting this ROM would take with it.
@@ -2671,12 +3207,19 @@ async def rom_removal_preview(request: Request, rom_id: int) -> dict:
         subchannel_files_for, Path(members[0].fs_path),
         [m.fs_name for m in members if not m.track_of],
     )]
+    # And what the game keeps beside it in extras/ and mods/ (the owner's
+    # decision D), named by where it sits in the game's folder. A list of its
+    # own: the screens say of `files` that the disc sheets name them, and a
+    # manual or a mod is not something a sheet names.
+    extras = [p.relative_to(members[0].fs_path).as_posix()
+              for p in await _extras_going_with(members)]
     return {
         "disks": [
             {"id": d.id, "name": d.fs_name, "number": d.disk_number}
             for d in members if not d.track_of
         ],
         "files": extra,
+        "extras": extras,
         "saves": states + saves,
         "on_disk": any((Path(m.fs_path) / m.fs_name).is_file() for m in members),
     }
@@ -2822,13 +3365,24 @@ async def claim_rom(request: Request, rom_id: int, from_user_id: int | None = No
     # in between, another administrator can claim one, or an upload can change
     # hands. Without this the click takes it from whoever holds it NOW and
     # reports success, which is the same gap the game claim beside it closed.
-    if from_user_id is not None and getattr(rom, "published_by", None) != from_user_id:
-        return {"ok": True, "id": rom_id, "skipped": True,
-                "owner_username": getattr(getattr(request.state, "user", None),
-                                          "username", None)}
     admin = getattr(request.state, "user", None)
     fields = claim_writes(admin_id=getattr(admin, "id", None))
+    if from_user_id is not None and getattr(rom, "published_by", None) != from_user_id:
+        # Not theirs - but the list also shows a ROM the account only added
+        # files to (models/rom_added_file.py), and taking that over is taking
+        # over those files, the way a DLC on somebody else's game is taken.
+        moved = await rom_added_file_handler.hand_over(rom_id, from_user_id, fields["published_by"])
+        if moved:
+            return {"ok": True, "id": rom_id,
+                    "owner_username": getattr(admin, "username", None)}
+        return {"ok": True, "id": rom_id, "skipped": True,
+                "owner_username": getattr(admin, "username", None)}
+    previous_owner = getattr(rom, "published_by", None)
     await rom_handler.set_published_by(rom_id, fields["published_by"])
+    # The files the previous owner added beside it follow the game, or they go
+    # on counting against an account that no longer holds it.
+    if previous_owner:
+        await rom_added_file_handler.hand_over(rom_id, previous_owner, fields["published_by"])
     return {
         "ok": True,
         "id": rom_id,
@@ -2875,6 +3429,12 @@ async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) 
     # the lowest disc whichever one was asked for. Fetching disc 1 was enough to
     # delete disc 2, its files and every account's saves for it.
     assert_can_delete_rom_set(request, named, disks)
+    # Only an administrator may keep the files (the owner, 2026-09-19). An
+    # uploader's ROM removed with its file kept stopped counting against them
+    # while the bytes stayed on the disk, and the next scan brought it back
+    # owned by nobody - a way round the upload limit (1.0.36 audit).
+    if Scopes.ROMS_WRITE not in getattr(request.state, "scopes", set()):
+        delete_files = True
 
     result = rom_removal.Removal()
     # Worked out while the sheets are still on disk. Once the .cue is unlinked
@@ -2890,11 +3450,12 @@ async def delete_rom(request: Request, rom_id: int, delete_files: bool = False) 
             _playlists_naming, Path(disks[0].fs_path), names,
         ) + await asyncio.to_thread(
             subchannel_files_for, Path(disks[0].fs_path), names,
-        )
+        ) + await _extras_going_with(disks)
     # Files another sheet in the directory still names. A track that became a row
     # of its own is a member of this set and would otherwise go with it, leaving
     # the sheet that survives naming a file that is not there.
     spoken_for = await asyncio.to_thread(rom_removal.spoken_for_elsewhere, disks)
+    await _hand_on_added_files([d.id for d in disks], disks[0].fs_path)
     for disk in disks:
         platform = await rom_platform_handler.get_by_id(disk.platform_id)
         slug = platform.slug if platform else "unknown"
@@ -2949,7 +3510,30 @@ async def _take_the_bytes_too(rom_id: int, slug: str | None) -> int:
             await asyncio.to_thread(rom_removal.delete_media_dir, slug, rom_id)
     except Exception:  # noqa: BLE001 - one row's files must not stop the rest
         logger.exception("Could not remove the files behind ROM row %s", rom_id)
+    try:
+        row = await rom_handler.get_by_id(rom_id)
+        if row is not None:
+            await _hand_on_added_files([rom_id], row.fs_path)
+    except Exception:  # noqa: BLE001 - one row's files must not stop the rest
+        logger.exception("Could not hand on the files added beside ROM row %s", rom_id)
     return saved
+
+
+async def _hand_on_added_files(rom_ids: list[int], fs_path: str | None) -> None:
+    """Give these rows' added files to a game that stays in their folder.
+
+    In a folder another game stays in, the extras and mods are the folder's and
+    stay (_extras_going_with). Their rows must not go with the leaving rows (ON
+    DELETE CASCADE): the bytes would stay on the disk counting against nobody,
+    and the account that added them could no longer remove them (1.0.36 audit).
+    With no game left in the folder they go with the row, as the ROM's own file
+    does when the entry is removed and the file kept.
+    """
+    if not fs_path:
+        return
+    survivor = await rom_handler.another_in_folder(fs_path, rom_ids)
+    if survivor is not None:
+        await rom_added_file_handler.hand_to(rom_ids, survivor)
 
 
 # ── ROM Upload ────────────────────────────────────────────────────────────────
@@ -2958,7 +3542,8 @@ def _schedule_registration(background_tasks, fs_slug: str, names: list[str],
                            owner_id: int | None, *,
                            new_names: list[str] | None = None,
                            newer_than: int | None = None,
-                           release=None) -> None:
+                           release=None,
+                           written_to: dict[str, str] | None = None) -> None:
     """Have the files that landed scanned in and stamped, after the response.
 
     Called on the way out AND on the way out through a refusal, because bytes
@@ -2998,7 +3583,7 @@ def _schedule_registration(background_tasks, fs_slug: str, names: list[str],
             for _attempt in range(3):
                 await scan_after_write()
                 pending = await _stamp_uploaded(fs_slug, pending, owner_id, only=stampable,
-                                                newer_than=newer_than)
+                                                newer_than=newer_than, written_to=written_to)
                 if not pending:
                     return
             logger.warning(
@@ -3015,7 +3600,8 @@ def _schedule_registration(background_tasks, fs_slug: str, names: list[str],
 
 async def _stamp_uploaded(fs_slug: str, names: list[str], owner_id: int | None,
                           *, only: set[str] | None = None,
-                          newer_than: int | None = None) -> list[str]:
+                          newer_than: int | None = None,
+                          written_to: dict[str, str] | None = None) -> list[str]:
     """Record who put these files here, once a scan has made rows for them.
 
     The scan itself is owner-blind on purpose: it re-walks the whole tree, so
@@ -3036,10 +3622,18 @@ async def _stamp_uploaded(fs_slug: str, names: list[str], owner_id: int | None,
     if platform is None:
         logger.warning("Uploaded ROMs into %s but no platform row to attach them to", fs_slug)
         return list(names)
-    shelf_dir = (Path(await _get_roms_path()) / fs_slug).resolve()
+    roms_base = await _get_roms_path()
     missing: list[str] = []
     for name in names:
-        rom = await rom_handler.get_by_fs_name(platform.id, name)
+        # The folder this file was written to, not the platform's. Comparing
+        # against the platform folder was right while every ROM sat in it;
+        # against a file one level below it the comparison is never true, and
+        # the account that sent the ROM simply never becomes its owner - no
+        # error, no quota, no delete button. And not the folder named after the
+        # file either, when the file joined its game somewhere else.
+        shelf_dir = Path((written_to or {}).get(name)
+                         or game_dir(roms_base, fs_slug, name)).resolve()
+        rom = await rom_handler.any_row_named(platform.id, name)
         if rom is None:
             # No row yet. Usually a scan that was stopped before it reached this
             # platform, or one that took back what it had created. Returned to
@@ -3143,6 +3737,54 @@ def _is_this_file(row, dest_path: Path) -> bool:
             and Path(getattr(row, "fs_path", "") or "") == dest_path.parent)
 
 
+def _upload_dest_dir(roms_base, fs_slug: str, safe_name: str, existing, sidecar_disc,
+                     set_home=None) -> Path:
+    """Which directory this uploaded file is written into.
+
+    A new game goes into a folder of its own, which is the shape the library is
+    moving to. Everything else is the same rule: WRITE WHERE THE GAME ALREADY IS.
+
+    A subchannel file goes beside the disc it names. A ROM whose row sits flat
+    on the shelf, or in its game's own folder, is written over where it is: a
+    library is moved a game at a time, and a folder takes its game's title, so
+    writing by the name alone would turn replacing your own ROM into a second
+    copy in a folder named after the file - refused by the gate below, for a
+    reason nobody could act on. The next disc of a set the library already has
+    (*set_home*, see game_folder.existing_home) joins the rest of it, or the
+    set is two games. And a file that is on the disk with no row yet is still
+    somebody's file: writing beside it rather than over it leaves two copies
+    where the next scan makes two games.
+
+    DELIBERATELY NOT a row lying flat in `roms/`. A copy there is refused by the
+    gate rather than quietly replaced, and that refusal is older than folders
+    and belongs to it: it is about two files for one row, not about where an
+    upload is written. Permission to write over what is here is asked below, of
+    the row, exactly as it always was.
+    """
+    shelf = Path(roms_base) / fs_slug
+    if sidecar_disc is not None:
+        return Path(sidecar_disc).parent
+    folder = game_dir(roms_base, fs_slug, safe_name)
+    if existing is not None and getattr(existing, "fs_name", None) == safe_name:
+        where = Path(str(getattr(existing, "fs_path", "") or ""))
+        # Loose in one of the platform's folders - its own, or the folder of
+        # another name of the console (`megadrive/` beside `genesis/`).
+        if where in platform_dirs(shelf):
+            return where
+        # A game's own folder, on any of its shelves.
+        if where.parent in shelves_of(shelf) and where.name != "roms":
+            return where
+    if set_home is not None:
+        return Path(set_home)
+    # Loose in any of the platform's folders, `PlayStation/` or `megadrive/`
+    # as well as its own: the scan makes a second game of a copy beside it
+    # wherever it lies.
+    for candidate in (folder, *platform_dirs(shelf)):
+        if (candidate / safe_name).exists():
+            return candidate
+    return folder
+
+
 def _sidecar_disc(name: str, directory):
     """The disc this subchannel file belongs to, or None if it names none.
 
@@ -3165,10 +3807,18 @@ def _sidecar_disc(name: str, directory):
     if Path(name).suffix.lower() not in _scanner.SUBCHANNEL_EXTENSIONS:
         return None
     stem = Path(name).stem.lower()
-    try:
-        entries = list(Path(directory).iterdir())
-    except OSError:
-        return None
+    entries: list[Path] = []
+    # More than one directory, because a library is moved a game at a time: the
+    # disc may already be in its own folder or still sitting flat on the shelf,
+    # and a subchannel file belongs beside its disc either way. The caller then
+    # writes it where the disc was found, not where the name alone would have
+    # put it.
+    for directory in ([directory] if isinstance(directory, (str, Path))
+                      else list(directory)):
+        try:
+            entries.extend(Path(directory).iterdir())
+        except OSError:
+            continue
     for entry in sorted(entries):
         if (entry.is_file()
                 and entry.stem.lower() == stem
@@ -3183,8 +3833,18 @@ async def upload_roms(
     slug: str,
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
+    # Annotated so the Python default is a real None: this route is called
+    # directly by tests that never name it, and `= Form(None)` would hand them
+    # the FieldInfo instead.
+    into: Annotated[int | None, Form()] = None,
 ) -> dict:
     """Upload one or more ROM files to a platform directory.
+
+    *into* is the ROM whose page "Add file" was used on (the owner,
+    2026-09-18): the files go into that game's folder, whatever they are
+    called, rather than wherever their own names would place them - a bonus
+    disc called something else would otherwise become a game of its own. A
+    loose game is given its folder first (game_folder.own_folder_held).
 
     Creates the directory if it does not exist.  Each file is written in
     256 KB chunks.  After all files land on disk we kick off a ROM scan
@@ -3231,9 +3891,21 @@ async def upload_roms(
     # next scan, and the ownership check below never fired, because in a folder
     # of its own the name was not there yet.
     fs_slug = canonical_fs_slug(slug)
+    # The game these files are for, when they were sent from its page. Asked
+    # before anything is written: a game on another platform is not a folder
+    # this upload may write into, whatever id arrived.
+    if into is not None:
+        target = await rom_handler.get_with_platform(into)
+        if target is None or target.platform is None:
+            raise HTTPException(status_code=404, detail="ROM not found")
+        if canonical_fs_slug(target.platform.fs_slug) != fs_slug:
+            raise HTTPException(status_code=400, detail="That game is on another platform.")
     roms_base = await _get_roms_path()
-    dest_dir = Path(roms_base) / fs_slug
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    # The platform's folder, made whatever happens: an upload into a platform
+    # nothing has landed in yet is where that folder comes from. Each FILE goes
+    # one level deeper, into its own game's folder, and that is decided per file
+    # below - one request can carry two games.
+    (Path(roms_base) / fs_slug).mkdir(parents=True, exist_ok=True)
 
     saved: list[str] = []
     rejected: list[dict] = []
@@ -3242,6 +3914,10 @@ async def upload_roms(
     # never hold a row, so putting it in the registration queue only buys three
     # full walks of the library and a warning about a state that is intended.
     to_register: list[str] = []
+    # And the folder each of them was written to, which the stamp compares the
+    # scan's row against: a disc that joined its set is not in the folder its
+    # own name points at.
+    written_to: dict[str, str] = {}
 
     # Subchannel files last, whatever order they arrived in.
     #
@@ -3325,40 +4001,97 @@ async def upload_roms(
             # no row, no owner, no quota, repeatable for ever. Once per extension.
             suffix = Path(safe_name).suffix.lower()
             recognised = suffix.lstrip(".") in _scanner._ROM_EXTENSIONS
-            # ...and the files that belong TO a disc rather than being one. A .sbi is
-            # 452 bytes of subchannel data that a PAL PlayStation disc needs to boot
-            # past its LibCrypt check; the scanner deliberately keeps these out of
-            # _ROM_EXTENSIONS, so this gate refused them - and the download path
-            # applies the same rule, which left no way at all to put one on the
-            # shelf. Admitted here only beside the disc they name, which is the same
-            # question `subchannel_files_for` asks when it goes looking for them.
-            sidecar_disc = None if recognised else _sidecar_disc(safe_name, dest_dir)
-            if sidecar_disc is not None:
-                recognised = True
-            if not recognised:
-                rejected.append({
-                    "filename": safe_name,
-                    "threat": None,
-                    "action": "extension_not_recognised",
-                })
-                continue
+            # Where this file goes is chosen under the lock a rename of a game's
+            # folder holds, and from the choice to the .part below nothing waits
+            # on anything - so no rename can come in between, and once the .part
+            # is there a rename sees a transfer in progress and leaves the folder
+            # alone (game_folder.folder_moves). Everything that has to ask the
+            # database is asked in here, before the choice.
+            async with game_folder.folder_moves:
+                # ...and the files that belong TO a disc rather than being one. A
+                # .sbi is 452 bytes of subchannel data that a PAL PlayStation disc
+                # needs to boot past its LibCrypt check; the scanner deliberately
+                # keeps these out of _ROM_EXTENSIONS, so this gate refused them -
+                # and the download path applies the same rule, which left no way at
+                # all to put one on the shelf. Admitted here only beside the disc
+                # they name, which is the same question `subchannel_files_for` asks
+                # when it goes looking for them.
+                sidecar_disc = None if recognised else _sidecar_disc(
+                    safe_name,
+                    (game_dir(roms_base, fs_slug, safe_name),
+                     Path(roms_base) / fs_slug),
+                )
+                if (sidecar_disc is None and not recognised
+                        and suffix in _scanner.SUBCHANNEL_EXTENSIONS):
+                    # The disc may have moved into its title's folder, which is not
+                    # where the .sbi's own name points.
+                    sidecar_disc = _sidecar_disc(safe_name, await game_folder.folders_holding(
+                        fs_slug, Path(safe_name).stem, roms_base=roms_base))
+                if sidecar_disc is not None:
+                    recognised = True
+                if not recognised:
+                    rejected.append({
+                        "filename": safe_name,
+                        "threat": None,
+                        "action": "extension_not_recognised",
+                    })
+                    continue
+                # Asked before the open, because "wb" truncates on the first byte
+                # and there is no undoing that. A name nobody holds is free; one
+                # somebody else holds is refused rather than silently overwritten.
+                #
+                # >>> ASKED WHETHER OR NOT A FILE SITS AT THE DESTINATION. It used to
+                # be asked only `if dest_path.exists()`, and a ROM is identified by
+                # (platform, file name) with no uniqueness: a copy under `roms/`, or
+                # the same name in other letter case - the database compares names
+                # without regard to case - is the SAME row while `exists()` here saw
+                # nothing. The file was written, the scan folded it into that row,
+                # and the stamp made the uploader the owner of a ROM carrying other
+                # accounts' saves, which the delete button then removed together
+                # with the original.
+                existing = (
+                    await rom_handler.any_row_named(_row.id, safe_name)
+                    if _row is not None else None
+                )
+                # A subchannel file has no row of its own and never will, so the
+                # question about who may replace one is a question about its
+                # disc's owner (below). Asked here so nothing after the choice waits.
+                disc_row = (
+                    await rom_handler.any_row_named(_row.id, sidecar_disc.name)
+                    if sidecar_disc is not None and _row is not None else None
+                )
+                # The next disc of a set the library already has goes where the
+                # rest of the set is, which after a title rename is not the folder
+                # its own name points at.
+                set_home = None
+                if (existing is None and sidecar_disc is None
+                        and marked_disk(Path(safe_name).stem) is not None):
+                    set_home = await game_folder.existing_home(
+                        fs_slug, safe_name, roms_base=roms_base)
+                # Sent from a game's page: into that game's own folder. A
+                # subchannel file still goes beside the disc it names. Asked
+                # before the choice below, because from the choice to the .part
+                # nothing may wait.
+                into_folder = None
+                if into is not None and sidecar_disc is None:
+                    into_folder = await game_folder.own_folder_held(into, roms_base=roms_base)
+                    if into_folder is None:
+                        rejected.append({
+                            "filename": safe_name,
+                            "threat": None,
+                            "action": "no_folder_of_its_own",
+                        })
+                        continue
+                dest_dir = _upload_dest_dir(
+                    roms_base, fs_slug, safe_name,
+                    existing if sidecar_disc is None else None,
+                    sidecar_disc,
+                    set_home,
+                )
+                if into_folder is not None:
+                    dest_dir = into_folder
+            dest_dir.mkdir(parents=True, exist_ok=True)
             dest_path = dest_dir / safe_name
-            # Asked before the open, because "wb" truncates on the first byte and
-            # there is no undoing that. A name nobody holds is free; one somebody
-            # else holds is refused rather than silently overwritten.
-            #
-            # >>> ASKED WHETHER OR NOT A FILE SITS AT THE DESTINATION. It used to be
-            # asked only `if dest_path.exists()`, and a ROM is identified by
-            # (platform, file name) with no uniqueness: a copy under `roms/`, or the
-            # same name in other letter case - the database compares names without
-            # regard to case - is the SAME row while `exists()` here saw nothing.
-            # The file was written, the scan folded it into that row, and the stamp
-            # made the uploader the owner of a ROM carrying other accounts' saves,
-            # which the delete button then removed together with the original.
-            existing = (
-                await rom_handler.get_by_fs_name(_row.id, safe_name)
-                if _row is not None else None
-            )
             if existing is None and sidecar_disc is None:
                 brought_here.append(safe_name)
             if (existing is not None and sidecar_disc is None
@@ -3380,12 +4113,11 @@ async def upload_roms(
                 # A subchannel file has no row of its own and never will, so asking
                 # the database about its name can only ever answer "nobody's". It is
                 # not nobody's: it belongs to the disc it is named after, the same
-                # disc that let it through the gate two dozen lines up. So the
-                # question about a .sbi is a question about that disc's owner, which
-                # keeps replacing one exactly as hard as replacing the disc itself.
-                if existing is None and sidecar_disc is not None and _row is not None:
-                    existing = await rom_handler.get_by_fs_name(
-                        _row.id, sidecar_disc.name)
+                # disc that let it through the gate further up. So the question
+                # about a .sbi is a question about that disc's owner, which keeps
+                # replacing one exactly as hard as replacing the disc itself.
+                if existing is None and sidecar_disc is not None:
+                    existing = disc_row
                 if not _may_replace(request, existing):
                     rejected.append({
                         "filename": safe_name,
@@ -3518,6 +4250,7 @@ async def upload_roms(
                 saved.append(safe_name)
                 if sidecar_disc is None:
                     to_register.append(safe_name)
+                    written_to[safe_name] = str(dest_dir)
                 logger.info("ROM uploaded: %s -> %s", safe_name, dest_dir)
             except HTTPException as refusal:
                 part_path.unlink(missing_ok=True)
@@ -3532,7 +4265,7 @@ async def upload_roms(
                 # the quota that had just refused them.
                 _schedule_registration(background_tasks, fs_slug, to_register, getattr(user, "id", None),
                                        new_names=brought_here, newer_than=newest_before,
-                                       release=reservation.close)
+                                       release=reservation.close, written_to=written_to)
                 # RETURNED, not raised, and that is the whole of this fix.
                 #
                 # FastAPI attaches the BackgroundTasks object to the response it
@@ -3565,7 +4298,7 @@ async def upload_roms(
                 # work and then throw it away.
                 _schedule_registration(background_tasks, fs_slug, to_register,
                                        getattr(user, "id", None), new_names=brought_here, newer_than=newest_before,
-                                       release=reservation.close)
+                                       release=reservation.close, written_to=written_to)
                 # The reason goes to the log under a reference. Its text is the
                 # full path the file could not be written to, which is the
                 # server's layout, and this route is an uploader's (1.0.34 audit,
@@ -3588,7 +4321,7 @@ async def upload_roms(
         # waits for one that is already under way, under the same scanner lock.
         _schedule_registration(background_tasks, fs_slug, to_register, getattr(user, "id", None),
                                new_names=brought_here, newer_than=newest_before,
-                               release=reservation.close)
+                               release=reservation.close, written_to=written_to)
 
         return {
             "ok": True,
@@ -3793,6 +4526,7 @@ async def scrape_rom(
         raise HTTPException(status_code=404, detail="ROM not found")
     assert_unlocked(request, rom)
 
+    from handler.metadata.rom_scrape_handler import save_scrape
     from handler.metadata.rom_scrape_handler import scrape_rom as _scrape
     platform = rom.platform
     forced_ss_id = body.forced_ss_id or None
@@ -3801,7 +4535,7 @@ async def scrape_rom(
     async def _run():
         data = await _scrape(rom, platform, forced_ss_id=forced_ss_id, forced_launchbox_id=forced_launchbox_id)
         if data:
-            await rom_handler.update_metadata(rom_id, data)
+            await save_scrape(rom_id, data)
             # ROM now has a cover -> one-shot recently-added card (idempotent).
             try:
                 from handler.notifications.recently_added import schedule_rom

@@ -113,8 +113,23 @@ def test_disc_grouping_stays_inside_one_directory():
     beside it. The union is for finding files, not for deciding which of them
     are one disc set."""
     source = _io.open(_SCANNER, encoding="utf-8").read()
-    at = source.index("assignments.update(plan_disk_assignments(")
+    at = source.index("plan_disk_assignments(kept)")
     window = source[at - 400:at]
     assert "for here in files_by_dir" in window, (
         "grupowanie plyt liczone na polaczonej liscie z dwoch katalogow"
+    )
+
+
+def test_the_plan_carries_the_directory_it_was_drawn_from():
+    """Deciding the sets per directory and then writing them by name across the
+    platform gives the collision back, one step later: two folders holding a
+    `Disc 1.cue` is one entry, and the folder walked last wins."""
+    source = _io.open(_SCANNER, encoding="utf-8").read()
+    at = source.index("plan_disk_assignments(kept)")
+    assert "kept[0].parent" in source[at - 60:at], (
+        "plan nie niesie katalogu, z ktorego powstal"
+    )
+    write = source.index("rom_handler.apply_disk_groups(")
+    assert "where" in source[write:write + 120], (
+        "zapis grupowania nie dostaje katalogu"
     )

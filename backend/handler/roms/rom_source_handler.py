@@ -40,7 +40,7 @@ from utils.rom_names import (
 )
 from handler.database.rom_handler import rom_handler, rom_platform_handler
 from handler.filesystem.rom_scanner import _ROM_EXTENSIONS, scan_roms_path
-from handler.metadata.rom_platform_map import PLATFORM_MAP, slug_from_fs_slug
+from handler.metadata.rom_platform_map import PLATFORM_MAP, canonical_fs_slug, slug_from_fs_slug
 from plugins.manager import plugin_manager
 from utils.async_utils import fire_task
 from utils.http import loggable_error
@@ -118,6 +118,10 @@ class _RomJob:
     #: The quota reservation for the bytes this job writes, held from the first
     #: chunk until the scan has registered the file and the stamp has charged it.
     reservation: Any = None
+    #: The folder this job writes into, chosen when the transfer starts - where
+    #: the game already is, or a folder named after the file. Kept, so a pause,
+    #: a resume and the owner stamp all mean the same folder.
+    dest_dir: Path | None = None
 
     @property
     def terminal(self) -> bool:
@@ -125,7 +129,10 @@ class _RomJob:
 
     @property
     def part_path(self) -> Path:
-        return Path(_roms_base()) / self.fs_slug / (self.filename + ".part")
+        # Before the first start nothing has been written, and the folder named
+        # after the file is as good a place as any to find nothing in.
+        folder = self.dest_dir or rom_dest_dir(self.fs_slug, self.filename)
+        return folder / (self.filename + ".part")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -708,6 +715,59 @@ def _roms_base() -> str:
     return roms_library_path(config_manager)
 
 
+def rom_dest_dir(fs_slug: str, filename: str) -> Path:
+    """Where a download of *filename* for this platform is written.
+
+    The game's own folder, one level inside the platform's, so what a person
+    adds beside the ROM has somewhere to go. The name comes from the file name
+    because that is all there is at this moment: a job carries a URL, a file
+    name and a platform, and the title arrives with the scrape that follows the
+    download. The folder moves to the title then.
+
+    Discs answer the same directory, which is not a nicety: the grouping that
+    makes several files one game reads the names of the files beside each
+    other, so discs in four folders are four games.
+
+    One function because four places have to agree on the answer - the transfer,
+    the fragment a resume looks for, the check for a file already here, and the
+    stamp that makes the downloader the owner, which compares the row's folder
+    against this one and hands out no ownership at all when they differ.
+    """
+    from utils.game_folders import game_dir
+
+    return game_dir(_roms_base(), fs_slug, filename)
+
+
+async def _home_for(fs_slug: str, filename: str) -> Path:
+    """Where a file of this name belongs on this platform: where its game
+    already is, when the library has it, and rom_dest_dir's folder when not.
+
+    A game that has taken its title's folder is no longer where its file name
+    points - the next disc, or the same file fetched again, has to be told.
+    """
+    from handler.roms import game_folder
+
+    return await game_folder.home_for(fs_slug, filename, roms_base=_roms_base())
+
+
+async def _already_here(fs_slug: str, filename: str) -> bool:
+    """Whether a file of this name is already in the library for this platform.
+
+    Where the library says its game is, and loose on the platform's shelves as
+    well: the library only knows what a scan has seen, and a file dropped on the
+    shelf over FTP and not scanned yet was fetched again into a folder of its
+    own - two games at the next scan (1.0.36 audit). The upload asks both too.
+    """
+    from utils.game_folders import shelves_of
+
+    home = await _home_for(fs_slug, filename)
+    shelf = Path(_roms_base()) / fs_slug
+    # Finding the shelves lists the ROM root, so it is done off the event loop
+    # with the rest: on a NAS asleep that takes as long as the disk.
+    return await asyncio.to_thread(
+        lambda: any((place / filename).exists() for place in (home, *shelves_of(shelf))))
+
+
 def _safe_rom_filename(raw: str) -> str:
     """A filesystem-safe basename for a downloaded ROM, or "" if unusable.
 
@@ -779,7 +839,9 @@ def _resolve_entry(inst: Any, entry_id: str) -> dict[str, Any] | None:
         logger.warning("resolve_download for %r returned a blocked URL: %s", entry_id, e)
         return None
     return {
-        "url": url, "filename": filename, "fs_slug": fs_slug,
+        # The platform's own folder: a source filing Mega Drive games under
+        # `megadrive` is naming the console the library keeps as `genesis`.
+        "url": url, "filename": filename, "fs_slug": canonical_fs_slug(fs_slug),
         "headers": headers or None, "cookies": cookies or None,
     }
 
@@ -829,8 +891,9 @@ async def queue_downloads(
             # Never overwrite an existing ROM unless the caller explicitly forces
             # it: a stale listing (owned-state computed before the file landed)
             # or a duplicate click could otherwise os.replace a good,
-            # hand-verified dump.
-            if not force and (Path(_roms_base()) / spec["fs_slug"] / spec["filename"]).exists():
+            # hand-verified dump. Looked for where its game is, which after a
+            # title rename is not the folder its file name points at.
+            if not force and await _already_here(spec["fs_slug"], spec["filename"]):
                 _in_flight.discard(ekey)
                 skipped.append({"entry_id": entry_id, "reason": "already downloaded"})
                 continue
@@ -883,13 +946,15 @@ async def import_rom(
         raise ValueError("Unusable or non-ROM filename")
     if PLATFORM_MAP.get(fs_slug) is None:
         raise ValueError(f"Unknown platform {fs_slug!r}")
+    # Another name of one console means that console's platform and folder.
+    fs_slug = canonical_fs_slug(fs_slug)
     url = str(url or "").strip()
     if not url:
         raise ValueError("Missing URL")
     # Raises UnsafeURLError (a ValueError) on a non-http(s) or SSRF target.
     assert_fetch_allowed(url, allow_private_lan=False)
 
-    if not force and (Path(_roms_base()) / fs_slug / safe_name).exists():
+    if not force and await _already_here(fs_slug, safe_name):
         return {"queued": False, "reason": "already downloaded", "filename": safe_name}
 
     dkey = (fs_slug, safe_name)
@@ -1027,7 +1092,8 @@ async def _register_after_download(job: _RomJob) -> None:
     """
     from handler.socket_handler import sio
 
-    rom_id = await _register_and_scrape(job.fs_slug, job.filename, owner_id=job.actor_id)
+    rom_id = await _register_and_scrape(
+        job.fs_slug, job.filename, owner_id=job.actor_id, dest_dir=job.dest_dir)
     await _emit_download(job, "romsource:download_complete", {
         "id": job.id,
         "source_id": job.source_id,
@@ -1040,11 +1106,14 @@ async def _register_after_download(job: _RomJob) -> None:
 
 async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
     """Transfer the bytes. True when a file landed and needs registering."""
+    from handler.roms import game_folder
     from handler.socket_handler import sio
 
-    dest_dir = Path(_roms_base()) / job.fs_slug
+    # What a stop before the folder is chosen below would look at: this job's
+    # folder from an earlier run, or nothing at all.
+    part_path = job.part_path
+    dest_dir = part_path.parent
     dest_path = dest_dir / job.filename
-    part_path = dest_dir / (job.filename + ".part")
     # The install-wide per-file ceiling, brought down to whatever the account
     # that asked for this has left of its quota. Handing the loop below a lower
     # number puts the quota inside the counting that was already happening,
@@ -1075,7 +1144,24 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
                 "Upload quota reached: this account has no room left for another "
                 "download."
             )
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        # The folder is chosen now, not when the job was queued. Four discs
+        # queued together all asked while none of them was here; disc 1 landed,
+        # was scraped and its folder took the title, and disc 2 wrote into a
+        # new folder of the old name. Under the lock a rename holds, and the
+        # .part is left before letting go: a rename waiting on the lock then
+        # sees a transfer in progress here and leaves the folder alone.
+        async with game_folder.folder_moves:
+            if not resume_from:
+                job.dest_dir = await _home_for(job.fs_slug, job.filename)
+            elif job.dest_dir is None:
+                # Resuming a fragment from before this job knew its folder: the
+                # rest of the bytes go where the first ones are.
+                job.dest_dir = part_path.parent
+            dest_dir = job.dest_dir
+            dest_path = dest_dir / job.filename
+            part_path = dest_dir / (job.filename + ".part")
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            part_path.touch(exist_ok=True)
         # Scope credential cookies to the URL's registrable domain (with a leading
         # dot) so a redirect to another host - an open redirect, a compromised hop,
         # a future source resolving off-site - never replays the source's session
@@ -1198,7 +1284,10 @@ async def _run_rom_download(job: _RomJob, resume_from: int = 0) -> bool:
         wznawialne = isinstance(e, (httpx.TimeoutException, httpx.TransportError))
         if isinstance(e, httpx.HTTPStatusError):
             wznawialne = e.response.status_code in (408, 429, 500, 502, 503, 504)
-        if not wznawialne:
+        # Nothing arrived is nothing to resume, and the empty .part the start
+        # left would stand in the folder as a transfer in progress for good,
+        # stopping the game's folder from ever following its title.
+        if not wznawialne or _nothing_in(part_path):
             try:
                 part_path.unlink(missing_ok=True)
             except Exception:
@@ -1258,6 +1347,13 @@ def _prune_jobs() -> None:
     finished = [j for j in _jobs.values() if j.terminal]
     for job in sorted(finished, key=lambda j: j.id)[:max(0, len(finished) - _KEEP_FINISHED)]:
         _jobs.pop(job.id, None)
+
+
+def _nothing_in(path: Path) -> bool:
+    try:
+        return path.stat().st_size == 0
+    except OSError:
+        return True
 
 
 async def _settle_stopped(job: _RomJob, part_path: Path, forced: bool = False) -> None:
@@ -1474,7 +1570,9 @@ async def scan_after_write() -> None:
                 await _scan_cv.wait()
 
 
-async def _register_and_scrape(fs_slug: str, filename: str, *, owner_id: int | None = None) -> int | None:
+async def _register_and_scrape(
+    fs_slug: str, filename: str, *, owner_id: int | None = None, dest_dir: Path | None = None,
+) -> int | None:
     """Ensure the just-downloaded file is scanned in (coalesced with any
     concurrent downloads), then best-effort auto-scrape the new Rom."""
     # Up to three scans, the same as the upload path beside it and for the same
@@ -1507,7 +1605,7 @@ async def _register_and_scrape(fs_slug: str, filename: str, *, owner_id: int | N
     _before = await rom_platform_handler.get_by_slug(slug_from_fs_slug(fs_slug))
     had_row = (
         _before is not None
-        and await rom_handler.get_by_fs_name(_before.id, filename) is not None
+        and await rom_handler.any_row_named(_before.id, filename) is not None
     )
     # And the newest row so far. The scan can carry this file onto an OLD row -
     # a ROM whose file vanished, found again under this name by its hash - and
@@ -1523,7 +1621,7 @@ async def _register_and_scrape(fs_slug: str, filename: str, *, owner_id: int | N
         if platform is None:
             platform = await rom_platform_handler.get_by_slug(slug_from_fs_slug(fs_slug))
         if platform is not None:
-            rom = await rom_handler.get_by_fs_name(platform.id, filename)
+            rom = await rom_handler.any_row_named(platform.id, filename)
             if rom is not None:
                 break
     if rom is None:
@@ -1541,13 +1639,14 @@ async def _register_and_scrape(fs_slug: str, filename: str, *, owner_id: int | N
     # yet, so re-downloading over an existing file cannot quietly move it from
     # one account to another, or undo an admin's claim.
     #
-    # And exactly this file, in exactly this shelf: the lookup above compares
-    # names without regard to case and does not care which folder the row
-    # points at. The upload path beside this one asks the same questions.
+    # And exactly this file, in exactly the folder the download wrote to: the
+    # lookup above compares names without regard to case and does not care
+    # which folder the row points at. The upload path beside this one asks the
+    # same questions.
     this_file = (
         getattr(rom, "fs_name", None) == filename
         and Path(str(getattr(rom, "fs_path", "") or "")).resolve()
-        == (Path(_roms_base()) / fs_slug).resolve()
+        == (dest_dir or rom_dest_dir(fs_slug, filename)).resolve()
     )
     made_here = int(getattr(rom, "id", 0) or 0) > newest_before
     if (owner_id and not had_row and this_file and made_here
@@ -1556,10 +1655,11 @@ async def _register_and_scrape(fs_slug: str, filename: str, *, owner_id: int | N
 
     try:
         full = await rom_handler.get_with_platform(rom.id)
+        from handler.metadata.rom_scrape_handler import save_scrape
         from handler.metadata.rom_scrape_handler import scrape_rom as _scrape
         data = await _scrape(full, full.platform)
         if data:
-            await rom_handler.update_metadata(rom.id, data)
+            await save_scrape(rom.id, data)
             try:
                 from handler.notifications.recently_added import schedule_rom
                 schedule_rom(rom.id)

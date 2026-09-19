@@ -55,8 +55,11 @@ def download(monkeypatch, tmp_path):
     async def _by_fs_name(_platform_id, filename):
         if state["row"] is None:
             return None
-        return types.SimpleNamespace(id=42, fs_name=filename,
-                                     fs_path=str(tmp_path / "amiga"), published_by=None)
+        # The folder the download wrote to: the game's own, inside the
+        # platform's, which is what the stamp compares the row against.
+        return types.SimpleNamespace(
+            id=42, fs_name=filename,
+            fs_path=str(rsh.rom_dest_dir("amiga", filename)), published_by=None)
 
     async def _set_owner(rom_id, owner_id):
         state["owner_set"] = (rom_id, owner_id)
@@ -67,7 +70,7 @@ def download(monkeypatch, tmp_path):
 
     monkeypatch.setattr(rsh, "scan_after_write", _scan)
     monkeypatch.setattr(rsh.rom_platform_handler, "get_by_slug", _get_platform)
-    monkeypatch.setattr(rsh.rom_handler, "get_by_fs_name", _by_fs_name)
+    monkeypatch.setattr(rsh.rom_handler, "any_row_named", _by_fs_name)
     monkeypatch.setattr(rsh.rom_handler, "set_owner", _set_owner)
     monkeypatch.setattr(rsh.rom_handler, "get_with_platform", _boom_scrape)
     # Older than the row the scan makes here (42), as every row already in the
@@ -116,7 +119,7 @@ async def test_a_shelf_that_never_gets_a_row_gives_up_after_three_scans(monkeypa
 
     monkeypatch.setattr(rsh, "scan_after_write", _scan)
     monkeypatch.setattr(rsh.rom_platform_handler, "get_by_slug", _fake_async(None))
-    monkeypatch.setattr(rsh.rom_handler, "get_by_fs_name", _fake_async(None))
+    monkeypatch.setattr(rsh.rom_handler, "any_row_named", _fake_async(None))
     monkeypatch.setattr(rsh.rom_handler, "max_rom_id", _fake_async(10), raising=False)
 
     assert await rsh._register_and_scrape("amiga", "x.adf", owner_id=5) is None

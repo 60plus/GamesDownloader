@@ -39,6 +39,7 @@ import pytest
 from fastapi import BackgroundTasks
 
 from handler.auth.scopes import Scope
+from utils.game_folders import game_dir
 
 UPLOADER_ID = 7
 #: The highest ROM id before an upload's scan. Rows on the shelf are older.
@@ -89,8 +90,13 @@ def shelf(tmp_path, monkeypatch):
     async def platform(_slug):
         return SimpleNamespace(id=1, slug="psx", fs_slug="psx")
 
-    async def get_by_fs_name(_platform_id, name):
+    async def any_row_named(_platform_id, name):
         return state.rows.get(_key(name))
+
+    async def files_starting_with(_fs_slug, prefix):
+        # Compared the way the database compares, like any_row_named above.
+        return [(row.fs_name, row.fs_path) for row in state.rows.values()
+                if _key(row.fs_name).startswith(_key(prefix))]
 
     async def set_owner(rom_id, user_id):
         state.stamped.append((rom_id, user_id))
@@ -105,7 +111,10 @@ def shelf(tmp_path, monkeypatch):
         for name in state.pending:
             state.rows.setdefault(_key(name), SimpleNamespace(
                 id=100 + len(state.rows), fs_name=name,
-                fs_path=state.scan_places.get(name, str(psx)),
+                # Where the upload really wrote it: the game's own folder
+                # inside the platform's, unless the test says otherwise.
+                fs_path=state.scan_places.get(
+                    name, str(game_dir(str(psx.parent), "psx", name))),
                 published_by=None, fs_size_bytes=9))
 
     monkeypatch.setattr(R, "_get_roms_path", roms_path)
@@ -119,7 +128,8 @@ def shelf(tmp_path, monkeypatch):
 
     monkeypatch.setattr(quota, "reservation_for", no_live_limit)
     monkeypatch.setattr(rsh, "scan_after_write", scan_after_write)
-    monkeypatch.setattr(R.rom_handler, "get_by_fs_name", get_by_fs_name)
+    monkeypatch.setattr(R.rom_handler, "any_row_named", any_row_named)
+    monkeypatch.setattr(R.rom_handler, "files_starting_with", files_starting_with)
     monkeypatch.setattr(R.rom_handler, "set_owner", set_owner)
     monkeypatch.setattr(R.rom_platform_handler, "get_by_slug", platform)
     monkeypatch.setattr(clam, "is_upload_scanning_enabled", clam_off)
@@ -327,7 +337,8 @@ async def test_a_new_rom_another_scan_registers_first_is_still_its_uploaders(she
 
     # Another upload's scan gets there before this one's registration runs.
     shelf.state.rows[_key("Early.bin")] = SimpleNamespace(
-        id=100, fs_name="Early.bin", fs_path=str(shelf.psx),
+        id=100, fs_name="Early.bin",
+        fs_path=str(game_dir(str(shelf.psx.parent), "psx", "Early.bin")),
         published_by=None, fs_size_bytes=9)
     await tasks()
 

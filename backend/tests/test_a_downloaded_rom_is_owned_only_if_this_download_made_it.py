@@ -46,14 +46,18 @@ def downloads(tmp_path, monkeypatch):
 
     async def scan_after_write():
         for name in state.landed:
+            # Where the download really wrote it: the game's own folder inside
+            # the platform's, which is the folder the stamp compares against.
             state.rows.setdefault(_key(name), SimpleNamespace(
                 id=100 + len(state.rows), fs_name=name,
-                fs_path=state.scan_places.get(name, str(psx)), published_by=None))
+                fs_path=state.scan_places.get(
+                    name, str(rsh.rom_dest_dir("psx", name))),
+                published_by=None))
 
     async def platform(_slug):
         return SimpleNamespace(id=1, slug="psx", fs_slug="psx")
 
-    async def get_by_fs_name(_platform_id, name):
+    async def any_row_named(_platform_id, name):
         return state.rows.get(_key(name))
 
     async def set_owner(rom_id, user_id):
@@ -68,7 +72,7 @@ def downloads(tmp_path, monkeypatch):
     monkeypatch.setattr(rsh, "scan_after_write", scan_after_write)
     monkeypatch.setattr(rsh, "_roms_base", lambda: str(tmp_path))
     monkeypatch.setattr(R.rom_platform_handler, "get_by_slug", platform)
-    monkeypatch.setattr(R.rom_handler, "get_by_fs_name", get_by_fs_name)
+    monkeypatch.setattr(R.rom_handler, "any_row_named", any_row_named)
     monkeypatch.setattr(R.rom_handler, "set_owner", set_owner)
     monkeypatch.setattr(R.rom_handler, "get_with_platform", with_platform)
     monkeypatch.setattr(scrape, "scrape_rom", no_scrape)

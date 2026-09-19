@@ -65,7 +65,7 @@ async def _import(session, directory):
         ))
     await session.commit()
     await rom_handler.apply_disk_groups(
-        1, plan_disk_assignments(files), session=session
+        1, str(directory), plan_disk_assignments(files), session=session
     )
     await session.commit()
     return {r.fs_name: r for r in (await session.execute(Rom.__table__.select())).all()}
@@ -187,7 +187,7 @@ async def test_a_rescan_lets_a_disc_stop_being_one(db, tmp_path):
 
     (tmp_path / "Game.cue").unlink()
     await rom_handler.apply_disk_groups(
-        1, plan_disk_assignments(scan_candidates(tmp_path)), session=db
+        1, str(tmp_path), plan_disk_assignments(scan_candidates(tmp_path)), session=db
     )
     await db.commit()
     binary = await _row(db, "Game.bin")

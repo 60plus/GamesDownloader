@@ -23,7 +23,11 @@ from pathlib import Path
 
 from handler.database.rom_handler import rom_handler, rom_platform_handler
 from handler.filesystem.exclusions import is_excluded, parse_patterns
-from handler.metadata.rom_platform_map import PLATFORM_MAP, slug_from_fs_slug
+from handler.metadata.rom_platform_map import (
+    PLATFORM_MAP,
+    canonical_fs_slug,
+    slug_from_fs_slug,
+)
 from utils.disk_sets import group_disks
 from utils.rom_names import region_from_name
 
@@ -277,6 +281,32 @@ def platform_has_nothing(*, files, rows) -> bool:
     return not files and not (rows or 0)
 
 
+# Directories inside a platform, or inside a game's folder, that are never a
+# game themselves. `_originals` holds what a CHD conversion replaced and used to
+# be safe only because the scan stopped one level above it; `mods` and `extras`
+# are what a game keeps beside its ROM, and both of them routinely hold archives,
+# which are ROM extensions. Compared lower-cased, because the name is a
+# convention and a person typing it is not a case-sensitive filesystem.
+NOT_A_GAME_FOLDER = {"_originals", "mods", "extras"}
+
+
+def _game_folders_in(base: Path) -> list[Path]:
+    """The subdirectories of *base* a scan treats as one game each."""
+    try:
+        entries = sorted(base.iterdir())
+    except OSError:
+        return []
+    return [
+        entry for entry in entries
+        if entry.is_dir()
+        and entry.name.lower() not in NOT_A_GAME_FOLDER
+        # A tool's directory, not a game: .git, .Trash-1000, .stfolder.
+        and not entry.name.startswith(".")
+        # Named in its own right below, and never a game's folder.
+        and entry.name != "roms"
+    ]
+
+
 def scan_dirs_for(platform_dir: Path) -> list[Path]:
     """The directories of this platform a scan reads, in order.
 
@@ -294,12 +324,55 @@ def scan_dirs_for(platform_dir: Path) -> list[Path]:
     that is half one and half the other stays entirely visible. The platform
     directory itself is always in the list, which is what makes the trap
     impossible rather than merely unlikely.
+
+    A third shape joins them: one folder per game, `{platform}/{game}/{rom}`,
+    which is what gives `mods/` and `extras/` somewhere to live beside the ROM
+    instead of in one heap with it. Each game folder is read exactly the way the
+    platform folder is, so a library half moved stays entirely visible as well.
+
+    ONE LEVEL BELOW EACH ROOT AND NO DEEPER, which is load-bearing rather than
+    tidy: zip, 7z, rar, bin, img and iso are all ROM extensions, so a texture
+    pack under `{game}/mods/` is a game to anything that recurses. At one level
+    it sits two levels down and is out of reach by construction.
     """
     dirs = [platform_dir]
     nested = platform_dir / "roms"
     if nested.is_dir():
         dirs.append(nested)
+    for base in list(dirs):
+        dirs.extend(_game_folders_in(base))
     return dirs
+
+
+def moved_row(candidates: list, fs_name: str, still_on_disk) -> int | None:
+    """The id of the row a file that turned up here moved out of, or None.
+
+    *candidates* are the rows carrying this file name in the directory one
+    level above or one level below - the only two places a move into or out of
+    a game folder can come from. *still_on_disk* answers whether a candidate's
+    own file is where its row says it is.
+
+    A candidate whose file is still there is a different copy of the same name,
+    not this file, and claiming its row would put one game's saves on another's
+    file. Two candidates are an ambiguity nothing here can settle. Both answer
+    None, which leaves a new row and an old one marked missing: a mess somebody
+    can see and fix, rather than a quiet wrong answer.
+    """
+    live = [c for c in candidates if not still_on_disk(c["fs_path"], fs_name)]
+    return live[0]["id"] if len(live) == 1 else None
+
+
+def _still_on_disk(directory: str, fs_name: str) -> bool:
+    """Whether a candidate row's own file is where the row says it is.
+
+    An unreadable directory answers yes, so a permission error or an
+    unavailable mount leaves the row alone instead of handing it to a file that
+    only looks like the same one.
+    """
+    try:
+        return (Path(directory) / fs_name).exists()
+    except OSError:
+        return True
 
 
 def scan_candidates(scan_dir: Path) -> list[Path]:
@@ -314,6 +387,42 @@ def scan_candidates(scan_dir: Path) -> list[Path]:
         entry for entry in sorted(scan_dir.iterdir())
         if entry.is_file() and entry.suffix.lstrip(".").lower() in _ROM_EXTENSIONS
     ]
+
+
+def playlists_naming(directory, disc_names) -> list[Path]:
+    """Every playlist in *directory* that names any of these discs.
+
+    By content rather than by name, because the useful question is whether the
+    discs have a playlist, not whether they have ours. One that came down
+    beside them, or that somebody wrote by hand on a handheld, counts the same:
+    for the button, because writing a second one over the top would be the
+    wrong answer; and for deletion, because a playlist naming discs that are
+    gone is just as broken whoever wrote it.
+    """
+    discs = {n.lower() for n in disc_names}
+    if len(discs) < 2:
+        return []
+    try:
+        candidates = sorted(Path(directory).glob("*.m3u"))
+    except OSError:
+        return []
+    out = []
+    for entry in candidates:
+        try:
+            lines = entry.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        # A line may carry a `path|Label` suffix, and may be written with
+        # either separator by whatever wrote it. Only the file name is
+        # compared. GD never writes a label - PCSX-ReARMed hands the whole
+        # line to the filesystem - but other tools do.
+        named = {
+            line.split("|", 1)[0].strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
+            for line in lines if line.strip() and not line.startswith("#")
+        }
+        if named & discs:
+            out.append(entry)
+    return out
 
 
 # Subchannel data, which a disc image does not carry and a PAL PlayStation game
@@ -1084,7 +1193,9 @@ async def scan_roms_path(roms_path: str) -> dict:
         # Ids only. The disc grouping later in the loop decides which of these is a
         # track of a sheet, so what a row IS cannot be known at the moment it is
         # written - it is read back once the walk is over.
-        #: (platform_id, assignments) held back until the walk finishes. See the
+        #: (platform_id, directory, assignments) held back until the walk
+        #: finishes - one entry per directory, because a plan means nothing
+        #: without the folder it was drawn from. See the
         #: comment where they are collected: grouping edits rows that were here
         #: before this scan, so a run that does not finish must not have done it.
         pending_groups: list[tuple] = []
@@ -1106,7 +1217,12 @@ async def scan_roms_path(roms_path: str) -> dict:
 
             fs_slug = platform_dir.name
             slug = slug_from_fs_slug(fs_slug)
-            info = PLATFORM_MAP.get(fs_slug, {})
+            # The platform this folder belongs to, under its own name: another
+            # name of one console (`megadrive/` beside `genesis/`) is read into
+            # that console's platform, and a platform first met through such a
+            # folder is still created under the main name.
+            home_slug = canonical_fs_slug(fs_slug)
+            info = PLATFORM_MAP.get(home_slug, {})
             display_name = info.get("name", fs_slug.upper())
 
             # Both supported shapes, read as a union rather than as an either/or -
@@ -1121,7 +1237,15 @@ async def scan_roms_path(roms_path: str) -> dict:
             rom_files: list[Path] = []
             files_by_dir: list[list[Path]] = []
             excluded_files: set[Path] = set()
-            for scan_dir in scan_dirs_for(platform_dir):
+            scan_dirs = scan_dirs_for(platform_dir)
+            # Which of the directories read here sit directly inside which. A
+            # file with no row may have moved out of the folder above it or out
+            # of one of the folders below it, and those are the only two places
+            # a move between the flat shape and a game folder can come from.
+            children_of: dict[str, list[str]] = {}
+            for scan_dir in scan_dirs:
+                children_of.setdefault(str(scan_dir.parent), []).append(str(scan_dir))
+            for scan_dir in scan_dirs:
                 try:
                     here = scan_candidates(scan_dir)
                 except PermissionError as e:
@@ -1135,7 +1259,7 @@ async def scan_roms_path(roms_path: str) -> dict:
                 continue
 
             # Upsert platform (aliased fs_slugs reuse the existing row by slug)
-            platform = await rom_platform_handler.upsert(fs_slug, slug, display_name)
+            platform = await rom_platform_handler.upsert(home_slug, slug, display_name)
             stats["platforms_found"] += 1
             seen_platform_ids.add(platform.id)
 
@@ -1166,7 +1290,30 @@ async def scan_roms_path(roms_path: str) -> dict:
                 except OSError:
                     fs_size = 0
 
-                existing = await rom_handler.get_by_fs_name(platform.id, fs_name)
+                existing = await rom_handler.get_by_fs_name(
+                    platform.id, fs_name, fs_path)
+
+                # No row here. Before this becomes a new game, ask whether it is
+                # an old one that moved: into its own folder, or back out of it.
+                # The rename rule below cannot answer this, because it pairs on
+                # the digest and a digest is nullable - unhashed is routine for
+                # anything over the ceiling, which is most of a disc library and
+                # exactly the files somebody would reorganise.
+                if existing is None:
+                    near = [str(rom_file.parent.parent)]
+                    near += children_of.get(str(rom_file.parent), [])
+                    came_from = moved_row(
+                        [{"id": r.id, "fs_path": r.fs_path}
+                         for r in await rom_handler.rows_named_in(
+                             platform.id, fs_name, near)],
+                        fs_name, _still_on_disk,
+                    )
+                    if came_from is not None:
+                        await rom_handler.move_row_to(came_from, fs_path)
+                        existing = await rom_handler.get_by_fs_name(
+                            platform.id, fs_name, fs_path)
+                        logger.info(
+                            "%s moved to %s and kept its entry", fs_name, fs_path)
 
                 # Deliberately AFTER the lookup, and only for something that is not
                 # here yet. Filtering the directory listing instead would mean an
@@ -1286,7 +1433,7 @@ async def scan_roms_path(roms_path: str) -> dict:
                 # scraper is better told nothing than told that.
                 if drop_stale_hashes:
                     await rom_handler.clear_container_hashes(
-                        platform.id, fs_name, drop_sha1=True
+                        platform.id, fs_name, fs_path, drop_sha1=True
                     )
                     logger.info(
                         "%s changed on disk and is over the hashing ceiling, so its "
@@ -1295,7 +1442,7 @@ async def scan_roms_path(roms_path: str) -> dict:
                     )
                 elif stale_chd and not crc_hash:
                     await rom_handler.clear_container_hashes(
-                        platform.id, fs_name, drop_sha1=not sha1_hash
+                        platform.id, fs_name, fs_path, drop_sha1=not sha1_hash
                     )
                     logger.info(
                         "Cleared container hashes on %s, %s", fs_name,
@@ -1313,10 +1460,17 @@ async def scan_roms_path(roms_path: str) -> dict:
             # claim a track file that lives in roms/ beside it: the two are separate
             # layouts, and grouping across them would fold unrelated files into one
             # disc set.
-            assignments: dict = {}
+            # Kept apart per directory all the way to the write, not merged into
+            # one plan. Merging keys the plan on a bare file name, so two folders
+            # that each hold a `Disc 1.cue` collapse onto one entry: the folder
+            # walked last decides, and the write then hands its membership to the
+            # other game and clears it off a third.
+            plans: list[tuple[str, dict]] = []
             for here in files_by_dir:
                 kept = [f for f in here if f not in excluded_files]
-                assignments.update(plan_disk_assignments(kept))
+                if not kept:
+                    continue
+                plans.append((str(kept[0].parent), plan_disk_assignments(kept)))
 
             # Held until the walk is over rather than written per platform. A
             # stopped scan puts back what it changed, and grouping is a change
@@ -1325,10 +1479,13 @@ async def scan_roms_path(roms_path: str) -> dict:
             # halfway, that game is simply gone from the library with nothing
             # deleted. Applied at the end, a stopped scan never touched it.
             if rom_files:
-                pending_groups.append((platform.id, assignments))
+                for where, plan in plans:
+                    pending_groups.append((platform.id, where, plan))
 
-            sets = len({group for group, _n, _e, _t in assignments.values() if group})
-            tracks = sum(1 for _g, _n, _e, sheet in assignments.values() if sheet)
+            sets = len({group for _w, plan in plans
+                        for group, _n, _e, _t in plan.values() if group})
+            tracks = sum(1 for _w, plan in plans
+                         for _g, _n, _e, sheet in plan.values() if sheet)
             logger.info(
                 "Scanned platform %s - %d ROM(s) found%s%s",
                 fs_slug, len(rom_files),
@@ -1386,8 +1543,8 @@ async def scan_roms_path(roms_path: str) -> dict:
         # The walk finished, so the disc grouping worked out along the way is
         # safe to write. Held until here because it edits rows that existed
         # before this scan - see where it is collected.
-        for platform_id, assignments in pending_groups:
-            await rom_handler.apply_disk_groups(platform_id, assignments)
+        for platform_id, where, assignments in pending_groups:
+            await rom_handler.apply_disk_groups(platform_id, where, assignments)
 
         # Clean up platforms whose folder no longer exists
         scanned_fs_slugs = {d.name for d in root.iterdir() if d.is_dir()}

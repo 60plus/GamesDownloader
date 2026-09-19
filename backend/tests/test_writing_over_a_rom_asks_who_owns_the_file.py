@@ -38,6 +38,7 @@ import pytest
 from fastapi import BackgroundTasks
 
 from handler.auth.scopes import Scope
+from utils.game_folders import game_dir
 
 ME = 7
 SOMEBODY_ELSE = 9
@@ -83,7 +84,7 @@ def route(tmp_path, monkeypatch):
     async def platform(_slug):
         return SimpleNamespace(id=1, slug="playstation", fs_slug="psx")
 
-    async def by_fs_name(_platform_id, fs_name):
+    async def any_row_named(_platform_id, fs_name):
         row = rows.get(fs_name)
         # A real row always names its folder, and a replacement has to be the
         # file in THAT folder (test_a_second_copy_of_your_own_rom_is_not_free).
@@ -93,7 +94,7 @@ def route(tmp_path, monkeypatch):
         return row
 
     monkeypatch.setattr(R.rom_platform_handler, "get_by_slug", platform)
-    monkeypatch.setattr(R.rom_handler, "get_by_fs_name", by_fs_name)
+    monkeypatch.setattr(R.rom_handler, "any_row_named", any_row_named)
 
     async def newest_rom_id():
         return 0
@@ -171,7 +172,7 @@ async def test_an_alias_slug_writes_to_the_canonical_shelf(route):
     out = await _upload(R, [_Upload("Game.iso")], slug="playstation")
 
     assert out["saved"] == ["Game.iso"]
-    assert (tmp_path / "psx" / "Game.iso").is_file(), (
+    assert (game_dir(str(tmp_path), "psx", "Game.iso") / "Game.iso").is_file(), (
         "wgranie przez sluge aliasowa nie trafilo na polke platformy"
     )
     assert not (tmp_path / "playstation").exists(), (

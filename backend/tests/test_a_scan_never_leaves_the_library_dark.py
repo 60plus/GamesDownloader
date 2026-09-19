@@ -35,6 +35,11 @@ class _FakeRequest:
         self.state = types.SimpleNamespace(user=object(), scopes=set(scopes))
 
 
+async def _nothing_moved(*_a, **_k):
+    """Nothing in these trees moved: every file found is new."""
+    return []
+
+
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
@@ -84,6 +89,8 @@ async def test_a_walk_that_raises_puts_the_library_back(tmp_path, monkeypatch):
     monkeypatch.setattr(scanner.rom_handler, "restore_present", _restore)
     # The walk falls over on the first row it looks up.
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name", _boom)
+    monkeypatch.setattr(scanner.rom_handler, "rows_named_in",
+                        _nothing_moved)
 
     with pytest.raises(RuntimeError):
         await scanner.scan_roms_path(str(tmp_path / "roms"))
@@ -119,6 +126,8 @@ async def test_the_failure_is_still_raised_after_restoring(tmp_path, monkeypatch
     monkeypatch.setattr(scanner.rom_handler, "mark_all_missing", _nothing)
     monkeypatch.setattr(scanner.rom_handler, "restore_present", _nothing)
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name", _boom)
+    monkeypatch.setattr(scanner.rom_handler, "rows_named_in",
+                        _nothing_moved)
 
     with pytest.raises(RuntimeError, match="konkretny blad"):
         await scanner.scan_roms_path(str(tmp_path / "roms"))

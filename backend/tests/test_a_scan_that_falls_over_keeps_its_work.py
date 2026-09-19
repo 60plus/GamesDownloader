@@ -45,6 +45,11 @@ import pytest
 SHA = "a" * 40
 
 
+async def _nothing_moved(*_a, **_k):
+    """Nothing in these trees moved: every file found is new."""
+    return []
+
+
 def _fake_async(value):
     async def _f(*a, **k):
         return value
@@ -117,6 +122,8 @@ def scan(tmp_path, monkeypatch):
     monkeypatch.setattr(scanner.rom_handler, "mark_all_missing", _mark_all_missing)
     monkeypatch.setattr(scanner.rom_handler, "restore_present", _restore)
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name", _fake_async(None))
+    monkeypatch.setattr(scanner.rom_handler, "rows_named_in",
+                        _nothing_moved)
     monkeypatch.setattr(scanner.rom_handler, "upsert", _upsert)
     monkeypatch.setattr(scanner.rom_handler, "delete", _delete)
     monkeypatch.setattr(scanner.rom_handler, "delete_many", _delete_many, raising=False)

@@ -81,10 +81,16 @@ def sandbox(tmp_path, monkeypatch):
 
     # Same shape as the real one, owner and all, so this double cannot go on
     # accepting a call the real function would refuse.
-    async def _no_database(fs_slug, filename, *, owner_id=None):
+    async def _no_database(fs_slug, filename, *, owner_id=None, dest_dir=None):
         return None
 
+    # A game the library does not have yet, which is what the real one answers
+    # for a file nobody has: the folder named after it.
+    async def _new_game(fs_slug, filename):
+        return rsh.rom_dest_dir(fs_slug, filename)
+
     monkeypatch.setattr(rsh, "_register_and_scrape", _no_database)
+    monkeypatch.setattr(rsh, "_home_for", _new_game)
     rsh._jobs.clear()
     rsh._in_flight.clear()
     rsh._dest_locks.clear()
@@ -114,7 +120,7 @@ def test_a_plain_download_lands_intact(source_url, sandbox):
     job = _job(source_url)
     asyncio.run(rsh._rom_download_job(job))
     assert job.status == "completed"
-    assert _sha(sandbox / "snes" / "rom.bin") == FINGERPRINT
+    assert _sha(sandbox / "snes" / "rom" / "rom.bin") == FINGERPRINT
 
 
 def test_pause_then_resume_rebuilds_the_same_file(source_url, sandbox):
@@ -129,10 +135,10 @@ def test_pause_then_resume_rebuilds_the_same_file(source_url, sandbox):
                 break
         await rsh.pause_job(1)
         await task
-        part = (sandbox / "snes" / "rom.bin.part")
+        part = (sandbox / "snes" / "rom" / "rom.bin.part")
         assert job.status == "paused", "pause did not take"
         assert part.exists() and 0 < part.stat().st_size < len(BODY)
-        assert not (sandbox / "snes" / "rom.bin").exists()
+        assert not (sandbox / "snes" / "rom" / "rom.bin").exists()
         # The lock has to stay while it is paused, or a second download could
         # start writing the same path.
         assert job.dest_key in rsh._dest_locks
@@ -145,8 +151,8 @@ def test_pause_then_resume_rebuilds_the_same_file(source_url, sandbox):
     kept = asyncio.run(scenario())
     assert job.status == "completed"
     assert kept > 0, "nothing was kept, so nothing was resumed"
-    assert _sha(sandbox / "snes" / "rom.bin") == FINGERPRINT
-    assert not (sandbox / "snes" / "rom.bin.part").exists()
+    assert _sha(sandbox / "snes" / "rom" / "rom.bin") == FINGERPRINT
+    assert not (sandbox / "snes" / "rom" / "rom.bin.part").exists()
 
 
 def test_a_source_that_ignores_range_starts_over_instead_of_corrupting(source_url, sandbox):
@@ -168,7 +174,7 @@ def test_a_source_that_ignores_range_starts_over_instead_of_corrupting(source_ur
 
     asyncio.run(scenario())
     assert job.status == "completed"
-    landed = sandbox / "snes" / "rom.bin"
+    landed = sandbox / "snes" / "rom" / "rom.bin"
     assert landed.stat().st_size == len(BODY), "file grew: the tail was appended twice"
     assert _sha(landed) == FINGERPRINT
 
@@ -187,7 +193,7 @@ def test_cancelling_mid_transfer_leaves_nothing_behind(source_url, sandbox):
 
     asyncio.run(scenario())
     assert job.status == "cancelled"
-    assert not (sandbox / "snes" / "rom.bin").exists()
-    assert not (sandbox / "snes" / "rom.bin.part").exists()
+    assert not (sandbox / "snes" / "rom" / "rom.bin").exists()
+    assert not (sandbox / "snes" / "rom" / "rom.bin.part").exists()
     assert job.dest_key not in rsh._dest_locks
     assert job.entry_key not in rsh._in_flight

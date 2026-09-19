@@ -86,7 +86,7 @@ def route(tmp_path, monkeypatch):
                                fs_size_bytes=len(OLD), fs_path=str(shelf))
 
     monkeypatch.setattr(R.rom_platform_handler, "get_by_slug", platform)
-    monkeypatch.setattr(R.rom_handler, "get_by_fs_name", my_row)
+    monkeypatch.setattr(R.rom_handler, "any_row_named", my_row)
 
     async def newest_rom_id():
         return 0
@@ -258,7 +258,7 @@ async def test_the_credit_is_only_for_this_file(route, monkeypatch):
     async def tiny_room(_user, _max):
         return 8
 
-    monkeypatch.setattr(R.rom_handler, "get_by_fs_name", big_row)
+    monkeypatch.setattr(R.rom_handler, "any_row_named", big_row)
     monkeypatch.setattr(quota, "ceiling_for", tiny_room)
 
     out = await _upload(R, [_Upload("Game (Disc 1).sbi", 4096)])

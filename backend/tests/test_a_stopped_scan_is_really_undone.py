@@ -28,6 +28,11 @@ import types
 import pytest
 
 
+async def _nothing_moved(*_a, **_k):
+    """Nothing in these trees moved: every file found is new."""
+    return []
+
+
 def _fake_async(value):
     async def _f(*a, **k):
         return value
@@ -73,6 +78,8 @@ def scan(tmp_path, monkeypatch):
     # deleting it would take their savestates by cascade.
     monkeypatch.setattr(scanner.rom_handler, "ids_with_player_data", _fake_async(set()))
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name", _fake_async(None))
+    monkeypatch.setattr(scanner.rom_handler, "rows_named_in",
+                        _nothing_moved)
     monkeypatch.setattr(scanner.rom_handler, "upsert", _upsert)
     monkeypatch.setattr(scanner.rom_handler, "apply_disk_groups", _nothing)
     # The adoption pass at the end of a completed walk. Empty here: what these
@@ -154,6 +161,10 @@ async def test_stopping_a_scan_that_added_nothing_deletes_nothing(scan, monkeypa
                                      md5_hash="beef", sha1_hash="cafe")
 
     monkeypatch.setattr(scanner.rom_handler, "get_by_fs_name", _existing)
+
+    monkeypatch.setattr(scanner.rom_handler, "rows_named_in",
+
+                        _nothing_moved)
 
     stats = await scanner.scan_roms_path(str(tmp_path / "roms"))
 
