@@ -49,6 +49,25 @@ same file three times over - so it is stored once and the three declarations poi
 
 ---
 
+### Support button icon - CC BY 4.0
+
+**Path:** `frontend/public/about/beer.png`
+
+**Source:** the beer mug emoji (U+1F37A) from **Twemoji**
+(https://github.com/jdecked/twemoji), rendered from the project's SVG to a
+256 px image.  Graphics originally by **Twitter, Inc. and other contributors**.
+
+**Licence:** Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+**Why bundled:** the button drew the emoji as a character, which is left to
+whatever font the reader's system carries: colour on Windows, macOS and
+phones, an empty box on a machine with no emoji font at all.  An image we
+serve looks the same to everyone.
+
+**Attribution required:** yes, this notice.
+
+---
+
 ## Metadata service icons - trademark / nominative use
 
 **Path:** `frontend/public/icons/*.ico` and `*.svg`

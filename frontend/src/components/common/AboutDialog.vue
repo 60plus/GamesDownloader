@@ -11,10 +11,20 @@
           <p class="about-tagline">{{ t('about.tagline') }}</p>
           <p class="about-body">{{ t('about.body') }}</p>
 
-          <a class="about-discord" href="https://discord.gg/vdFz5N6CQY" target="_blank" rel="noopener">
-            <img src="/about/discord.png" class="about-discord-icon" alt="Discord" />
-            <span>{{ t('about.discord') }}</span>
-          </a>
+          <div class="about-links">
+            <a class="about-link" href="https://discord.gg/vdFz5N6CQY" target="_blank" rel="noopener">
+              <img src="/about/discord.png" class="about-icon" alt="Discord" />
+              <span>{{ t('about.discord') }}</span>
+            </a>
+            <!-- Buy Me a Coffee ships a <script> button. It cannot be used: the
+                 CSP allows script-src 'self' only, and a vendor tag would tell
+                 a third party about every user who opens this window. A plain
+                 link does the same job and stays on our origin. -->
+            <a class="about-link" href="https://buymeacoffee.com/gamesdownloader" target="_blank" rel="noopener">
+              <img src="/about/beer.png" class="about-icon" alt="" />
+              <span>{{ t('about.support') }}</span>
+            </a>
+          </div>
 
           <div class="about-sep" />
           <div class="about-created">{{ t('about.created_by') }}</div>
@@ -91,22 +101,30 @@ watch(aboutOpen, async (open) => {
   font-size: 13px; line-height: 1.65; color: var(--muted);
 }
 
-.about-discord {
+/* Two equal halves side by side. The label sits under the icon, so the longer
+   translations wrap inside their own button instead of pushing the other one
+   narrow, and both buttons stay the same size in all eight languages. */
+.about-links {
   margin-top: 20px;
-  display: inline-flex; align-items: center; gap: 10px;
-  padding: 4px 14px; border-radius: 8px;
+  width: 100%; max-width: 340px;
+  display: flex; gap: 10px;
+}
+.about-link {
+  flex: 1 1 0; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 10px 8px; border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--pl) 40%, transparent);
   background: color-mix(in srgb, var(--pl) 20%, transparent);
   color: var(--pl-light, #fff);
   font-size: 13px; font-weight: 600; text-decoration: none;
   transition: all .15s;
 }
-.about-discord:hover {
+.about-link:hover {
   background: color-mix(in srgb, var(--pl) 30%, transparent);
   border-color: color-mix(in srgb, var(--pl) 55%, transparent);
   color: #fff;
 }
-.about-discord-icon { width: 64px; height: 64px; border-radius: 12px; }
+.about-icon { width: 48px; height: 48px; border-radius: 10px; flex-shrink: 0; }
 
 .about-sep {
   width: 60%; height: 1px; margin: 22px 0 16px;
