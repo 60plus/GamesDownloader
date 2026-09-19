@@ -39,9 +39,24 @@ async def _igdb_post(endpoint: str, body: str, client_id: str, client_secret: st
         return r.json()
 
 
+def _platform_filter(igdb_platform_id) -> str:
+    """The query's platform clause, for one IGDB platform or several.
+
+    Several because IGDB keeps two platforms for some single consoles - the
+    Famicom beside the NES, the Super Famicom beside the SNES - and a Japan-only
+    game is filed under the Japanese machine there.
+    """
+    if igdb_platform_id is None:
+        return ""
+    ids = (igdb_platform_id,) if isinstance(igdb_platform_id, int) else tuple(igdb_platform_id)
+    if not ids:
+        return ""
+    return f" & platforms = ({','.join(str(i) for i in ids)})"
+
+
 async def search_game(
     name: str,
-    igdb_platform_id: int | None,
+    igdb_platform_id: int | tuple[int, ...] | None,
     *,
     client_id: str,
     client_secret: str,
@@ -50,7 +65,7 @@ async def search_game(
 
     Returns the best match as a raw IGDB game dict, or None.
     """
-    platform_filter = f" & platforms = ({igdb_platform_id})" if igdb_platform_id else ""
+    platform_filter = _platform_filter(igdb_platform_id)
     query = (
         f'fields name, slug, summary, cover.url, '
         f'screenshots.url, genres.name, first_release_date, '
@@ -63,8 +78,8 @@ async def search_game(
     results = await _igdb_post("games", query, client_id, client_secret)
     if not results:
         # Retry without platform filter if no results
-        if igdb_platform_id:
-            query2 = query.replace(f" & platforms = ({igdb_platform_id})", "")
+        if platform_filter:
+            query2 = query.replace(platform_filter, "")
             results = await _igdb_post("games", query2, client_id, client_secret)
 
     if not results:
@@ -157,21 +172,21 @@ def extract_metadata(game: dict) -> dict:
 
 async def search_games(
     name: str,
-    igdb_platform_id: int | None = None,
+    igdb_platform_id: int | tuple[int, ...] | None = None,
     *,
     client_id: str,
     client_secret: str,
 ) -> list[dict]:
     """Search IGDB, return up to 10 simplified results for the panel search grid."""
-    platform_filter = f" & platforms = ({igdb_platform_id})" if igdb_platform_id else ""
+    platform_filter = _platform_filter(igdb_platform_id)
     query = (
         f'fields id, name, url, cover.url, first_release_date, '
         f'involved_companies.company.name, involved_companies.developer;'
         f' where name ~ *"{name}"*{platform_filter}; limit 10;'
     )
     results = await _igdb_post("games", query, client_id, client_secret)
-    if not results and igdb_platform_id:
-        query2 = query.replace(f" & platforms = ({igdb_platform_id})", "")
+    if not results and platform_filter:
+        query2 = query.replace(platform_filter, "")
         results = await _igdb_post("games", query2, client_id, client_secret)
 
     out = []

@@ -9,6 +9,7 @@ Based on ROMM's platform list, extended for GamesDownloader.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 # fs_slug → { name, igdb_id, ss_id, launchbox_name, cover_aspect }
 # cover_aspect: aspect ratio for box art in library grid
@@ -161,13 +162,38 @@ PLATFORM_MAP: dict[str, dict] = {
 }
 
 
+#: One console, sold under a different name where it was sold, and the one
+#: platform the library keeps for it (the owner's decision, 2026-09-18). The
+#: first name of each is the platform's: its folder, its slug and its name are
+#: what every library already has a row for. ScreenScraper keeps each of these
+#: as one system with one id. The groups are written out rather than worked out
+#: from those ids, because a shared id is not proof of one console: every
+#: arcade board shares one, the Amiga models share one, and 3DO and the Jaguar
+#: share one by mistake.
+SAME_CONSOLE: tuple[tuple[str, ...], ...] = (
+    ("nes", "famicom"),
+    ("snes", "snesna", "super-nintendo", "sfc"),
+    ("genesis", "megadrive", "megadrivejp", "sega-genesis", "sega-mega-drive"),
+    ("segacd", "megacd", "megacdjp"),
+    ("sega32x", "sega32xjp", "sega32xna"),
+    ("saturn", "saturnjp", "sega-saturn"),
+    ("mastersystem", "mark3"),
+    ("pcengine", "tg16"),
+    ("pcenginecd", "tg-cd"),
+    ("neogeocd", "neogeocdjp"),
+    ("gc", "nintendo-gamecube"),
+)
+_CONSOLE_OF: dict[str, str] = {name: group[0] for group in SAME_CONSOLE for name in group}
+
+
 def slug_from_fs_slug(fs_slug: str) -> str:
     """Convert filesystem slug to URL-safe slug.
 
     Uses the IGDB/common naming convention where possible.
-    Falls back to slugifying the display name.
+    Falls back to slugifying the display name. Every name of one console
+    (SAME_CONSOLE) answers with its platform's slug.
     """
-    info = PLATFORM_MAP.get(fs_slug)
+    info = PLATFORM_MAP.get(_CONSOLE_OF.get(fs_slug, fs_slug))
     if info:
         # Derive slug from display name
         name = info["name"]
@@ -205,7 +231,34 @@ def canonical_fs_slug(fs_slug: str) -> str:
     An unknown slug is handed back unchanged. This answers "which of these names
     is the real one", not "is this a platform" - the caller asks that first.
     """
+    if fs_slug in _CONSOLE_OF:
+        return _CONSOLE_OF[fs_slug]
     return _CANONICAL_FS_SLUG.get(slug_from_fs_slug(fs_slug), fs_slug)
+
+
+@lru_cache(maxsize=None)
+def platform_folders(fs_slug: str) -> tuple[str, ...]:
+    """Every folder name a platform's games may lie under, its own first.
+
+    New files go only into the first, but a library that was put together
+    before - `megadrive/` beside `genesis/`, `snesna/` beside `snes/` - is read
+    whole, and a game lying in one of the others is still this platform's.
+    """
+    main = canonical_fs_slug(fs_slug)
+    others = [s for s in PLATFORM_MAP if s != main and canonical_fs_slug(s) == main]
+    return (main, *others)
+
+
+def igdb_platform_ids(fs_slug: str) -> tuple[int, ...]:
+    """Every IGDB platform this platform's games may be filed under, its own
+    first. IGDB keeps the Famicom and the Super Famicom apart from the NES and
+    the SNES, so a Japan-only game is under the Japanese machine there."""
+    found: list[int] = []
+    for name in platform_folders(fs_slug):
+        igdb = PLATFORM_MAP.get(name, {}).get("igdb_id")
+        if igdb and igdb not in found:
+            found.append(igdb)
+    return tuple(found)
 
 
 def get_igdb_id(fs_slug: str) -> int | None:
