@@ -446,6 +446,14 @@ def _pick_region(
     return items[0]
 
 
+def pick_title_screen(game: dict, region: str) -> str | None:
+    """The game's title screen, in the preset's region where there is a choice."""
+    titles = [m for m in (game.get("medias") or [])
+              if m.get("type") == "sstitle" and m.get("url")]
+    best = _pick_region(titles, "region", _build_region_pref(region))
+    return best["url"] if best else None
+
+
 def _get_media_url(medias: list[dict], media_type: str) -> str | None:
     """Extract URL for a specific media type from SS media list."""
     for m in medias:

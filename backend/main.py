@@ -134,6 +134,7 @@ async def _init_db() -> None:
     import models.torrent_download  # noqa: F401
     import models.rom_platform             # noqa: F401
     import models.rom                      # noqa: F401
+    import models.rom_added_file           # noqa: F401
     import models.rom_save_state           # noqa: F401
     import models.plugin_config            # noqa: F401
     import models.library                  # noqa: F401
@@ -164,6 +165,8 @@ async def _init_db() -> None:
         ("roms",           "steamgrid_path",    "VARCHAR(512) NULL"),
         ("roms",           "video_path",        "VARCHAR(512) NULL"),
         ("roms",           "picto_path",        "VARCHAR(512) NULL"),
+        # The game's manual, a PDF fetched when the Scrape Preset asks for it.
+        ("roms",           "manual_path",       "VARCHAR(512) NULL"),
         ("roms",           "sha1_hash",         "VARCHAR(40) NULL"),
         ("roms",           "cover_type",        "VARCHAR(32) NULL"),
         ("roms",           "cover_aspect",      "VARCHAR(10) NULL"),
@@ -900,6 +903,47 @@ async def _init_db() -> None:
     # No default admin seeding - admin is created through the setup wizard
 
 
+async def _merge_console_platforms() -> None:
+    """One console is one platform (rom_platform_map.SAME_CONSOLE).
+
+    A library that met Mega Drive games under `megadrive/` and Genesis games
+    under `genesis/` has a platform row for each. Before anything can scan -
+    a scan would find every game of the other row "new" in the console's
+    platform - the games move onto one row, keeping their ids, and the
+    settings of the other come along (handler/roms/platform_merge.py). Does
+    nothing once there is nothing to bring together.
+
+    Then, once, the EMPTY folders the application used to make for every name
+    of a console are removed, so a library has one folder per console. A
+    folder with anything in it is somebody's and stays.
+    """
+    try:
+        from handler.roms.platform_merge import merge_console_platforms, tidy_console_folders
+
+        counts = await merge_console_platforms()
+        if any(counts.values()):
+            logger.info(
+                "One console, one platform: %d platform(s) merged, %d renamed, "
+                "%d game(s) moved", counts["merged"], counts["renamed"], counts["roms_moved"],
+            )
+        from handler.config.config_handler import config_handler as _cfg
+
+        if not await _cfg.get_bool("_console_folders_tidied", default=False):
+            from handler.filesystem.rom_paths import roms_library_path
+
+            removed = await asyncio.to_thread(tidy_console_folders, roms_library_path())
+            if removed:
+                logger.info("Removed empty folders of other console names: %s",
+                            ", ".join(sorted(removed)))
+            await _cfg.set("_console_folders_tidied", "true")
+    except Exception:
+        logger.exception(
+            "Could not bring the platforms of one console together. Games filed "
+            "under another name of a console may show up twice after a scan "
+            "until this succeeds on a later start."
+        )
+
+
 def _init_rom_dirs() -> None:
     """Create ROM library subdirectory for every known platform on startup.
 
@@ -952,8 +996,26 @@ def _sweep_rom_parts() -> None:
     if not roms_root.is_dir():
         return
     removed, bytes_freed = 0, 0
+    # Every depth a transfer writes at: the platform's shelf and roms/ inside
+    # it, a game's folder on either (a download, from 1.0.36), and that
+    # folder's extras/ or mods/ ("Add file"). Only one level used to be looked
+    # at, which is where every transfer wrote before games had folders. Below
+    # that, only a platform's own folder: with the library set to a broad
+    # folder, four levels down reaches a torrent client's live partial files
+    # (1.0.36 audit, round 2). A platform's folder is any the scan reads into a
+    # known platform, `PlayStation/` as well as `psx/` (utils.game_folders.
+    # platform_dirs).
+    from handler.metadata.rom_platform_map import PLATFORM_MAP, canonical_fs_slug
+
+    def _parts():
+        yield from roms_root.glob("*/*.part")
+        for pattern in ("*/*.part", "*/*/*.part", "*/*/*/*.part"):
+            for platform in roms_root.iterdir():
+                if canonical_fs_slug(platform.name) in PLATFORM_MAP and platform.is_dir():
+                    yield from platform.glob(pattern)
+
     try:
-        for part in roms_root.glob("*/*.part"):
+        for part in _parts():
             try:
                 bytes_freed += part.stat().st_size
                 part.unlink()
@@ -1078,6 +1140,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     await _init_db()
+    await _merge_console_platforms()
     _init_rom_dirs()
     _sweep_rom_parts()
 

@@ -432,14 +432,17 @@ const REGIONS = [
 ]
 
 // Every tick here is one the scrape obeys (handler/metadata/scrape_presets.py).
-// A manual, maps, a box texture, a title screen and a marquee have nowhere to
-// be kept yet, so they are not offered until ROMs get folders of their own.
+// Maps, a box texture and a marquee have nowhere to be kept yet, so they are
+// not offered. The title screen goes at the end of the gallery, after gameplay.
 const EXTRAS_GROUPS = [
-  { label: t('roms.extras_screenshots'), items: [{ value: 'ss', label: 'Gameplay' }] },
+  { label: t('roms.extras_screenshots'), items: [{ value: 'ss', label: 'Gameplay' }, { value: 'sstitle', label: 'Title Screen' }] },
   { label: t('roms.extras_video'),       items: [{ value: 'video', label: 'Video' }, { value: 'video-normalized', label: 'Normalized' }] },
   { label: t('roms.extras_support'),     items: [{ value: 'support-2D', label: 'Support 2D' }, { value: 'support-texture', label: 'Texture' }] },
   { label: t('roms.extras_bezel'),       items: [{ value: 'bezel-16-9', label: 'Bezel 16:9' }, { value: 'bezel-4-3', label: 'Bezel 4:3' }] },
   { label: t('roms.extras_art'),         items: [{ value: 'fanart', label: 'Fan Art' }, { value: 'background', label: 'Background' }, { value: 'wheel', label: 'Wheel' }, { value: 'steamgrid', label: 'Steam Grid' }, { value: 'pictoliste', label: 'Picto' }] },
+  // The game's manual, ScreenScraper's `manuel`. Off by default: a few megabytes
+  // a game, and the default is small.
+  { label: t('roms.extras_manual'),      items: [{ value: 'manuel', label: 'PDF' }] },
 ]
 
 // ── General settings ──────────────────────────────────────────────────────────

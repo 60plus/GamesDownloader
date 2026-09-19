@@ -44,8 +44,17 @@ _LETS_IN: dict[str, tuple[str, ...]] = {
                          "screenmarquee", "screenmarqueesmall"),
 }
 
+#: The game's manual, a PDF kept beside its other media. ScreenScraper's own
+#: word for it. Not in the default: a manual is a few megabytes a game, and the
+#: default is small (the owner's rule, 2026-09-18).
+MANUAL = "manuel"
+
+#: The title screen, one more picture at the end of the gallery. Not in the
+#: default either, for the same reason as everything past the gameplay shots.
+TITLE_SCREEN = "sstitle"
+
 #: Every tick the settings screen offers, and the scrape obeys.
-TICKS: tuple[str, ...] = ("ss", *BACKGROUND_TYPES, *_LETS_IN)
+TICKS: tuple[str, ...] = ("ss", *BACKGROUND_TYPES, *_LETS_IN, MANUAL, TITLE_SCREEN)
 
 
 def _renamed(name: str) -> str:

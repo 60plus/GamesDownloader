@@ -142,13 +142,16 @@ def scrape(monkeypatch, tmp_path):
         return False
 
     state.types = list(_EVERY_TYPE)
+    # Media the answer carries on top of one of each type, for a test that needs
+    # several of a kind or one in another region.
+    state.more = []
 
     async def _search(*_a, **_k):
         return {
             "id": 42,
             "noms": [{"region": "wor", "text": "Game"}],
             "medias": [{"type": t, "url": f"http://ss/{t}.jpg", "region": "wor"}
-                       for t in state.types],
+                       for t in state.types] + list(state.more),
         }
 
     async def _nothing(*_a, **_k):
@@ -207,11 +210,12 @@ def scrape(monkeypatch, tmp_path):
         picto_path=None,
     )
     platform = SimpleNamespace(slug="snes", fs_slug="snes")
+    state.rom = rom
 
     async def _run():
         state.fetched.clear()
         state.sgdb.clear()
-        await h.scrape_rom(rom, platform)
+        state.result = await h.scrape_rom(rom, platform)
         return {u.rsplit("/", 1)[-1].rsplit(".", 1)[0] for u in state.fetched}
 
     state.run = _run
@@ -244,6 +248,7 @@ async def test_each_tick_lets_in_its_own_media_and_nothing_else(scrape):
         "wheel": {"wheel-hd"},
         "fanart": {"fanart"},
         "background": {"background"},
+        "sstitle": {"sstitle"},
     }
     for tick, expected in cases.items():
         scrape.preset = {"cover_type": "box-2D", "region": "wor",
@@ -301,6 +306,170 @@ async def test_a_title_screen_chosen_as_the_cover_is_the_title_screen(scrape):
     assert "sstitle" in got and "box-2D" not in got, (
         f"okladka 'ekran tytulowy' pobiera pudelko: {sorted(got)}"
     )
+
+
+# ── The title screen ends the gallery ───────────────────────────────────────
+#
+# Its own tick, off by default like everything past the cover and the gameplay
+# screenshots. It goes LAST and on top of the six (the owner's call, 2026-09-18):
+# a video's thumbnail in Modern, the hover preview in Vapor and Couch's stand-in
+# background all take the first picture as the game's own, and those should go
+# on showing the game being played.
+
+_SHOTS = "/resources/roms/snes/5/"
+
+
+def _title_preset(*ticks):
+    from handler.metadata.scrape_presets import PRESET_VERSION
+
+    return {"cover_type": "box-2D", "region": "wor", "extras": list(ticks),
+            "version": PRESET_VERSION}
+
+
+@pytest.mark.asyncio
+async def test_the_title_screen_comes_after_the_gameplay(scrape):
+    scrape.preset = _title_preset("ss", "sstitle")
+
+    await scrape.run()
+
+    assert scrape.result["screenshots"] == [
+        _SHOTS + "screenshot_0.jpg", _SHOTS + "title_screen.jpg",
+    ], "ekran tytulowy nie stoi na koncu galerii, za rozgrywka"
+
+
+@pytest.mark.asyncio
+async def test_the_title_screen_takes_no_gameplay_place(scrape):
+    scrape.preset = _title_preset("ss", "sstitle")
+    scrape.more = [{"type": "ss", "url": f"http://ss/ss-{n}.jpg", "region": "wor"}
+                   for n in range(1, 8)]
+
+    await scrape.run()
+
+    shots = scrape.result["screenshots"]
+    assert len(shots) == 7 and shots[-1] == _SHOTS + "title_screen.jpg", (
+        f"ekran tytulowy zabral miejsce zrzutowi rozgrywki: {shots}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ticked_alone_it_joins_the_gallery_already_there(scrape):
+    """An unticked kind is not fetched, which is not the same as deleted: with
+    gameplay unticked, the gameplay pictures already there stay."""
+    scrape.preset = _title_preset("sstitle")
+    scrape.rom.screenshots = [_SHOTS + "screenshot_0.png", _SHOTS + "screenshot_1.png"]
+    scrape.rom.media_source = {"screenshots": "scrape"}
+
+    got = await scrape.run()
+
+    assert "ss" not in got
+    assert scrape.result["screenshots"] == [
+        _SHOTS + "screenshot_0.png", _SHOTS + "screenshot_1.png", _SHOTS + "title_screen.jpg",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_new_title_screen_replaces_the_old_one(scrape):
+    scrape.preset = _title_preset("sstitle")
+    scrape.rom.screenshots = [_SHOTS + "screenshot_0.png", _SHOTS + "title_screen.png"]
+    scrape.rom.media_source = {"screenshots": "scrape"}
+
+    await scrape.run()
+
+    assert scrape.result["screenshots"] == [
+        _SHOTS + "screenshot_0.png", _SHOTS + "title_screen.jpg",
+    ], "stary ekran tytulowy zostal w galerii obok nowego"
+
+
+@pytest.mark.asyncio
+async def test_a_gallery_somebody_put_together_gets_no_title_screen(scrape):
+    scrape.preset = _title_preset("ss", "sstitle")
+    scrape.rom.screenshots = [_SHOTS + "mine.png"]
+    scrape.rom.media_source = {"screenshots": "manual"}
+
+    got = await scrape.run()
+
+    assert "sstitle" not in got, "skan dopisuje do galerii ulozonej recznie"
+    assert "screenshots" not in scrape.result
+
+
+@pytest.mark.asyncio
+async def test_a_game_with_no_title_screen_leaves_the_gallery_alone(scrape):
+    scrape.preset = _title_preset("sstitle")
+    scrape.types = [t for t in _EVERY_TYPE if t != "sstitle"]
+    scrape.rom.screenshots = [_SHOTS + "screenshot_0.png"]
+    scrape.rom.media_source = {"screenshots": "scrape"}
+
+    await scrape.run()
+
+    assert "screenshots" not in scrape.result
+
+
+@pytest.mark.asyncio
+async def test_the_manual_tick_brings_the_manual_and_the_rest_of_the_scrape(
+        scrape, monkeypatch, tmp_path):
+    """Found on 2026-09-18, while writing the wiki: with the tick on, the scrape
+    asked keep_existing_media about a column it had never been told of, which
+    raises - so every scrape of a platform with Manual ticked failed as a
+    whole, cover and title with it. The manual had only source-reading tests,
+    and the manuals on the test server had been fetched by a script."""
+    import handler.filesystem.rom_paths as rom_paths
+    from handler.metadata import manuals
+
+    library = tmp_path / "library"
+    scrape.rom.fs_path = str(library / "snes" / "Game")
+    scrape.rom.name = "Game"
+    scrape.rom.regions = ["eu"]
+    scrape.rom.manual_path = None
+    scrape.more = [{"type": "manuel", "url": "http://ss/manuel.pdf", "region": "eu",
+                    "format": "pdf"}]
+    scrape.preset = _title_preset("manuel")
+    fetched = []
+
+    async def _fetch(url, dest):
+        fetched.append(url)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"%PDF-1.4")
+        return dest
+
+    # The game alone in its folder (manuals.manual_home asks the library).
+    from handler.database.rom_handler import rom_handler
+
+    async def _its_set(_rom_id, **_k):
+        return [scrape.rom]
+
+    async def _nobody(*_a, **_k):
+        return None
+
+    async def _unclaimed(*_a, **_k):
+        return False
+
+    monkeypatch.setattr(rom_handler, "disk_set", _its_set)
+    monkeypatch.setattr(rom_handler, "another_in_folder", _nobody)
+    monkeypatch.setattr(rom_handler, "manual_claimed", _unclaimed)
+    monkeypatch.setattr(manuals, "fetch_manual", _fetch)
+    monkeypatch.setattr(rom_paths, "roms_library_path", lambda: str(library))
+
+    await scrape.run()
+
+    assert fetched == ["http://ss/manuel.pdf"]
+    assert scrape.result.get("manual_path") == "extras/Manual.pdf"
+    assert scrape.result.get("cover_path"), "okladka przepadla razem z calym scrapem"
+
+
+def test_the_title_screen_is_the_presets_region_first():
+    from handler.metadata.screenscraper_handler import pick_title_screen
+
+    game = {"medias": [
+        {"type": "sstitle", "url": "http://ss/title-jp.png", "region": "jp"},
+        {"type": "sstitle", "url": "http://ss/title-eu.png", "region": "eu"},
+        {"type": "ss", "url": "http://ss/gameplay-eu.png", "region": "eu"},
+    ]}
+
+    assert pick_title_screen(game, "eu") == "http://ss/title-eu.png"
+    assert pick_title_screen(game, "jp") == "http://ss/title-jp.png"
+    assert pick_title_screen({"medias": [
+        {"type": "ss", "url": "http://ss/gameplay.png", "region": "wor"},
+    ]}, "wor") is None
 
 
 # ── The screen says the same ─────────────────────────────────────────────────

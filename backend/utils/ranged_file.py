@@ -143,13 +143,17 @@ def parse_byte_range(header: str | None, file_size: int) -> tuple[int, int] | No
     return first, last
 
 
-def content_disposition(filename: str) -> str:
+def content_disposition(filename: str, *, inline: bool = False) -> str:
     """An attachment header both halves of the world can read.
 
     `filename*` carries the real name in UTF-8 and wins wherever it is
     understood. The plain `filename` beside it is the fallback that some proxies
     and older clients need, so a name with an accent in it does not arrive as an
     empty string.
+
+    *inline* is for a file the browser should show rather than save - a game's
+    manual, opened in the browser's own PDF viewer - with the same name kept
+    for when somebody saves it from there.
     """
     ascii_name = (
         unicodedata.normalize("NFKD", filename)
@@ -169,7 +173,7 @@ def content_disposition(filename: str) -> str:
     elif not ascii_name:
         ascii_name = "download"
     return (
-        f'attachment; filename="{ascii_name}"; '
+        f'{"inline" if inline else "attachment"}; filename="{ascii_name}"; '
         f"filename*=UTF-8''{quote(filename, safe='')}"
     )
 

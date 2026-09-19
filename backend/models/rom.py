@@ -116,6 +116,7 @@ class Rom(Base):
     steamgrid_path:  Mapped[str | None] = mapped_column(String(512), nullable=True)  # Steam Grid banner
     video_path:      Mapped[str | None] = mapped_column(String(512), nullable=True)  # video file
     picto_path:      Mapped[str | None] = mapped_column(String(512), nullable=True)  # SS pictoliste icon
+    manual_path:     Mapped[str | None] = mapped_column(String(512), nullable=True)  # the game's manual, a PDF
 
     # Where every other picture came from, by slot: {"background": "manual",
     # "wheel": "scrape"}. The cover has a column of its own above, from when it

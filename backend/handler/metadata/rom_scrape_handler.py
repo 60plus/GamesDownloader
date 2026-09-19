@@ -30,7 +30,7 @@ from handler.metadata import (
     screenscraper_handler,
 )
 from handler.metadata.rom_platform_map import (
-    get_hltb_name, get_igdb_id, get_launchbox_name, get_ss_id,
+    get_hltb_name, get_launchbox_name, get_ss_id, igdb_platform_ids,
 )
 from models.rom import Rom
 from models.rom_platform import RomPlatform
@@ -158,6 +158,15 @@ def _media_slot(url: str, media_dir: Path, stem: str) -> Path:
     return media_dir / f"{stem}.{ext}"
 
 
+#: The title screen's file, beside the numbered screenshots in the ROM's media.
+#: A name of its own is how the next scrape finds it again in the gallery.
+TITLE_SCREEN_SLOT = "title_screen"
+
+
+def _is_title_screen(url: str) -> bool:
+    return Path(url).stem == TITLE_SCREEN_SLOT
+
+
 def _rom_media_dir(platform_slug: str, rom_id: int) -> Path:
     return Path(RESOURCES_PATH) / "roms" / platform_slug / str(rom_id)
 
@@ -251,6 +260,10 @@ MEDIA_COLUMNS: frozenset[str] = frozenset({
     # record which of six pictures a person put there, so one uploaded by hand
     # makes the set theirs and a forced pass leaves all of them.
     "screenshots",
+    # Not a picture, the same question: a manual the scrape fetched may be
+    # replaced, and one somebody put in the game's extras/ themselves - which
+    # the scrape takes without recording an origin - stays.
+    "manual_path",
 })
 
 
@@ -340,7 +353,8 @@ async def scrape_rom(
 
     search_name   = rom.fs_name_no_ext or rom.fs_name
     fs_slug       = platform.fs_slug
-    igdb_platform = get_igdb_id(fs_slug)
+    # Every IGDB platform of the console: IGDB files the Famicom apart from the NES.
+    igdb_platform = igdb_platform_ids(fs_slug)
     ss_system     = get_ss_id(fs_slug)
     lb_platform   = get_launchbox_name(fs_slug)
     hltb_platform = get_hltb_name(fs_slug)
@@ -638,17 +652,40 @@ async def scrape_rom(
         merged["screenshots"] = saved_ss
         _from_scrape("screenshots")
 
-    # ── ES-style: support, wheel, steamgrid, video, bezel, picto ─────────────
-    # Use extract_media_urls to get all categorised media from raw SS response,
-    # then pick the best item per category and save to proper DB columns. Only
-    # the types the platform's preset ticked take part; this used to fetch all
-    # of them whatever was ticked.
+    # ScreenScraper's own answer, which the title screen below and the ES-style
+    # media after it pick from.
     ss_raw_for_extra = None
     for r in results:
         if r.get("is_identified") and r.get("ss_metadata"):
             ss_raw_for_extra = r["ss_metadata"]
             break
 
+    # ── Title screen: one more picture, at the end of the gallery ────────────
+    # Last and on top of the six (the owner's call): a video's thumbnail, a
+    # hover preview and Couch's stand-in background all take the first picture
+    # as the game's own, and those go on showing the game being played. Asked
+    # the same question as the screenshots, since it lands in their list.
+    if (scrape_presets.TITLE_SCREEN in wanted and ss_raw_for_extra
+            and not keep_existing_media(rom, "screenshots", fill_missing)):
+        title_url = screenscraper_handler.pick_title_screen(ss_raw_for_extra, ss_region)
+        saved = None
+        if title_url:
+            saved = await _download_image(
+                title_url, _media_slot(title_url, media_dir, TITLE_SCREEN_SLOT), replace=True)
+        if saved:
+            # Onto what this pass fetched, or else onto the gallery already
+            # there: a kind left unticked is not fetched, which is not the same
+            # as deleted. The previous title screen is all it replaces.
+            gallery = merged.get("screenshots") or [
+                s for s in (rom.screenshots or []) if not _is_title_screen(s)]
+            merged["screenshots"] = [*gallery, _resource_url(platform.slug, rom.id, saved.name)]
+            _from_scrape("screenshots")
+
+    # ── ES-style: support, wheel, steamgrid, video, bezel, picto ─────────────
+    # Use extract_media_urls to get all categorised media from raw SS response,
+    # then pick the best item per category and save to proper DB columns. Only
+    # the types the platform's preset ticked take part; this used to fetch all
+    # of them whatever was ticked.
     if ss_raw_for_extra:
         region_pref = screenscraper_handler._build_region_pref(ss_region)
         all_media   = screenscraper_handler.extract_media_urls(ss_raw_for_extra)
@@ -716,6 +753,43 @@ async def scrape_rom(
                 merged[col] = _resource_url(platform.slug, rom.id, saved.name)
                 _from_scrape(col)
                 downloaded += 1
+
+        # ── Manual: one PDF, the ROM's own region first ─────────────────────
+        # Only when the preset asks: a manual is a few megabytes a game, and the
+        # default is small. Which copy is the owner's rule, in manuals.py.
+        #
+        # And once per game, not once per disc. Every disc of a set is a row of
+        # its own with its own ScreenScraper record, so asking on each one
+        # fetched the same booklet four times for a four disc title. The disc
+        # that stands for the game on the shelf keeps it.
+        if (scrape_presets.MANUAL in wanted and not merged.get("manual_path")
+                and not getattr(rom, "extra_disk", False)
+                and not keep_existing_media(rom, "manual_path", fill_missing)):
+            from handler.filesystem.rom_paths import roms_library_path
+            from handler.metadata import manuals
+
+            # Beside the game, in its extras, where it can be seen over FTP and
+            # travels with the folder (the owner's decision). The row keeps the
+            # path relative to the game's folder, so renaming the folder after
+            # the title does not strand it.
+            rom_folder = Path(rom.fs_path)
+            dest = await manuals.manual_home(
+                rom, merged.get("name") or rom.name,
+                Path(roms_library_path()) / platform.fs_slug)
+            if dest.exists() and not rom.manual_path:
+                # Somebody put a manual there already - their own scan, dropped
+                # in over FTP. It is taken as the game's manual and never written
+                # over, and its origin is left unrecorded, which is what makes a
+                # later forced scrape keep it too.
+                merged["manual_path"] = manuals.stored_path(dest, rom_folder)
+            else:
+                chosen = manuals.pick_manual(ss_raw_for_extra.get("medias"), rom.regions)
+                if chosen:
+                    saved = await manuals.fetch_manual(chosen["url"], dest)
+                    if saved:
+                        merged["manual_path"] = manuals.stored_path(saved, rom_folder)
+                        _from_scrape("manual_path")
+                        downloaded += 1
         if downloaded:
             logger.info("[ROM] Downloaded %d ES-style media files for rom id=%d", downloaded, rom.id)
 
@@ -789,6 +863,24 @@ async def scrape_rom(
     return merged
 
 
+async def save_scrape(rom_id: int, data: dict) -> None:
+    """Write what a scrape found onto the row, and let the game's folder follow
+    a title that came with it.
+
+    Every road a scrape comes in by saves through here: a platform's batch, the
+    Scrape button on one game, the scrape after a download. Only the first of
+    those moved the folder, and the most ordinary case was one of the other two
+    - a file downloaded as `ff9-eu-d1.chd` is written into a folder named after
+    it, because at that moment there is no title, and the scrape a moment later
+    is the moment there is one.
+    """
+    await rom_handler.update_metadata(rom_id, data)
+    if "name" in data:
+        from handler.roms import game_folder
+
+        await game_folder.follow_title(rom_id)
+
+
 async def scrape_roms_batch(rom_ids: list[int], platform: RomPlatform, fill_missing: bool = False) -> dict:
     """Scrape a list of ROMs sequentially (rate-limit friendly).
 
@@ -803,7 +895,7 @@ async def scrape_roms_batch(rom_ids: list[int], platform: RomPlatform, fill_miss
         try:
             data = await scrape_rom(rom, platform, fill_missing=fill_missing)
             if data:
-                await rom_handler.update_metadata(rom_id, data)
+                await save_scrape(rom_id, data)
                 stats["scraped"] += 1
                 # ROM now has (usually) a cover -> fire the one-shot recently-added
                 # card. Idempotent per ROM; burst-capped so a bulk platform scrape

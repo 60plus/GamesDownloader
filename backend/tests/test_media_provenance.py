@@ -141,6 +141,21 @@ def test_every_path_column_the_scrape_writes_is_a_known_slot():
     assert MEDIA_COLUMNS <= columns, f"not columns at all: {MEDIA_COLUMNS - columns}"
 
 
+def test_every_slot_the_scrape_asks_about_is_a_known_one():
+    """Read off the scrape itself rather than listed here. The list above was
+    written by hand and so was the manual's slot, and the two never met:
+    keep_existing_media raises for a column it does not know, so a scrape with
+    Manual ticked failed as a whole (2026-09-18)."""
+    import pathlib
+    import re
+
+    source = (pathlib.Path(__file__).resolve().parent.parent / "handler" / "metadata"
+              / "rom_scrape_handler.py").read_text(encoding="utf-8")
+    asked = set(re.findall(r'keep_existing_media\(\s*rom,\s*"(\w+)"', source))
+    assert "background_path" in asked, "test nie znalazl zadnego pytania - szuka zle"
+    assert asked <= MEDIA_COLUMNS, f"scrape pyta o nieznane sloty: {asked - MEDIA_COLUMNS}"
+
+
 def test_clearing_the_metadata_forgets_the_origins():
     """The way back for somebody who wants a scrape to replace what they chose.
     The paths go with it, so the next pass fetches and records afresh."""
